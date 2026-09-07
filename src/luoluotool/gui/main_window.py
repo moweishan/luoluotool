@@ -13,6 +13,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("LuoLooTool")
+        self.resize(960, 640)
         self.tabs: QTabWidget = QTabWidget(self)
         for title in TAB_TITLES:
             self.tabs.addTab(QWidget(self.tabs), title)

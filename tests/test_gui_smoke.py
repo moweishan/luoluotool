@@ -15,6 +15,8 @@ def test_main_window_has_five_tabs_and_version() -> None:
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
     assert window.windowTitle() == "LuoLooTool"
+    assert window.size().width() == 960
+    assert window.size().height() == 640
     assert window.tabs.count() == 5
     assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == list(TAB_TITLES)
     assert __version__ in window.statusBar().currentMessage()
