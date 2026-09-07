@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "features": {
+    "daily_tasks": {
+      "enabled": false,
+      "tasks": {
+        "placeholder_task_a": {
+          "enabled": false,
+          "order": 1,
+          "params": {}
+        }
+      },
+      "loop": {
+        "enabled": false,
+        "interval_seconds": 3600
+      }
+    },
+    "order_hold": {
+      "enabled": false,
+      "reserved_switch_1": false,
+      "reserved_switch_2": false
+    },
+    "feature_3": {
+      "enabled": false
+    },
+    "feature_4": {
+      "enabled": false
+    }
+  },
+  "automation": {
+    "dry_run": true,
+    "window_title_keyword": "桃源深处有人家",
+    "click_interval_ms": 800,
+    "post_click_wait_ms": 500,
+    "max_consecutive_failures": 3,
+    "pause_on_window_focus_loss": true,
+    "failsafe_hotkey": "F8"
+  },
+  "logging": {
+    "level": "INFO",
+    "max_file_mb": 2,
+    "backup_count": 3
+  }
+}
