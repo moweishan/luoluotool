@@ -1,0 +1,12 @@
+# LuoLuoTool 运行时依赖
+# 只允许在此列出的包被 import；新增依赖必须说明理由。
+
+# GUI
+PySide6>=6.6,<7
+
+# Windows 窗口查找 / 截图
+pywin32>=306; platform_system == "Windows"
+
+# 说明：
+# - 输入模拟使用标准库 ctypes 调用 SendInput，不引入 pyautogui。
+# - 图像匹配暂不引入 opencv；确需使用时再添加 opencv-python-headless 与 numpy 并说明理由。
