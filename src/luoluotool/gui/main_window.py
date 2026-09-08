@@ -1,7 +1,9 @@
 """主窗口：五页签配置界面 + 保存/重新加载/恢复默认 + 脏标记。"""
 
+import logging
 from pathlib import Path
 
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QHBoxLayout, QMainWindow, QPushButton, QTabWidget, QVBoxLayout, QWidget
 
 from luoluotool import __version__
@@ -12,9 +14,43 @@ from luoluotool.gui.pages.feature3 import Feature3Page
 from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
+from luoluotool.utils.paths import get_icons_dir
+
+logger = logging.getLogger(__name__)
 
 WINDOW_TITLE = "LuoLooTool"
 TAB_TITLES: tuple[str, ...] = ("日常任务", "卡订单", "功能三", "功能四", "设置")
+WINDOW_ICON_FILES = ("luoluoTool.png", "luoluoTool.ico")
+_ICO_MAGIC = b"\x00\x00\x01\x00"
+_PNG_MAGIC = b"\x89PNG"
+
+
+def _is_valid_icon_file(path: Path) -> bool:
+    """按魔数校验图标格式（拦截伪装成 .ico 的 PNG 等）。"""
+    try:
+        with open(path, "rb") as fp:
+            head = fp.read(4)
+    except OSError:
+        return False
+    expected = _PNG_MAGIC if path.suffix == ".png" else _ICO_MAGIC
+    return head == expected
+
+
+def load_window_icon() -> QIcon:
+    """从 assets/icons 加载窗口图标；文件缺失或格式非法时降级为空图标。"""
+    icon = QIcon()
+    icons_dir = get_icons_dir()
+    for name in WINDOW_ICON_FILES:
+        path = icons_dir / name
+        if not path.is_file():
+            continue
+        if not _is_valid_icon_file(path):
+            logger.warning("图标文件格式非法，已跳过：%s", path)
+            continue
+        icon.addFile(str(path))
+    if icon.isNull():
+        logger.warning("未找到可用的窗口图标：%s", icons_dir)
+    return icon
 
 
 class MainWindow(QMainWindow):
@@ -27,6 +63,7 @@ class MainWindow(QMainWindow):
         self._dirty = False
         self.setWindowTitle(WINDOW_TITLE)
         self.resize(960, 640)
+        self.setWindowIcon(load_window_icon())
         self.tabs: QTabWidget = QTabWidget(self)
         pages = (
             DailyPage(self._config, self._mark_dirty),

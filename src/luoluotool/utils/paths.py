@@ -18,3 +18,8 @@ def get_logs_dir() -> Path:
     path = PROJECT_ROOT / "logs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_icons_dir() -> Path:
+    """返回 assets/icons 静态资源目录路径。"""
+    return PROJECT_ROOT / "assets" / "icons"
