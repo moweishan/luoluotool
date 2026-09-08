@@ -75,8 +75,39 @@ def test_diagnostic_success_flow(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(window, "get_client_rect", lambda hwnd: (0, 0, 800, 600))
     monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: calls.append("shot") or p)
     monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
+    monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: False)
     message = window.run_window_diagnostic("桃源", tmp_path)
     assert calls == ["front", "shot"]
     assert "hwnd=123" in message
     assert "800x600" in message
     assert str(tmp_path) in message
+
+
+def test_diagnostic_minimized_window_returns_hint(monkeypatch, tmp_path) -> None:
+    """恢复置前后仍处于最小化：返回明确提示且不截图。"""
+    calls: list[str] = []
+    monkeypatch.setattr(window, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front"))
+    monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: calls.append("shot") or p)
+    monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
+    monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
+    message = window.run_window_diagnostic("桃源", tmp_path)
+    assert calls == ["front"]
+    assert "最小化" in message
+    assert "截图" in message
+
+
+def test_bring_to_front_restores_and_tops(monkeypatch) -> None:
+    """置前：恢复最小化 → 显示 → SetForegroundWindow → z 序置顶。"""
+    calls: list[tuple] = []
+    monkeypatch.setattr(window.win32gui, "ShowWindow", lambda hwnd, cmd: calls.append(("show", cmd)))
+    monkeypatch.setattr(window.win32gui, "SetForegroundWindow", lambda hwnd: calls.append(("fg", hwnd)))
+    monkeypatch.setattr(
+        window.win32gui, "SetWindowPos",
+        lambda hwnd, after, x, y, w, h, flags: calls.append(("pos", after, flags)),
+    )
+    window.bring_to_front(123)
+    assert ("show", window.win32con.SW_RESTORE) in calls
+    assert ("show", window.win32con.SW_SHOW) in calls
+    assert ("fg", 123) in calls
+    assert any(call[0] == "pos" and call[1] == window.win32con.HWND_TOP for call in calls)
