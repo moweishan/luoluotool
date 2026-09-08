@@ -32,9 +32,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.validate_config:
         path = Path(args.config) if args.config else get_user_data_dir() / "config.json"
         return _validate_config(path)
-    if args.config:
-        print(f"已接收配置路径参数：{args.config}（GUI 加载配置将在 Phase 2 接入）")
-    return run_gui([sys.argv[0]], smoke=args.smoke_gui)
+    config_path = Path(args.config) if args.config else None
+    return run_gui([sys.argv[0]], smoke=args.smoke_gui, config_path=config_path)
 
 
 def _validate_config(path: Path) -> int:

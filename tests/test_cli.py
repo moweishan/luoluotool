@@ -1,8 +1,16 @@
 """CLI 入口（luoluotool.__main__）测试。"""
 
 import json
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication
 
 from luoluotool.__main__ import main
+
+# 模块级持有，避免 smoke 路径中 QApplication 先于窗口销毁导致 GC 崩溃
+_APP = QApplication.instance() or QApplication([])
 
 
 def test_version_prints_name_and_version(capsys) -> None:
@@ -49,7 +57,8 @@ def test_validate_config_field_errors_exit_1(capsys, tmp_path) -> None:
     assert "click_interval_ms" in capsys.readouterr().out
 
 
-def test_config_arg_accepted_then_smoke(capsys) -> None:
-    """--config 参数被解析且不阻断 --smoke-gui。"""
-    assert main(["--config", "custom.json", "--smoke-gui"]) == 0
-    assert "custom.json" in capsys.readouterr().out
+def test_config_arg_used_on_smoke(tmp_path) -> None:
+    """--config 路径在 smoke 启动时被加载；文件缺失则生成默认配置。"""
+    path = tmp_path / "custom.json"
+    assert main(["--config", str(path), "--smoke-gui"]) == 0
+    assert path.exists()

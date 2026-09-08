@@ -1,0 +1,88 @@
+"""配置页绑定测试（offscreen）：控件→配置写回、set_config 刷新、加载不触发脏标记。"""
+
+import os
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+from PySide6.QtWidgets import QApplication
+
+from luoluotool.config.models import AppConfig
+from luoluotool.gui.pages.daily import DailyPage
+from luoluotool.gui.pages.feature3 import Feature3Page
+from luoluotool.gui.pages.feature4 import Feature4Page
+from luoluotool.gui.pages.order_hold import OrderHoldPage
+from luoluotool.gui.pages.settings import SettingsPage
+
+_APP = QApplication.instance() or QApplication([])
+
+
+def test_daily_page_binds_fields_and_refreshes() -> None:
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = DailyPage(config, lambda: changes.append("dirty"))
+    assert page.enabled_box.isChecked() is False
+    page.enabled_box.setChecked(True)
+    assert config.features.daily_tasks.enabled is True
+    page.task_a_box.setChecked(True)
+    assert config.features.daily_tasks.tasks["placeholder_task_a"].enabled is True
+    page.loop_box.setChecked(True)
+    page.interval_spin.setValue(600)
+    assert config.features.daily_tasks.loop.enabled is True
+    assert config.features.daily_tasks.loop.interval_seconds == 600
+    assert changes == ["dirty"] * 4
+    config2 = AppConfig.default()
+    config2.features.daily_tasks.enabled = True
+    config2.features.daily_tasks.loop.interval_seconds = 1234
+    page.set_config(config2)
+    assert page.enabled_box.isChecked() is True
+    assert page.interval_spin.value() == 1234
+    assert changes == ["dirty"] * 4  # 刷新控件不触发脏标记
+    page.close()
+
+
+def test_order_hold_page_binds_reserved_switches() -> None:
+    config = AppConfig.default()
+    page = OrderHoldPage(config, lambda: None)
+    page.enabled_box.setChecked(True)
+    page.reserved_box_1.setChecked(True)
+    page.reserved_box_2.setChecked(True)
+    assert config.features.order_hold.enabled is True
+    assert config.features.order_hold.reserved_switch_1 is True
+    assert config.features.order_hold.reserved_switch_2 is True
+    config2 = AppConfig.default()
+    config2.features.order_hold.reserved_switch_2 = True
+    page.set_config(config2)
+    assert page.reserved_box_2.isChecked() is True
+    assert page.reserved_box_1.isChecked() is False
+    page.close()
+
+
+def test_feature_pages_bind_enabled() -> None:
+    config = AppConfig.default()
+    page3 = Feature3Page(config, lambda: None)
+    page4 = Feature4Page(config, lambda: None)
+    page3.enabled_box.setChecked(True)
+    page4.enabled_box.setChecked(True)
+    assert config.features.feature_3.enabled is True
+    assert config.features.feature_4.enabled is True
+    config2 = AppConfig.default()
+    page3.set_config(config2)
+    assert page3.enabled_box.isChecked() is False
+    page3.close()
+    page4.close()
+
+
+def test_settings_page_binds_and_hotkey_readonly() -> None:
+    config = AppConfig.default()
+    page = SettingsPage(config, lambda: None)
+    page.dry_run_box.setChecked(False)
+    assert config.automation.dry_run is False
+    page.click_interval_spin.setValue(4321)
+    assert config.automation.click_interval_ms == 4321
+    page.failures_spin.setValue(7)
+    assert config.automation.max_consecutive_failures == 7
+    page.focus_loss_box.setChecked(False)
+    assert config.automation.pause_on_window_focus_loss is False
+    assert "F8" in page.hotkey_label.text()
+    assert "只读" in page.hotkey_label.text()
+    page.close()
