@@ -75,3 +75,13 @@ def test_smoke_gui_cli_exits_zero() -> None:
     from luoluotool.__main__ import main
 
     assert main(["--smoke-gui"]) == 0
+
+
+def test_application_icon_set_after_smoke() -> None:
+    """--smoke-gui 启动后应用级图标已设置（任务栏图标来源）。"""
+    from luoluotool.__main__ import main
+
+    assert main(["--smoke-gui"]) == 0
+    app = QApplication.instance()
+    assert app is not None
+    assert not app.windowIcon().isNull()

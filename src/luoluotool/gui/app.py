@@ -1,18 +1,32 @@
 """GUI 入口：QApplication 创建、配置加载与主窗口展示。"""
 
+import ctypes
 import logging
 import os
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
 from luoluotool.config import store
-from luoluotool.gui.main_window import MainWindow
+from luoluotool.gui.main_window import MainWindow, load_window_icon
 from luoluotool.utils import logging_setup
 from luoluotool.utils.paths import get_user_data_dir
 
 logger = logging.getLogger(__name__)
+
+APP_USER_MODEL_ID = "luoluotool"
+
+
+def _apply_taskbar_identity() -> None:
+    """Windows：声明独立 AppUserModelID，让任务栏按本应用身份渲染图标。"""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(APP_USER_MODEL_ID)
+    except OSError as exc:
+        logger.warning("设置 AppUserModelID 失败：%s", exc)
 
 
 def run(
@@ -29,7 +43,9 @@ def run(
     if smoke:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     logging_setup.setup_logging()
+    _apply_taskbar_identity()
     app = QApplication.instance() or QApplication(list(argv))
+    app.setWindowIcon(load_window_icon())
     path = Path(config_path) if config_path else get_user_data_dir() / "config.json"
     config = store.load(path)
     window = MainWindow(config, path)
