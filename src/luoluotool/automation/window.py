@@ -12,7 +12,7 @@ import win32ui
 
 logger = logging.getLogger(__name__)
 
-PW_CLIENTONLY = 1
+PW_RENDERFULLCONTENT = 2
 SCREENSHOT_RETRIES = 3
 SCREENSHOT_RETRY_DELAY_SECONDS = 0.5
 
@@ -56,34 +56,56 @@ def get_client_rect(hwnd: int) -> tuple[int, int, int, int]:
 def screenshot_client(hwnd: int, save_path: Path) -> Path:
     """截取客户区保存为 PNG 并返回路径。
 
-    仅渲染客户区（PW_CLIENTONLY + GetDC，避免标题栏偏移与底部裁剪）；
-    窗口刚恢复时画面未就绪会重试；仍失败回退 BitBlt。
+    游戏窗口多为 GPU 渲染，BitBlt/PW_CLIENTONLY 会得到黑图；
+    这里用 PW_RENDERFULLCONTENT 按窗口整体尺寸渲染（DWM 通道），
+    再按客户区偏移裁出游戏画面，避免标题栏偏移与底部裁剪。
     """
+    wx, wy, w_right, w_bottom = win32gui.GetWindowRect(hwnd)
+    window_width, window_height = w_right - wx, w_bottom - wy
     left, top, right, bottom = win32gui.GetClientRect(hwnd)
-    width, height = right - left, bottom - top
-    hwnd_dc = win32gui.GetDC(hwnd)  # 客户区 DC：原点即客户区左上角
-    mfc_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-    save_dc = mfc_dc.CreateCompatibleDC()
-    bitmap = win32ui.CreateBitmap()
-    bitmap.CreateCompatibleBitmap(mfc_dc, width, height)
-    save_dc.SelectObject(bitmap)
+    client_width, client_height = right - left, bottom - top
+    client_screen_x, client_screen_y = win32gui.ClientToScreen(hwnd, (0, 0))
+    offset_x, offset_y = client_screen_x - wx, client_screen_y - wy
+
+    hwnd_dc = win32gui.GetWindowDC(hwnd)
+    full_dc = win32ui.CreateDCFromHandle(hwnd_dc)
+    full_mem_dc = full_dc.CreateCompatibleDC()
+    full_bitmap = win32ui.CreateBitmap()
+    full_bitmap.CreateCompatibleBitmap(full_dc, window_width, window_height)
+    full_mem_dc.SelectObject(full_bitmap)
+
+    client_bitmap = win32ui.CreateBitmap()
+    client_bitmap.CreateCompatibleBitmap(full_dc, client_width, client_height)
+    client_dc = full_dc.CreateCompatibleDC()
+    client_dc.SelectObject(client_bitmap)
     try:
         rendered = False
         for attempt in range(SCREENSHOT_RETRIES):
-            rendered = ctypes.windll.user32.PrintWindow(hwnd, save_dc.GetSafeHdc(), PW_CLIENTONLY)
+            rendered = ctypes.windll.user32.PrintWindow(
+                hwnd, full_mem_dc.GetSafeHdc(), PW_RENDERFULLCONTENT
+            )
             if rendered:
                 break
             if attempt < SCREENSHOT_RETRIES - 1:
                 time.sleep(SCREENSHOT_RETRY_DELAY_SECONDS)
         if not rendered:
-            logger.warning("PrintWindow 失败，回退 BitBlt 截图")
-            save_dc.BitBlt((0, 0), (width, height), mfc_dc, (0, 0), win32con.SRCCOPY)
-        bitmap.SaveBitmapFile(save_dc, str(save_path))
+            logger.warning("PrintWindow 失败，回退 BitBlt 全窗口截图")
+            full_mem_dc.BitBlt(
+                (0, 0), (window_width, window_height), full_dc, (0, 0), win32con.SRCCOPY
+            )
+        # 从全窗口位图裁出客户区
+        client_dc.BitBlt(
+            (0, 0), (client_width, client_height),
+            full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
+        )
+        client_bitmap.SaveBitmapFile(client_dc, str(save_path))
         return save_path
     finally:
-        win32gui.DeleteObject(bitmap.GetHandle())
-        save_dc.DeleteDC()
-        mfc_dc.DeleteDC()
+        win32gui.DeleteObject(client_bitmap.GetHandle())
+        win32gui.DeleteObject(full_bitmap.GetHandle())
+        client_dc.DeleteDC()
+        full_mem_dc.DeleteDC()
+        full_dc.DeleteDC()
         win32gui.ReleaseDC(hwnd, hwnd_dc)
 
 
