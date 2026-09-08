@@ -12,7 +12,6 @@ from PySide6.QtWidgets import QApplication
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
 from luoluotool.gui.main_window import MainWindow
-from luoluotool.gui.widgets import HotkeyEventFilter
 
 _APP = QApplication.instance() or QApplication([])
 
@@ -96,23 +95,50 @@ def test_start_without_tasks_logs_hint(window_factory, tmp_path) -> None:
     assert "未选择任何任务" in window.log_panel.toPlainText()
 
 
-def test_hotkey_filter_dispatches_callback() -> None:
-    """WM_HOTKEY 且 wParam 匹配时触发回调；其他消息不触发。"""
+def test_hotkey_registered_with_window_hwnd(window_factory, tmp_path, monkeypatch) -> None:
+    """热键必须注册到主窗口句柄（hwnd=0 时 Qt 过滤器收不到 WM_HOTKEY）。"""
+    from luoluotool.gui import main_window as mw
+
+    captured: dict[str, int] = {}
+
+    class FakeRegistrar:
+        hotkey_id = 0xF8
+
+        def register(self, hwnd: int = 0) -> bool:
+            captured["register_hwnd"] = hwnd
+            return True
+
+        def unregister(self, hwnd: int = 0) -> None:
+            captured["unregister_hwnd"] = hwnd
+
+    monkeypatch.setattr(mw, "HotkeyRegistrar", lambda: FakeRegistrar())
+    window = window_factory(tmp_path / "config.json")
+    hwnd = int(window.winId())
+    assert captured.get("register_hwnd") == hwnd
+    window.close()
+    assert captured.get("unregister_hwnd") == hwnd
+
+
+def test_native_event_hotkey_triggers_failsafe(window_factory, tmp_path) -> None:
+    """WM_HOTKEY 经 nativeEvent 触发急停回调；其他消息不触发。"""
     import ctypes
     from ctypes import wintypes
 
+    import shiboken6
+
     from luoluotool.automation.hotkey import WM_HOTKEY
 
-    calls: list[str] = []
-    filter_ = HotkeyEventFilter(0xF8, lambda: calls.append("stop"))
+    window = window_factory(tmp_path / "config.json")
     hotkey_msg = wintypes.MSG()
     hotkey_msg.message = WM_HOTKEY
     hotkey_msg.wParam = 0xF8
-    assert filter_.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(hotkey_msg))[0] is True
-    assert calls == ["stop"]
+    hotkey_ptr = shiboken6.VoidPtr(ctypes.addressof(hotkey_msg))
+    result = window.nativeEvent(b"windows_generic_MSG", hotkey_ptr)
+    assert result[0] is True
+    _APP.processEvents()
+    assert "急停触发" in window.log_panel.toPlainText()
     other_msg = wintypes.MSG()
     other_msg.message = 0x0100  # WM_KEYDOWN，非热键消息
     other_msg.wParam = 0xF8
-    assert filter_.nativeEventFilter(b"windows_generic_MSG", ctypes.addressof(other_msg))[0] is False
-    assert filter_.nativeEventFilter(b"other_event", ctypes.addressof(hotkey_msg))[0] is False
-    assert calls == ["stop"]
+    other_ptr = shiboken6.VoidPtr(ctypes.addressof(other_msg))
+    assert window.nativeEvent(b"windows_generic_MSG", other_ptr)[0] is False

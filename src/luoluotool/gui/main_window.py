@@ -1,8 +1,10 @@
 """主窗口：五页签配置 + 保存/重载/恢复默认 + 启动/停止 + 日志面板 + F8 急停。"""
 
+import ctypes
 import logging
 import time
 from collections.abc import Callable
+from ctypes import wintypes
 from pathlib import Path
 
 from PySide6.QtCore import QThread
@@ -19,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from luoluotool import __version__
-from luoluotool.automation.hotkey import HotkeyRegistrar
+from luoluotool.automation.hotkey import WM_HOTKEY, HotkeyRegistrar
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
@@ -28,7 +30,7 @@ from luoluotool.gui.pages.feature3 import Feature3Page
 from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
-from luoluotool.gui.widgets import HotkeyEventFilter, LogPanelHandler
+from luoluotool.gui.widgets import LogPanelHandler
 from luoluotool.utils.paths import get_icons_dir
 
 logger = logging.getLogger(__name__)
@@ -154,14 +156,26 @@ class MainWindow(QMainWindow):
         self._log_handler = LogPanelHandler(self.log_panel)
         logging.getLogger().addHandler(self._log_handler)
         self._hotkey = HotkeyRegistrar()
-        self._hotkey_filter = HotkeyEventFilter(self._hotkey.hotkey_id, self._on_failsafe)
-        QApplication.instance().installNativeEventFilter(self._hotkey_filter)
-        self._hotkey.register()
+        # 必须注册到本窗口句柄：hwnd=0 的线程消息不会被 Qt 派发
+        self._hotkey_hwnd = int(self.winId())
+        self._hotkey.register(self._hotkey_hwnd)
+
+    def nativeEvent(self, event_type, message):
+        """处理 WM_HOTKEY 急停消息。
+
+        Qt 6 中 RegisterHotKey 投递的队列消息经 QWidget.nativeEvent 到达，
+        QAbstractNativeEventFilter 收不到该路径的消息。
+        """
+        if event_type == b"windows_generic_MSG":
+            msg = wintypes.MSG.from_address(message.__int__())
+            if msg.message == WM_HOTKEY and msg.wParam == self._hotkey.hotkey_id:
+                self._on_failsafe()
+                return True, 0
+        return super().nativeEvent(event_type, message)
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._stop()
-        self._hotkey.unregister()
-        QApplication.instance().removeNativeEventFilter(self._hotkey_filter)
+        self._hotkey.unregister(self._hotkey_hwnd)
         logging.getLogger().removeHandler(self._log_handler)
         super().closeEvent(event)
 
