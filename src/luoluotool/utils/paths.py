@@ -23,3 +23,10 @@ def get_logs_dir() -> Path:
 def get_icons_dir() -> Path:
     """返回 assets/icons 静态资源目录路径。"""
     return PROJECT_ROOT / "assets" / "icons"
+
+
+def get_debug_dir() -> Path:
+    """返回 user_data/debug 目录路径（不存在则创建）。"""
+    path = get_user_data_dir() / "debug"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

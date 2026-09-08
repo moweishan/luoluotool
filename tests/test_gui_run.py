@@ -142,3 +142,38 @@ def test_native_event_hotkey_triggers_failsafe(window_factory, tmp_path) -> None
     other_msg.wParam = 0xF8
     other_ptr = shiboken6.VoidPtr(ctypes.addressof(other_msg))
     assert window.nativeEvent(b"windows_generic_MSG", other_ptr)[0] is False
+
+
+def test_diagnose_button_runs_and_reports(window_factory, tmp_path, monkeypatch) -> None:
+    """窗口诊断：按钮触发工作线程，结果写入状态栏与日志面板。"""
+    from luoluotool.gui import main_window as mw
+
+    monkeypatch.setattr(
+        mw, "run_window_diagnostic",
+        lambda keyword, debug_dir: f"诊断结果: {keyword}",
+    )
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.diagnose_button.click()
+    thread = window._diagnose_thread
+    assert thread is not None
+    assert thread.wait(3000)
+    _APP.processEvents()
+    assert "诊断结果" in window.statusBar().currentMessage()
+    assert "诊断结果" in window.log_panel.toPlainText()
+    assert window.settings_page.diagnose_button.isEnabled() is True
+
+
+def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -> None:
+    """诊断抛异常时给出可读错误提示，程序不崩溃。"""
+    from luoluotool.gui import main_window as mw
+
+    def boom(keyword, debug_dir):
+        raise RuntimeError("模拟失败")
+
+    monkeypatch.setattr(mw, "run_window_diagnostic", boom)
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.diagnose_button.click()
+    assert window._diagnose_thread is not None
+    assert window._diagnose_thread.wait(3000)
+    _APP.processEvents()
+    assert "窗口诊断失败" in window.statusBar().currentMessage()

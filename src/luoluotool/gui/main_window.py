@@ -7,7 +7,7 @@ from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from luoluotool import __version__
 from luoluotool.automation.hotkey import WM_HOTKEY, HotkeyRegistrar
+from luoluotool.automation.window import run_window_diagnostic
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
@@ -31,7 +32,7 @@ from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
 from luoluotool.gui.widgets import LogPanelHandler
-from luoluotool.utils.paths import get_icons_dir
+from luoluotool.utils.paths import get_debug_dir, get_icons_dir
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,25 @@ class _RunnerThread(QThread):
         self._runner.start()
 
 
+class _DiagnoseThread(QThread):
+    """在工作线程中执行窗口诊断；结果经信号回 UI 线程。"""
+
+    finished_message = Signal(str)
+
+    def __init__(self, keyword: str, debug_dir: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._keyword = keyword
+        self._debug_dir = debug_dir
+
+    def run(self) -> None:
+        try:
+            message = run_window_diagnostic(self._keyword, self._debug_dir)
+        except Exception:
+            logger.exception("窗口诊断失败")
+            message = "窗口诊断失败，详见日志"
+        self.finished_message.emit(message)
+
+
 class MainWindow(QMainWindow):
     """LuoLooTool 主窗口：仅展示与绑定；文件/任务逻辑调用 config/core 模块。"""
 
@@ -103,6 +123,7 @@ class MainWindow(QMainWindow):
         self._runner_factory = runner_factory or _default_runner_factory
         self._runner: Runner | None = None
         self._thread: _RunnerThread | None = None
+        self._diagnose_thread: _DiagnoseThread | None = None
         self._dirty = False
         self._idle_status = f"版本 {__version__}"
         self.setWindowTitle(WINDOW_TITLE)
@@ -125,6 +146,7 @@ class MainWindow(QMainWindow):
         ) = pages
         for page, title in zip(pages, TAB_TITLES):
             self.tabs.addTab(page, title)
+        self.settings_page.diagnose_button.clicked.connect(self._on_diagnose)
         self.save_button = QPushButton("保存")
         self.save_button.clicked.connect(self._save)
         self.reload_button = QPushButton("重新加载")
@@ -175,6 +197,8 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         self._stop()
+        if self._diagnose_thread is not None and self._diagnose_thread.isRunning():
+            self._diagnose_thread.wait(THREAD_WAIT_TIMEOUT_MS)
         self._hotkey.unregister(self._hotkey_hwnd)
         logging.getLogger().removeHandler(self._log_handler)
         super().closeEvent(event)
@@ -238,3 +262,23 @@ class MainWindow(QMainWindow):
     def _on_failsafe(self) -> None:
         logger.info("急停触发（F8）")
         self._stop()
+
+    def _on_diagnose(self) -> None:
+        if self._diagnose_thread is not None and self._diagnose_thread.isRunning():
+            return  # 防重复点击
+        self.settings_page.diagnose_button.setEnabled(False)
+        self.statusBar().showMessage("窗口诊断中…")
+        self._diagnose_thread = _DiagnoseThread(
+            self._config.automation.window_title_keyword, get_debug_dir(), self
+        )
+        self._diagnose_thread.finished_message.connect(self._on_diagnose_finished)
+        self._diagnose_thread.finished.connect(self._on_diagnose_thread_finished)
+        self._diagnose_thread.start()
+
+    def _on_diagnose_finished(self, message: str) -> None:
+        logger.info("%s", message)
+        self.statusBar().showMessage(message)
+
+    def _on_diagnose_thread_finished(self) -> None:
+        self.settings_page.diagnose_button.setEnabled(True)
+        self._diagnose_thread = None

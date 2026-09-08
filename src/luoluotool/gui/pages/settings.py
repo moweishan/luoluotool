@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout, QWidget
 
 from luoluotool.config.models import AppConfig
 
@@ -29,6 +29,7 @@ class SettingsPage(QWidget):
         self.failures_spin = QSpinBox()
         self.failures_spin.setRange(FAILURES_MIN, FAILURES_MAX)
         self.hotkey_label = QLabel()
+        self.diagnose_button = QPushButton("窗口诊断（查找游戏窗口并截图）")
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -42,6 +43,7 @@ class SettingsPage(QWidget):
         layout.addLayout(click_row)
         layout.addLayout(failures_row)
         layout.addWidget(self.hotkey_label)
+        layout.addWidget(self.diagnose_button)
         layout.addStretch(1)
         self.dry_run_box.toggled.connect(self._on_dry_run_toggled)
         self.focus_loss_box.toggled.connect(self._on_focus_loss_toggled)

@@ -85,4 +85,5 @@ def test_settings_page_binds_and_hotkey_readonly() -> None:
     assert config.automation.pause_on_window_focus_loss is False
     assert "F8" in page.hotkey_label.text()
     assert "只读" in page.hotkey_label.text()
+    assert "窗口诊断" in page.diagnose_button.text()
     page.close()
