@@ -71,7 +71,9 @@
 ## 5. 风险与安全边界（必须写进 GUI 和文档）
 
 - **封号风险**：自动化操作可能违反游戏用户协议。程序「关于」页与 README 必须声明「个人学习自用，风险自负」。
-- **误操作风险**：真实模式下鼠标键盘会被程序接管，必须有急停热键 + 状态栏醒目标识（如「运行中 · 真实模式」红色提示）。
+- **误操作风险**：真实模式下程序会向游戏窗口发送模拟输入消息；虽然**不接管真实鼠标键盘**（不移动真实光标、不抢占键盘焦点），仍可能在游戏内产生非预期操作，必须有急停热键 + 状态栏醒目标识（如「运行中 · 真实模式」红色提示）。
+- **不使用接管式输入**：永久禁止 `SendInput` / `SetCursorPos` / `mouse_event` 等会接管真实键鼠的接口；输入一律通过窗口消息实现（见 §6）。
+- **输入方式限制（已知风险）**：若游戏以 `Raw Input`/`DirectInput` 独占方式读取输入，窗口消息可能不被游戏识别（现象为“日志正常但游戏无反应”）。遇到时先记录现象并与用户确认，不得擅自改用接管真实键鼠的方案。
 - **合规**：本工具不针对未成年人防沉迷机制做任何规避；不得商业化分发。
 
 ## 6. 推荐技术栈（选定后不得随意更换）
@@ -82,7 +84,7 @@
 | GUI | **PySide6**（Qt for Python） | 原生渲染快、QSS 可做出简洁大气的主题、QThread 成熟、LGPL 允许闭源分发（动态链接） |
 | 配置 | 标准库 JSON + dataclass + 手写 schema 校验 | 无数据库需求；避免 pydantic 增大 exe 体积 |
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
-| 输入模拟 | `ctypes` 调用 Windows `SendInput` | 零第三方依赖、稳定；不引入 pyautogui（其坐标与 DPI 缩放有坑） |
+| 输入模拟 | `ctypes` 调用 Windows `PostMessage` 向游戏窗口发送鼠标/键盘消息（后台输入） | **不接管真实键鼠**：不移动真实光标、不抢占键盘焦点，玩家可正常使用键鼠；无需前台焦点；零第三方依赖，不引入 pyautogui |
 | 窗口查找/截图 | pywin32（win32gui / win32ui） | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
@@ -109,7 +111,7 @@ LuoLuoTool/
 │   ├── automation/          # Windows 交互层
 │   │   ├── window.py        # 窗口查找/置前/截屏、窗口诊断
 │   │   ├── elevation.py     # 进程/窗口权限检测与 UAC 提权重启
-│   │   ├── input_sender.py  # SendInput 封装（move/click/key）
+│   │   ├── input_sender.py  # 后台窗口消息输入（click/key，不接管真实键鼠）
 │   │   └── hotkey.py        # F8 全局急停
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
@@ -140,7 +142,7 @@ LuoLuoTool/
 |---|---|---|
 | config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]` |
 | core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
-| automation | 找窗口、截图、SendInput 点击/按键、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
+| automation | 找窗口、截图、向窗口发送鼠标/键盘消息（不接管真实键鼠）、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
@@ -216,6 +218,7 @@ LuoLuoTool/
 - [ ] GUI 启动时间（冷启动到窗口可见）≤ 3 秒（PyInstaller 打包后 ≤ 5 秒）。
 - [ ] 勾选→启动→执行→日志全链路可用；执行期间 UI 可拖动、可点「停止」。
 - [ ] 默认干跑模式不产生任何真实键鼠输入；真实模式有确认提示 + F8 急停。
+- [ ] 真实模式**不接管真实键鼠**：执行期间真实光标不移动、键盘输入不受影响（可同时打字/操作其他窗口）。
 - [ ] 配置损坏时程序可启动并提示恢复为默认值，而不是崩溃。
 - [ ] `pytest` 全绿；`python -m luoluotool --validate-config` 可用。
 - [ ] PyInstaller 产物在**干净 Windows 10/11**（无 Python）上可启动。
