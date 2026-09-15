@@ -6,15 +6,27 @@ import time
 from datetime import datetime
 from pathlib import Path
 
+import pywintypes
 import win32con
 import win32gui
 import win32ui
 
 logger = logging.getLogger(__name__)
 
+PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
 SCREENSHOT_RETRIES = 3
 SCREENSHOT_RETRY_DELAY_SECONDS = 0.5
+ERROR_ACCESS_DENIED = 5
+
+
+def is_process_elevated() -> bool:
+    """本进程是否以管理员权限运行（用于诊断提示）。"""
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception as exc:
+        logger.warning("检测进程权限失败：%s", exc)
+        return False
 
 
 def find_window(keyword: str) -> int | None:
@@ -33,8 +45,11 @@ def find_window(keyword: str) -> int | None:
     return matches[0]
 
 
-def bring_to_front(hwnd: int) -> None:
-    """恢复最小化、显示并置前窗口（z 序置顶；尽力而为，失败仅告警）。"""
+def bring_to_front(hwnd: int) -> bool:
+    """恢复最小化、显示并置前窗口；返回是否成功。
+
+    目标窗口若以更高权限运行（UIPI 隔离），会被系统拒绝（错误 5）。
+    """
     try:
         win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
         win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
@@ -43,8 +58,16 @@ def bring_to_front(hwnd: int) -> None:
             hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
             win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW,
         )
+        return True
+    except pywintypes.error as exc:
+        if getattr(exc, "winerror", None) == ERROR_ACCESS_DENIED:
+            logger.warning("置前窗口被拒绝（错误 5）：目标窗口权限更高，游戏可能以管理员身份运行")
+        else:
+            logger.warning("置前窗口失败：%s", exc)
+        return False
     except Exception as exc:
         logger.warning("置前窗口失败：%s", exc)
+        return False
 
 
 def get_client_rect(hwnd: int) -> tuple[int, int, int, int]:
@@ -88,12 +111,22 @@ def screenshot_client(hwnd: int, save_path: Path) -> Path:
                 break
             if attempt < SCREENSHOT_RETRIES - 1:
                 time.sleep(SCREENSHOT_RETRY_DELAY_SECONDS)
-        if not rendered:
-            logger.warning("PrintWindow 失败，回退 BitBlt 全窗口截图")
-            full_mem_dc.BitBlt(
-                (0, 0), (window_width, window_height), full_dc, (0, 0), win32con.SRCCOPY
+        if rendered:
+            # 从全窗口位图裁出客户区
+            client_dc.BitBlt(
+                (0, 0), (client_width, client_height),
+                full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
             )
-        # 从全窗口位图裁出客户区
+            client_bitmap.SaveBitmapFile(client_dc, str(save_path))
+            return save_path
+        logger.warning("PrintWindow(全窗口) 失败，尝试仅客户区渲染")
+        if ctypes.windll.user32.PrintWindow(hwnd, client_dc.GetSafeHdc(), PW_CLIENTONLY):
+            client_bitmap.SaveBitmapFile(client_dc, str(save_path))
+            return save_path
+        logger.warning("PrintWindow 失败，回退 BitBlt 全窗口截图")
+        full_mem_dc.BitBlt(
+            (0, 0), (window_width, window_height), full_dc, (0, 0), win32con.SRCCOPY
+        )
         client_dc.BitBlt(
             (0, 0), (client_width, client_height),
             full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
@@ -119,14 +152,17 @@ def run_window_diagnostic(keyword: str, debug_dir: Path) -> str:
     hwnd = find_window(keyword)
     if hwnd is None:
         return f"未找到标题含“{keyword}”的窗口，请确认游戏已窗口化运行"
-    bring_to_front(hwnd)
+    title = win32gui.GetWindowText(hwnd)
+    brought = bring_to_front(hwnd)
     if win32gui.IsIconic(hwnd):
-        return f"窗口“{win32gui.GetWindowText(hwnd)}”仍处于最小化状态，无法截图（已尝试恢复置前）"
+        hint = ""
+        if not brought and not is_process_elevated():
+            hint = "；游戏可能以管理员权限运行，请以管理员身份运行本工具后重试"
+        return f"窗口“{title}”仍处于最小化状态，无法截图（已尝试恢复置前{hint}）"
     _, _, width, height = get_client_rect(hwnd)
     try:
         path = screenshot_client(hwnd, screenshot_path(debug_dir))
     except Exception as exc:
         logger.exception("截图失败")
         return f"截图失败：{exc}（已尝试置前，请确认窗口可见）"
-    title = win32gui.GetWindowText(hwnd)
     return f"窗口诊断完成：hwnd={hwnd} 标题“{title}” 客户区 {width}x{height} 截图 {path}"

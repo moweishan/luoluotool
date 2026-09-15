@@ -87,18 +87,32 @@ def test_diagnostic_minimized_window_returns_hint(monkeypatch, tmp_path) -> None
     """恢复置前后仍处于最小化：返回明确提示且不截图。"""
     calls: list[str] = []
     monkeypatch.setattr(window, "find_window", lambda keyword: 123)
-    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front"))
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front") or True)
     monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: calls.append("shot") or p)
     monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
     monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: True)
     message = window.run_window_diagnostic("桃源", tmp_path)
     assert calls == ["front"]
     assert "最小化" in message
     assert "截图" in message
 
 
+def test_diagnostic_minimized_without_elevation_hints_admin(monkeypatch, tmp_path) -> None:
+    """置前被拒（UIPI）且本进程未提权：提示以管理员身份运行。"""
+    monkeypatch.setattr(window, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: False)
+    monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: p)
+    monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
+    monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: False)
+    message = window.run_window_diagnostic("桃源", tmp_path)
+    assert "最小化" in message
+    assert "管理员" in message
+
+
 def test_bring_to_front_restores_and_tops(monkeypatch) -> None:
-    """置前：恢复最小化 → 显示 → SetForegroundWindow → z 序置顶。"""
+    """置前：恢复最小化 → 显示 → SetForegroundWindow → z 序置顶；成功返回 True。"""
     calls: list[tuple] = []
     monkeypatch.setattr(window.win32gui, "ShowWindow", lambda hwnd, cmd: calls.append(("show", cmd)))
     monkeypatch.setattr(window.win32gui, "SetForegroundWindow", lambda hwnd: calls.append(("fg", hwnd)))
@@ -106,8 +120,19 @@ def test_bring_to_front_restores_and_tops(monkeypatch) -> None:
         window.win32gui, "SetWindowPos",
         lambda hwnd, after, x, y, w, h, flags: calls.append(("pos", after, flags)),
     )
-    window.bring_to_front(123)
+    assert window.bring_to_front(123) is True
     assert ("show", window.win32con.SW_RESTORE) in calls
     assert ("show", window.win32con.SW_SHOW) in calls
     assert ("fg", 123) in calls
     assert any(call[0] == "pos" and call[1] == window.win32con.HWND_TOP for call in calls)
+
+
+def test_bring_to_front_access_denied_returns_false(monkeypatch) -> None:
+    """高权限窗口（UIPI）：置前被拒时返回 False 而非崩溃。"""
+    import pywintypes
+
+    def deny(hwnd, cmd):
+        raise pywintypes.error(5, "ShowWindow", "拒绝访问。")
+
+    monkeypatch.setattr(window.win32gui, "ShowWindow", deny)
+    assert window.bring_to_front(123) is False

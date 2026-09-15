@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication
 
+from luoluotool.automation.window import is_process_elevated
 from luoluotool.config import store
 from luoluotool.gui.main_window import MainWindow, load_window_icon
 from luoluotool.utils import logging_setup
@@ -43,6 +44,7 @@ def run(
     if smoke:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     logging_setup.setup_logging()
+    logger.info("进程以管理员权限运行：%s", is_process_elevated())
     _apply_taskbar_identity()
     app = QApplication.instance() or QApplication(list(argv))
     app.setWindowIcon(load_window_icon())
