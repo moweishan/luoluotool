@@ -35,13 +35,17 @@ def window_factory(request):
 
 
 def test_main_window_has_five_tabs_and_version(window_factory, tmp_path) -> None:
-    """主窗口：标题、尺寸、五个页签名与状态栏版本号。"""
+    """主窗口：标题、尺寸、页签顺序（设置在第一）、默认选中设置页、状态栏版本号。"""
     window = window_factory(tmp_path / "config.json")
     assert window.windowTitle() == WINDOW_TITLE
     assert window.size().width() == 960
     assert window.size().height() == 640
     assert window.tabs.count() == 5
-    assert [window.tabs.tabText(i) for i in range(window.tabs.count())] == list(TAB_TITLES)
+    titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
+    assert titles == ["设置", "日常任务", "卡订单", "功能三", "功能四"]
+    assert list(TAB_TITLES) == titles
+    assert window.tabs.currentIndex() == 0
+    assert window.tabs.currentWidget() is window.settings_page
     assert __version__ in window.statusBar().currentMessage()
 
 
