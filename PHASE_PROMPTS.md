@@ -254,6 +254,62 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+## Phase 5.1 — 合成指针点击通道（不移动真实光标）
+
+**背景与授权**：Phase 5 的窗口消息通道**实测无法让目标游戏点准坐标**（游戏只认物理光标位置）。2026-09-15 经用户授权放开"用户态合成输入"限制（见 `PROJECT_SPEC.md` §4.1），并完成独立验证脚本实测：
+**`PT_TOUCH` 合成指针注入（`CreateSyntheticPointerDevice` + `InjectSyntheticPointerInput`）在目标游戏有效，且真实光标全程未移动**。
+
+**阶段目标**：把该通道正式接入项目——新增"合成指针"输入实现，可通过配置切换；干跑仍零输入，真实模式安全链路不变。
+
+**本次只做什么**：
+1. `src/luoluotool/automation/errors.py`：抽出 `WindowUnavailableError`（供 input_sender / pointer_sender 共用；`input_sender` 保持再导出以兼容既有导入）。
+2. `src/luoluotool/automation/pointer_sender.py`：`SyntheticPointerSender(hwnd, pointer_type, log, sleep)`，实现 `InputSender` 协议：
+   - `click_at/click`：**客户区坐标 → `ClientToScreen` 屏幕坐标** → 合成 tap（`POINTER_FLAG_DOWN|INRANGE|INCONTACT|PRIMARY` → 间隔 → `POINTER_FLAG_UP|...`）；`hwndTarget` 设为游戏窗口；
+   - 现代 API 失败或不可用时回退 `InitializeTouchInjection` + `InjectTouchInput`；两者都不可用则抛**可读错误**（不得静默）；
+   - `move_to`：触摸/笔无悬停语义 → 记 debug 日志并忽略；`key_tap`：合成指针发不了键盘 → 委托窗口消息（惰性导入，避免循环依赖）；
+   - ctypes 结构体定义必须与 winuser.h 一致（单测断言 `sizeof(POINTER_TYPE_INFO) == 152`）。
+3. `src/luoluotool/config/models.py` + `validation.py`：新增 `automation.input_mode`（`window_message` 默认 / `synthetic_pointer`）与 `automation.pointer_type`（`touch` / `pen`）→ **schema v3 + `_migrate_v2_to_v3` 迁移函数 + 枚举校验**；`user_data/config.example.json` 同步。
+4. `src/luoluotool/automation/input_sender.py`：`build_channel` 按 `input_mode` 选择 sender（干跑仍是 `DryRunSender`；真实模式先做窗口可用性检查与前台/失焦守卫，逻辑不变）。
+5. `src/luoluotool/gui/pages/settings.py`：新增「输入方式」与「指针类型」两个下拉（保存后生效）。
+6. 测试：结构体布局、tap 序列与坐标换算、`hwndTarget`、指针类型、现代 API → 回退、双失败可读错误、`move_to` 不注入、`key_tap` 委托、协议一致性、`build_channel` 分支、schema v3 迁移与枚举校验、设置页绑定；**全部注入假 `user32`，零真实注入**。
+7. 文档：`PROJECT_SPEC.md`（§4.1 实测证据、§6 技术栈、§7 目录、§8 接口、§9 schema v3 迁移记录）、`AGENTS.md` §2、`CHECKLIST.md`、`README.md`。
+
+**不要做什么**：不引入驱动级方案（Interception 等）；不读写游戏进程内存、不做封包操作；不改动窗口消息通道的既有行为；不移动真实光标；不做图像识别；不改变"干跑默认 + 真实模式确认 + F8 急停 + 失焦暂停"。
+
+**验收命令**：
+```bash
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest tests/test_automation -q --cov=src/luoluotool/automation --cov-report=term-missing
+.venv\Scripts\python -m luoluotool --smoke-gui
+```
+
+**完成标准**：
+- [ ] 全量测试通过；`pointer_sender.py` 覆盖率 ≥ 90%，且单测零真实注入。
+- [ ] `config.json` 从 v2 自动迁移到 v3（补齐两个新字段并写回），`--validate-config` 输出 `OK`。
+- [ ] 设置页可切换「输入方式」；保存后 `config.json` 反映，重启保持。
+- [ ] **手动验收**：游戏窗口化并前台 → 输入方式切到「合成指针」→ 真实模式启动 → 游戏在配置坐标处响应，且**真实光标全程不动**、F8 可急停、失焦暂停生效。
+- [ ] 干跑模式下两种输入方式都只写日志、零注入。
+
+**实测记录（2026-09-15，走生产代码路径 `SyntheticPointerSender`，非假实现）**：
+- OS 级投递：`click_at(120, 80)` → 目标窗口收到 `WM_POINTERDOWN / WM_POINTERUPDATE / WM_POINTERUP`，其屏幕坐标 = `ClientToScreen((120, 80))`，**偏差 0 像素**。
+- 客户区接收：Qt 窗口收到 `TouchBegin / TouchEnd`，逻辑坐标 `(96.8, 64.5) × DPR 1.2396` = 物理像素 `(120, 80)`，换算链路一致。
+- 真实光标：三种探针场景下 `GetCursorPos` 注入前后完全一致（未移动）。
+- **已知限制**：Windows 不把「注入的触摸」合成为鼠标事件（Qt 只产生触摸事件，不产生 `mousePressEvent`）。因此「合成指针」通道面向直接读取 `WM_POINTER` 的目标（本游戏），**不用于驱动常规 Qt/桌面程序的鼠标交互**；这类目标请用「窗口消息」通道。
+
+**复制给 AI 的提示词**：
+
+```text
+执行 PHASE_PROMPTS.md 的 Phase 5.1（合成指针点击通道）。
+输入实现：客户区坐标 → ClientToScreen → CreateSyntheticPointerDevice(PT_TOUCH/PT_PEN)
++ InjectSyntheticPointerInput 合成 tap，失败回退 InitializeTouchInjection + InjectTouchInput。
+安全要求：dry-run 默认、真实模式确认、F8 急停、失焦暂停、注入前校验前台、
+绝不移动真实光标、逐条日志；禁止驱动级方案、禁止内存/封包操作。
+配置变更走 schema v3 + 迁移函数 + 单测；测试全部注入假 user32，绝不产生真实注入。
+完成后运行验收命令并汇报覆盖率。
+```
+
+---
+
 ## Phase 6 — 卡订单与预留功能页闭环
 
 **阶段目标**：功能二/三/四在主流程中形成完整闭环（开关→运行→日志），无推测性逻辑。

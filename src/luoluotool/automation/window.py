@@ -31,6 +31,11 @@ class DiagnosticResult:
     needs_elevation: bool = False
 
 
+def window_exists(hwnd: int) -> bool:
+    """窗口句柄是否仍然有效。"""
+    return bool(win32gui.IsWindow(hwnd))
+
+
 def find_window(keyword: str) -> int | None:
     """按标题关键字查找可见窗口；返回 hwnd（多个匹配取第一个并告警）。"""
     matches: list[int] = []

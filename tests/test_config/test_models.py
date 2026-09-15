@@ -4,9 +4,9 @@ from luoluotool.config import models
 
 
 def test_defaults_are_safe() -> None:
-    """出厂默认：开关全关，dry_run 开启，schema_version=2。"""
+    """出厂默认：开关全关，dry_run 开启，schema_version=3。"""
     config = models.AppConfig.default()
-    assert config.schema_version == models.SCHEMA_VERSION == 2
+    assert config.schema_version == models.SCHEMA_VERSION == 3
     assert config.automation.dry_run is True
     assert config.automation.pause_on_window_focus_loss is True
     assert config.features.daily_tasks.enabled is False
@@ -22,6 +22,8 @@ def test_defaults_are_safe() -> None:
     assert config.automation.window_title_keyword == "桃源深处有人家"
     assert config.automation.failsafe_hotkey == "F8"
     assert config.automation.ask_elevation_on_start is True
+    assert config.automation.input_mode == "window_message"
+    assert config.automation.pointer_type == "touch"
     assert config.logging.level == "INFO"
     assert config.logging.max_file_mb == 2
     assert config.logging.backup_count == 3
@@ -58,6 +60,8 @@ def test_to_dict_from_dict_roundtrip() -> None:
     config.features.order_hold.reserved_switch_1 = True
     config.automation.click_interval_ms = 1234
     config.automation.ask_elevation_on_start = False
+    config.automation.input_mode = "synthetic_pointer"
+    config.automation.pointer_type = "pen"
     restored = models.AppConfig.from_dict(config.to_dict())
     assert restored.to_dict() == config.to_dict()
 
@@ -92,6 +96,8 @@ def test_to_dict_keys_match_schema_v1() -> None:
         "pause_on_window_focus_loss",
         "failsafe_hotkey",
         "ask_elevation_on_start",
+        "input_mode",
+        "pointer_type",
     }
     assert set(data["logging"]) == {"level", "max_file_mb", "backup_count"}
     task = data["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]

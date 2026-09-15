@@ -14,8 +14,10 @@ from typing import Protocol
 
 import win32gui
 
-from luoluotool.automation.window import find_window
-from luoluotool.config.models import AppConfig
+from luoluotool.automation.errors import WindowUnavailableError
+from luoluotool.automation.pointer_sender import SyntheticPointerSender
+from luoluotool.automation.window import find_window, window_exists as _window_exists
+from luoluotool.config.models import INPUT_MODE_SYNTHETIC_POINTER, AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +32,6 @@ SMTO_ABORTIFHUNG = 0x0002
 SEND_MESSAGE_TIMEOUT_MS = 500
 # 消息间隔：让游戏分帧处理“移动/按下/抬起”，避免同一帧内连发被忽略或用到旧的指针位置
 MESSAGE_GAP_SECONDS = 0.05
-
-
-class WindowUnavailableError(RuntimeError):
-    """真实模式下游戏窗口不可用（未找到 / 最小化 / 不可见 / 已关闭）。"""
 
 
 class InputSender(Protocol):
@@ -162,8 +160,8 @@ class WindowMessageSender:
 
 
 def window_exists(hwnd: int) -> bool:
-    """窗口句柄是否仍然有效。"""
-    return bool(win32gui.IsWindow(hwnd))
+    """窗口句柄是否仍然有效（实现位于 automation.window）。"""
+    return _window_exists(hwnd)
 
 
 def is_window_ready(hwnd: int) -> bool:
@@ -249,4 +247,10 @@ def build_channel(
     gate = WindowReadinessGate(
         hwnd, config.automation.pause_on_window_focus_loss, stop_event, sleep, log
     )
-    return InputChannel(WindowMessageSender(hwnd, log, sleep), gate.wait_until_ready)
+    if config.automation.input_mode == INPUT_MODE_SYNTHETIC_POINTER:
+        sender: InputSender = SyntheticPointerSender(hwnd, config.automation.pointer_type, log, sleep)
+        logger.info("输入通道：合成指针（%s，不移动真实光标）", config.automation.pointer_type)
+    else:
+        sender = WindowMessageSender(hwnd, log, sleep)
+        logger.info("输入通道：窗口消息")
+    return InputChannel(sender, gate.wait_until_ready)

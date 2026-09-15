@@ -2,7 +2,11 @@
 
 import logging
 
-from luoluotool.config.models import SCHEMA_VERSION
+from luoluotool.config.models import (
+    INPUT_MODES,
+    POINTER_TYPES,
+    SCHEMA_VERSION,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -123,7 +127,17 @@ def _migrate_v1_to_v2(raw: dict) -> dict:
     return migrated
 
 
-_MIGRATIONS = {1: _migrate_v1_to_v2}
+def _migrate_v2_to_v3(raw: dict) -> dict:
+    """v2 → v3：新增 automation.input_mode（默认窗口消息）与 pointer_type（默认触摸）。"""
+    automation = dict(raw.get("automation") or {})
+    automation.setdefault("input_mode", INPUT_MODES[0])
+    automation.setdefault("pointer_type", POINTER_TYPES[0])
+    migrated = dict(raw)
+    migrated["automation"] = automation
+    return migrated
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
 
 
 def migrate(raw: object) -> object:
@@ -180,6 +194,13 @@ def validate(raw: object) -> list[str]:
         level = _get(raw, "logging.level")
         if not isinstance(level, str) or level not in _LOG_LEVELS:
             errors.append(f"logging.level 必须是 {'/'.join(sorted(_LOG_LEVELS))} 之一")
+    if "automation" not in missing:
+        mode = _get(raw, "automation.input_mode")
+        if mode not in INPUT_MODES:
+            errors.append(f"automation.input_mode 必须是 {'/'.join(INPUT_MODES)} 之一")
+        pointer_type = _get(raw, "automation.pointer_type")
+        if pointer_type not in POINTER_TYPES:
+            errors.append(f"automation.pointer_type 必须是 {'/'.join(POINTER_TYPES)} 之一")
     if "features.daily_tasks" not in missing:
         _validate_tasks(raw, errors)
     return errors

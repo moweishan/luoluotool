@@ -29,14 +29,28 @@ def test_root_must_be_dict() -> None:
 
 def test_schema_version_checks() -> None:
     raw = _default_raw()
-    raw["schema_version"] = 3
+    raw["schema_version"] = 4
     assert any("schema_version" in e for e in validate(raw))
     raw["schema_version"] = 0
     assert any("schema_version" in e for e in validate(raw))
-    raw["schema_version"] = "2"
+    raw["schema_version"] = "3"
     assert any("schema_version" in e for e in validate(raw))
     del raw["schema_version"]
     assert any("schema_version" in e for e in validate(raw))
+
+
+def test_input_mode_and_pointer_type_enum() -> None:
+    raw = _default_raw()
+    assert validate(raw) == []
+    _set_path(raw, "automation.input_mode", "synthetic_pointer")
+    assert validate(raw) == []
+    _set_path(raw, "automation.input_mode", "magic")
+    assert any("input_mode" in e for e in validate(raw))
+    _set_path(raw, "automation.input_mode", "window_message")
+    _set_path(raw, "automation.pointer_type", "pen")
+    assert validate(raw) == []
+    _set_path(raw, "automation.pointer_type", "mouse")
+    assert any("pointer_type" in e for e in validate(raw))
 
 
 def test_missing_sections_reported() -> None:
