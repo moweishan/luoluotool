@@ -12,7 +12,7 @@ import win32con
 import win32gui
 import win32ui
 
-from luoluotool.automation.elevation import is_process_elevated
+from luoluotool.automation.elevation import is_process_elevated, is_window_elevated
 
 logger = logging.getLogger(__name__)
 
@@ -150,11 +150,18 @@ def screenshot_path(base_dir: Path, now: datetime | None = None) -> Path:
 
 
 def diagnose_window(keyword: str, debug_dir: Path) -> DiagnosticResult:
-    """查找→强制置前（恢复最小化）→截图，并标记是否需要提权。"""
+    """查找→（权限不足先要求提权）→强制置前→截图。"""
     hwnd = find_window(keyword)
     if hwnd is None:
         return DiagnosticResult(f"未找到标题含“{keyword}”的窗口，请确认游戏已窗口化运行")
     title = win32gui.GetWindowText(hwnd)
+    if not is_process_elevated() and is_window_elevated(hwnd) is True:
+        # 权限不足：先请求提权，完全不触碰游戏窗口（避免恢复了窗口又被取消）
+        return DiagnosticResult(
+            f"游戏窗口“{title}”以管理员权限运行，本工具权限不足，无法置前/截图；"
+            "请以管理员身份重启本工具后重试",
+            needs_elevation=True,
+        )
     denied = not bring_to_front(hwnd) and not is_process_elevated()
     if win32gui.IsIconic(hwnd):
         hint = "；游戏可能以管理员权限运行，请以管理员身份运行本工具后重试" if denied else ""

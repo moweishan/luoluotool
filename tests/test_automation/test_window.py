@@ -71,11 +71,12 @@ def test_diagnostic_not_found_message() -> None:
 def test_diagnostic_success_flow(monkeypatch, tmp_path) -> None:
     calls: list[str] = []
     monkeypatch.setattr(window, "find_window", lambda keyword: 123)
-    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front"))
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front") or True)
     monkeypatch.setattr(window, "get_client_rect", lambda hwnd: (0, 0, 800, 600))
     monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: calls.append("shot") or p)
     monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
     monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: False)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: None)
     message = window.run_window_diagnostic("桃源", tmp_path)
     assert calls == ["front", "shot"]
     assert "hwnd=123" in message
@@ -92,6 +93,7 @@ def test_diagnostic_minimized_window_returns_hint(monkeypatch, tmp_path) -> None
     monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
     monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
     monkeypatch.setattr(window, "is_process_elevated", lambda: True)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: True)
     message = window.run_window_diagnostic("桃源", tmp_path)
     assert calls == ["front"]
     assert "最小化" in message
@@ -106,18 +108,51 @@ def test_diagnostic_minimized_without_elevation_hints_admin(monkeypatch, tmp_pat
     monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
     monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
     monkeypatch.setattr(window, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: None)
     message = window.run_window_diagnostic("桃源", tmp_path)
     assert "最小化" in message
     assert "管理员" in message
 
 
-def test_diagnose_window_reports_needs_elevation(monkeypatch, tmp_path) -> None:
-    """置前被拒（UIPI）：结果标记需要提权。"""
+def test_diagnose_window_requires_elevation_without_touching_window(monkeypatch, tmp_path) -> None:
+    """权限不足时先要求提权，且完全不触碰游戏窗口（不恢复/不置前/不截图）。"""
+    calls: list[str] = []
     monkeypatch.setattr(window, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: True)
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front") or True)
+    monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: calls.append("shot") or p)
+    monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
+    result = window.diagnose_window("桃源", tmp_path)
+    assert calls == []
+    assert result.needs_elevation is True
+    assert "管理员" in result.message
+
+
+def test_diagnose_window_elevated_process_runs_full_flow(monkeypatch, tmp_path) -> None:
+    """本进程已提权：正常执行置前与截图，即使游戏窗口也是管理员权限。"""
+    calls: list[str] = []
+    monkeypatch.setattr(window, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: True)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: True)
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: calls.append("front") or True)
+    monkeypatch.setattr(window, "get_client_rect", lambda hwnd: (0, 0, 800, 600))
+    monkeypatch.setattr(window, "screenshot_client", lambda hwnd, p: calls.append("shot") or p)
+    monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
+    monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: False)
+    result = window.diagnose_window("桃源", tmp_path)
+    assert calls == ["front", "shot"]
+    assert result.needs_elevation is False
+
+
+def test_diagnose_window_reports_needs_elevation(monkeypatch, tmp_path) -> None:
+    """置前被拒（UIPI）且权限未知：结果标记需要提权。"""
+    monkeypatch.setattr(window, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: None)
     monkeypatch.setattr(window, "bring_to_front", lambda hwnd: False)
     monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
     monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
-    monkeypatch.setattr(window, "is_process_elevated", lambda: False)
     result = window.diagnose_window("桃源", tmp_path)
     assert result.needs_elevation is True
     assert "管理员" in result.message
