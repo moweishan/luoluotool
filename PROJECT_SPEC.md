@@ -145,13 +145,13 @@ LuoLuoTool/
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v1）
+## 9. 数据结构（配置文件 schema v2）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -175,7 +175,8 @@ LuoLuoTool/
     "post_click_wait_ms": 500,
     "max_consecutive_failures": 3,
     "pause_on_window_focus_loss": true,
-    "failsafe_hotkey": "F8"
+    "failsafe_hotkey": "F8",
+    "ask_elevation_on_start": true
   },
   "logging": { "level": "INFO", "max_file_mb": 2, "backup_count": 3 }
 }
@@ -186,6 +187,14 @@ LuoLuoTool/
 - 布尔开关一律 `false` 为出厂默认；`dry_run` 出厂默认必须为 `true`。
 - `params` 为每任务私有参数，先在占位任务中使用 `{}`，后续阶段再定义。
 - 配置文件为 UTF-8；读写使用临时文件 + `os.replace` 原子替换。
+
+### 版本迁移记录
+
+| 版本 | 变更 | 迁移函数 |
+|---|---|---|
+| v1 → v2 | 新增 `automation.ask_elevation_on_start`（默认 `true` = 启动时询问提权）；`false` 表示不再询问 | `validation.migrate()` → `_migrate_v1_to_v2` |
+
+迁移在 `store.load()` 与 `--validate-config` 中自动执行；旧版文件迁移后**写回**为当前版本，且不会被当作损坏文件备份。
 
 ## 10. 命令行 / 入口设计
 

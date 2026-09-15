@@ -12,7 +12,51 @@ def test_load_missing_file_creates_defaults(tmp_path) -> None:
     path = tmp_path / "config.json"
     config = store.load(path)
     assert config.to_dict() == models.AppConfig.default().to_dict()
-    assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
+    assert (
+        json.loads(path.read_text(encoding="utf-8"))["schema_version"] == models.SCHEMA_VERSION
+    )
+
+
+def test_load_migrates_v1_file_and_rewrites(tmp_path) -> None:
+    """旧版 v1 文件：迁移为 v2（补默认字段）并写回，不作为损坏处理。"""
+    v1_raw = {
+        "schema_version": 1,
+        "features": {
+            "daily_tasks": {
+                "enabled": True,
+                "tasks": {"placeholder_task_a": {"enabled": False, "order": 1, "params": {}}},
+                "loop": {"enabled": False, "interval_seconds": 3600},
+            },
+            "order_hold": {
+                "enabled": False,
+                "reserved_switch_1": False,
+                "reserved_switch_2": False,
+            },
+            "feature_3": {"enabled": False},
+            "feature_4": {"enabled": False},
+        },
+        "automation": {
+            "dry_run": True,
+            "window_title_keyword": "桃源深处有人家",
+            "click_interval_ms": 1234,
+            "post_click_wait_ms": 500,
+            "max_consecutive_failures": 3,
+            "pause_on_window_focus_loss": True,
+            "failsafe_hotkey": "F8",
+        },
+        "logging": {"level": "INFO", "max_file_mb": 2, "backup_count": 3},
+    }
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(v1_raw, ensure_ascii=False), encoding="utf-8")
+    config = store.load(path)
+    assert config.schema_version == models.SCHEMA_VERSION
+    assert config.automation.ask_elevation_on_start is True
+    assert config.automation.click_interval_ms == 1234
+    assert config.features.daily_tasks.enabled is True
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["schema_version"] == models.SCHEMA_VERSION
+    assert on_disk["automation"]["ask_elevation_on_start"] is True
+    assert not list(tmp_path.glob("config.json.bak-*"))
 
 
 def test_save_load_roundtrip(tmp_path) -> None:

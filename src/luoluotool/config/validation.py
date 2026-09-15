@@ -1,6 +1,10 @@
-"""配置校验：字段级检查，返回错误列表而非抛异常。"""
+"""配置校验与 schema 迁移：返回错误列表而非抛异常。"""
+
+import logging
 
 from luoluotool.config.models import SCHEMA_VERSION
+
+logger = logging.getLogger(__name__)
 
 _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _SECTIONS = (
@@ -22,6 +26,7 @@ _BOOL_PATHS = (
     "features.feature_4.enabled",
     "automation.dry_run",
     "automation.pause_on_window_focus_loss",
+    "automation.ask_elevation_on_start",
 )
 _INT_BOUNDS = (
     ("automation.click_interval_ms", 100, 5000),
@@ -85,6 +90,42 @@ def _validate_tasks(raw: dict, errors: list[str]) -> None:
             errors.append(f"features.daily_tasks.tasks.{task_id}.order 必须是 1–999 之间的整数")
         if not isinstance(task.get("params"), dict):
             errors.append(f"features.daily_tasks.tasks.{task_id}.params 必须是对象")
+
+
+def _migrate_v1_to_v2(raw: dict) -> dict:
+    """v1 → v2：新增 automation.ask_elevation_on_start（默认 true = 启动时询问提权）。"""
+    automation = dict(raw.get("automation") or {})
+    automation.setdefault("ask_elevation_on_start", True)
+    migrated = dict(raw)
+    migrated["automation"] = automation
+    return migrated
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2}
+
+
+def migrate(raw: object) -> object:
+    """按 schema_version 逐级迁移到当前版本。
+
+    已是当前版本、版本未知或输入非法时原样返回（交由校验报错）。
+    """
+    if not isinstance(raw, dict):
+        return raw
+    version = raw.get("schema_version")
+    if isinstance(version, bool) or not isinstance(version, int):
+        return raw
+    if version >= SCHEMA_VERSION:
+        return raw
+    migrated = dict(raw)
+    while version < SCHEMA_VERSION:
+        step = _MIGRATIONS.get(version)
+        if step is None:
+            return raw
+        migrated = step(migrated)
+        version += 1
+        migrated["schema_version"] = version
+    logger.info("配置已从 schema v%s 迁移到 v%d", raw.get("schema_version"), version)
+    return migrated
 
 
 def validate(raw: object) -> list[str]:

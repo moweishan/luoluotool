@@ -38,6 +38,7 @@ class SettingsPage(QWidget):
             "游戏以管理员权限运行时，本工具需要同等权限才能置前/截图；"
             "点击后经系统 UAC 确认以管理员身份重启"
         )
+        self.ask_elevation_box = QCheckBox("启动时自动询问提权（取消勾选 = 不再询问）")
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -51,6 +52,7 @@ class SettingsPage(QWidget):
         layout.addLayout(click_row)
         layout.addLayout(failures_row)
         layout.addWidget(self.hotkey_label)
+        layout.addWidget(self.ask_elevation_box)
         layout.addWidget(self.diagnose_button)
         layout.addWidget(self.elevation_hint_label)
         layout.addWidget(self.restart_admin_button)
@@ -59,6 +61,7 @@ class SettingsPage(QWidget):
         self.focus_loss_box.toggled.connect(self._on_focus_loss_toggled)
         self.click_interval_spin.valueChanged.connect(self._on_click_interval_changed)
         self.failures_spin.valueChanged.connect(self._on_failures_changed)
+        self.ask_elevation_box.toggled.connect(self._on_ask_elevation_toggled)
         self.set_config(config)
 
     def set_config(self, config: AppConfig) -> None:
@@ -77,6 +80,9 @@ class SettingsPage(QWidget):
         self.failures_spin.blockSignals(True)
         self.failures_spin.setValue(automation.max_consecutive_failures)
         self.failures_spin.blockSignals(False)
+        self.ask_elevation_box.blockSignals(True)
+        self.ask_elevation_box.setChecked(automation.ask_elevation_on_start)
+        self.ask_elevation_box.blockSignals(False)
         self.hotkey_label.setText(f"急停热键（当前版本只读）：{automation.failsafe_hotkey}")
 
     def _on_dry_run_toggled(self) -> None:
@@ -93,4 +99,8 @@ class SettingsPage(QWidget):
 
     def _on_failures_changed(self, value: int) -> None:
         self._config.automation.max_consecutive_failures = value
+        self._on_changed()
+
+    def _on_ask_elevation_toggled(self) -> None:
+        self._config.automation.ask_elevation_on_start = self.ask_elevation_box.isChecked()
         self._on_changed()

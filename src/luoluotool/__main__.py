@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from luoluotool import __version__
-from luoluotool.config.validation import validate
+from luoluotool.config.validation import migrate, validate
 from luoluotool.gui.app import run as run_gui
 from luoluotool.utils.paths import get_user_data_dir
 
@@ -46,7 +46,7 @@ def _validate_config(path: Path) -> int:
     except (OSError, json.JSONDecodeError) as exc:
         print(f"配置文件不是合法 JSON：{exc}")
         return 1
-    errors = validate(raw)
+    errors = validate(migrate(raw))
     if errors:
         for error in errors:
             print(error)

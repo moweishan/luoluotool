@@ -186,20 +186,24 @@ def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -
 
 
 def test_restart_admin_button_confirmed(window_factory, tmp_path, monkeypatch) -> None:
-    """确认后带 --config 参数请求提权重启。"""
+    """确认后带 --config 参数请求提权重启；按钮场景不提供「不再询问」。"""
     from luoluotool.gui import main_window as mw
 
     recorded: dict[str, list[str]] = {}
+    ask_flags: list[bool] = []
     monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True
     )
     monkeypatch.setattr(
-        mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.StandardButton.Yes
+        mw.MainWindow,
+        "_ask_restart_confirmation",
+        lambda self, allow_dont_ask=False: ask_flags.append(allow_dont_ask) or (True, False),
     )
     window = window_factory(tmp_path / "config.json")
     window.settings_page.restart_admin_button.click()
     assert recorded["args"] == ["--config", str(tmp_path / "config.json")]
+    assert ask_flags == [False]
 
 
 def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, monkeypatch) -> None:
@@ -210,7 +214,7 @@ def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, 
     monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(mw, "restart_as_admin", lambda args: called.append(list(args)) or True)
     monkeypatch.setattr(
-        mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.StandardButton.No
+        mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, False)
     )
     window = window_factory(tmp_path / "config.json")
     window.settings_page.restart_admin_button.click()
@@ -231,8 +235,9 @@ def test_restart_admin_button_when_already_elevated(window_factory, tmp_path, mo
         lambda parent, title, text, *args, **kwargs: info_calls.append(text),
     )
     monkeypatch.setattr(
-        mw.QMessageBox, "question",
-        lambda *args, **kwargs: question_calls.append(args) or mw.QMessageBox.StandardButton.Yes,
+        mw.MainWindow,
+        "_ask_restart_confirmation",
+        lambda self, allow_dont_ask=False: question_calls.append((allow_dont_ask,)) or (True, False),
     )
     monkeypatch.setattr(mw, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
     window = window_factory(tmp_path / "config.json")
@@ -258,21 +263,22 @@ def test_elevation_check_sets_settings_hint(window_factory, tmp_path, monkeypatc
 
 
 def test_startup_auto_elevate_prompts_and_restarts(window_factory, tmp_path, monkeypatch) -> None:
-    """启动自动流程：非管理员 → 弹确认框 → 确认后请求提权重启。"""
+    """启动自动流程：非管理员 → 弹确认框（含「不再询问」）→ 确认后请求提权重启。"""
     from luoluotool.gui import main_window as mw
 
     recorded: dict[str, list[str]] = {}
-    asked: list[tuple] = []
+    ask_flags: list[bool] = []
     monkeypatch.setattr(mw, "find_window", lambda keyword: None)
     monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
-        mw.QMessageBox, "question",
-        lambda *args, **kwargs: asked.append(args) or mw.QMessageBox.StandardButton.Yes,
+        mw.MainWindow,
+        "_ask_restart_confirmation",
+        lambda self, allow_dont_ask=False: ask_flags.append(allow_dont_ask) or (True, False),
     )
     monkeypatch.setattr(mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
     window = window_factory(tmp_path / "config.json", auto_elevate=True)
     window._startup_elevation_flow()
-    assert len(asked) == 1
+    assert ask_flags == [True]
     assert recorded["args"] == ["--config", str(tmp_path / "config.json")]
 
 
@@ -284,8 +290,7 @@ def test_startup_auto_elevate_declined(window_factory, tmp_path, monkeypatch) ->
     monkeypatch.setattr(mw, "find_window", lambda keyword: None)
     monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
-        mw.QMessageBox, "question",
-        lambda *args, **kwargs: mw.QMessageBox.StandardButton.No,
+        mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, False)
     )
     monkeypatch.setattr(mw, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
     window = window_factory(tmp_path / "config.json", auto_elevate=True)
@@ -302,8 +307,9 @@ def test_startup_auto_elevate_when_admin_skips_modal(window_factory, tmp_path, m
     monkeypatch.setattr(mw, "find_window", lambda keyword: None)
     monkeypatch.setattr(mw, "is_process_elevated", lambda: True)
     monkeypatch.setattr(
-        mw.QMessageBox, "question",
-        lambda *args, **kwargs: questions.append(args) or mw.QMessageBox.StandardButton.Yes,
+        mw.MainWindow,
+        "_ask_restart_confirmation",
+        lambda self, allow_dont_ask=False: questions.append((allow_dont_ask,)) or (True, False),
     )
     window = window_factory(tmp_path / "config.json", auto_elevate=True)
     window._startup_elevation_flow()
@@ -319,9 +325,42 @@ def test_startup_auto_elevate_disabled_in_smoke(window_factory, tmp_path, monkey
     monkeypatch.setattr(mw, "find_window", lambda keyword: None)
     monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
-        mw.QMessageBox, "question",
-        lambda *args, **kwargs: questions.append(args) or mw.QMessageBox.StandardButton.Yes,
+        mw.MainWindow,
+        "_ask_restart_confirmation",
+        lambda self, allow_dont_ask=False: questions.append((allow_dont_ask,)) or (True, False),
     )
     window = window_factory(tmp_path / "config.json", auto_elevate=False)
     window._startup_elevation_flow()
     assert questions == []
+
+
+def test_startup_dont_ask_persists_and_skips_next_time(window_factory, tmp_path, monkeypatch) -> None:
+    """勾选「不再询问」：落盘为 false、设置页同步、下次启动不再询问。"""
+    import json
+
+    from luoluotool.gui import main_window as mw
+
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: True)
+    monkeypatch.setattr(
+        mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, True)
+    )
+    window = window_factory(tmp_path / "config.json", auto_elevate=True)
+    window._startup_elevation_flow()
+    assert window._config.automation.ask_elevation_on_start is False
+    assert window.settings_page.ask_elevation_box.isChecked() is False
+    on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert on_disk["automation"]["ask_elevation_on_start"] is False
+
+    asked: list[bool] = []
+    monkeypatch.setattr(
+        mw.MainWindow,
+        "_ask_restart_confirmation",
+        lambda self, allow_dont_ask=False: asked.append(allow_dont_ask) or (True, False),
+    )
+    next_window = window_factory(
+        tmp_path / "config.json", window._config, auto_elevate=True
+    )
+    next_window._startup_elevation_flow()
+    assert asked == []

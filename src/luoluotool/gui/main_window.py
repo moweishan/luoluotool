@@ -11,6 +11,7 @@ from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
@@ -330,14 +331,31 @@ class MainWindow(QMainWindow):
     def _auto_elevate_if_needed(self) -> None:
         """非管理员时自动执行「以管理员身份重启」的询问流程。
 
-        已是管理员时只记录日志与状态栏提示，不弹窗（避免每次启动都需确认）。
+        已是管理员时只记录日志与状态栏提示，不弹窗（避免每次启动都需确认）；
+        配置为「不再询问」时直接跳过。
         """
         if is_process_elevated():
             logger.info("当前已是管理员权限，无需重启")
             self.statusBar().showMessage("当前已是管理员权限，无需重启")
             return
+        if not self._config.automation.ask_elevation_on_start:
+            logger.info("已设置「不再询问」，跳过启动提权询问")
+            return
         logger.info("启动时未以管理员权限运行，询问是否提权重启")
-        self._on_restart_admin_clicked()
+        confirmed, dont_ask = self._ask_restart_confirmation(allow_dont_ask=True)
+        if dont_ask:
+            self._set_ask_elevation_on_start(False)
+        if confirmed:
+            self._perform_elevated_restart()
+        else:
+            self.statusBar().showMessage("已取消以管理员身份重启")
+
+    def _set_ask_elevation_on_start(self, enabled: bool) -> None:
+        """记录「不再询问」偏好并立即落盘（启动阶段尚无未保存改动）。"""
+        self._config.automation.ask_elevation_on_start = enabled
+        self.settings_page.set_config(self._config)
+        store.save(self._config, self._config_path)
+        logger.info("已更新「启动时自动询问提权」为 %s 并保存配置", enabled)
 
     def _relaunch_args(self) -> list[str]:
         return ["--config", str(self._config_path)]
@@ -351,6 +369,24 @@ class MainWindow(QMainWindow):
         if answer == QMessageBox.StandardButton.Yes:
             self._perform_elevated_restart()
 
+    def _ask_restart_confirmation(self, allow_dont_ask: bool = False) -> tuple[bool, bool]:
+        """弹确认框，返回 (是否重启, 是否勾选「不再询问」)。
+
+        allow_dont_ask=True 时才显示「不再询问」勾选框（启动自动流程使用）。
+        """
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle("以管理员身份重启")
+        box.setText("将以管理员权限重新启动本工具（会弹出 UAC 确认），当前窗口会关闭。是否继续？")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        dont_ask_box = None
+        if allow_dont_ask:
+            dont_ask_box = QCheckBox("不再询问（可在设置页重新开启）")
+            box.setCheckBox(dont_ask_box)
+        answer = box.exec()
+        return answer == QMessageBox.StandardButton.Yes, bool(dont_ask_box and dont_ask_box.isChecked())
+
     def _on_restart_admin_clicked(self) -> None:
         if is_process_elevated():
             QMessageBox.information(
@@ -360,12 +396,8 @@ class MainWindow(QMainWindow):
             )
             self.statusBar().showMessage("当前已是管理员权限，无需重启")
             return
-        answer = QMessageBox.question(
-            self,
-            "以管理员身份重启",
-            "将以管理员权限重新启动本工具（会弹出 UAC 确认），当前窗口会关闭。是否继续？",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
+        confirmed, _ = self._ask_restart_confirmation()
+        if confirmed:
             self._perform_elevated_restart()
         else:
             self.statusBar().showMessage("已取消以管理员身份重启")

@@ -1,10 +1,10 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v1（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v2（dataclass 实现）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -111,6 +111,7 @@ class AutomationConfig:
     max_consecutive_failures: int = 3
     pause_on_window_focus_loss: bool = True
     failsafe_hotkey: str = "F8"
+    ask_elevation_on_start: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -121,6 +122,7 @@ class AutomationConfig:
             "max_consecutive_failures": self.max_consecutive_failures,
             "pause_on_window_focus_loss": self.pause_on_window_focus_loss,
             "failsafe_hotkey": self.failsafe_hotkey,
+            "ask_elevation_on_start": self.ask_elevation_on_start,
         }
 
     @classmethod
@@ -133,6 +135,7 @@ class AutomationConfig:
             data.get("max_consecutive_failures", 3),
             data.get("pause_on_window_focus_loss", True),
             data.get("failsafe_hotkey", "F8"),
+            data.get("ask_elevation_on_start", True),
         )
 
 

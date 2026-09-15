@@ -88,3 +88,16 @@ def test_settings_page_binds_and_hotkey_readonly() -> None:
     assert "窗口诊断" in page.diagnose_button.text()
     assert "管理员" in page.restart_admin_button.text()
     page.close()
+
+
+def test_settings_page_binds_ask_elevation_switch() -> None:
+    """设置页「启动时自动询问提权」绑定 automation.ask_elevation_on_start。"""
+    config = AppConfig.default()
+    page = SettingsPage(config, lambda: None)
+    assert page.ask_elevation_box.isChecked() is True
+    page.ask_elevation_box.setChecked(False)
+    assert config.automation.ask_elevation_on_start is False
+    config2 = AppConfig.default()
+    page.set_config(config2)
+    assert page.ask_elevation_box.isChecked() is True
+    page.close()

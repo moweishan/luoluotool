@@ -6,8 +6,8 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-from luoluotool.config.models import AppConfig
-from luoluotool.config.validation import validate
+from luoluotool.config.models import SCHEMA_VERSION, AppConfig
+from luoluotool.config.validation import migrate, validate
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ def save(config: AppConfig, path: Path) -> None:
 
 
 def load(path: Path) -> AppConfig:
-    """加载配置；不存在则生成默认；损坏则备份为 .bak-<时间戳> 并恢复默认。"""
+    """加载配置；不存在则生成默认；旧版本自动迁移；损坏则备份恢复默认。"""
     path = Path(path)
     if not path.exists():
         config = AppConfig.default()
@@ -38,13 +38,18 @@ def load(path: Path) -> AppConfig:
         return config
     try:
         raw = json.loads(path.read_text(encoding="utf-8-sig"))
-        errors = validate(raw)
     except (OSError, json.JSONDecodeError) as exc:
         return _recover(path, f"读取/解析失败：{exc}")
+    migrated_raw = migrate(raw)
+    errors = validate(migrated_raw)
     if errors:
         return _recover(path, "；".join(errors))
+    config = AppConfig.from_dict(migrated_raw)
+    if migrated_raw is not raw:
+        save(config, path)
+        logger.info("配置已迁移到 schema v%d 并写回：%s", SCHEMA_VERSION, path)
     logger.info("配置加载成功：%s", path)
-    return AppConfig.from_dict(raw)
+    return config
 
 
 def _recover(path: Path, reason: str) -> AppConfig:
