@@ -185,6 +185,7 @@ def test_restart_admin_button_confirmed(window_factory, tmp_path, monkeypatch) -
     from luoluotool.gui import main_window as mw
 
     recorded: dict[str, list[str]] = {}
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True
     )
@@ -201,6 +202,7 @@ def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, 
     from luoluotool.gui import main_window as mw
 
     called: list[list[str]] = []
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(mw, "restart_as_admin", lambda args: called.append(list(args)) or True)
     monkeypatch.setattr(
         mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.StandardButton.No
@@ -209,6 +211,31 @@ def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, 
     window.settings_page.restart_admin_button.click()
     assert called == []
     assert "取消" in window.statusBar().currentMessage() or "失败" in window.statusBar().currentMessage()
+
+
+def test_restart_admin_button_when_already_elevated(window_factory, tmp_path, monkeypatch) -> None:
+    """已是管理员权限：仅提示无需重启，不发起重启、不弹确认框。"""
+    from luoluotool.gui import main_window as mw
+
+    info_calls: list[str] = []
+    restart_calls: list[list[str]] = []
+    question_calls: list[tuple] = []
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: True)
+    monkeypatch.setattr(
+        mw.QMessageBox, "information",
+        lambda parent, title, text, *args, **kwargs: info_calls.append(text),
+    )
+    monkeypatch.setattr(
+        mw.QMessageBox, "question",
+        lambda *args, **kwargs: question_calls.append(args) or mw.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.restart_admin_button.click()
+    assert info_calls and "无需重启" in info_calls[0]
+    assert question_calls == []
+    assert restart_calls == []
+    assert "无需重启" in window.statusBar().currentMessage()
 
 
 def test_elevation_check_sets_settings_hint(window_factory, tmp_path, monkeypatch) -> None:

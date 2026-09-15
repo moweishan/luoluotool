@@ -325,6 +325,14 @@ class MainWindow(QMainWindow):
             self._perform_elevated_restart()
 
     def _on_restart_admin_clicked(self) -> None:
+        if is_process_elevated():
+            QMessageBox.information(
+                self,
+                "已经是管理员权限",
+                "本工具当前已以管理员权限运行，无需重启。",
+            )
+            self.statusBar().showMessage("当前已是管理员权限，无需重启")
+            return
         answer = QMessageBox.question(
             self,
             "以管理员身份重启",
