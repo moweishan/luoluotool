@@ -314,7 +314,7 @@ def test_startup_auto_elevate_when_admin_skips_modal(window_factory, tmp_path, m
     window = window_factory(tmp_path / "config.json", auto_elevate=True)
     window._startup_elevation_flow()
     assert questions == []
-    assert "已是管理员权限" in window.statusBar().currentMessage()
+    assert window.statusBar().currentMessage() == "当前已是管理员权限"
 
 
 def test_startup_auto_elevate_disabled_in_smoke(window_factory, tmp_path, monkeypatch) -> None:

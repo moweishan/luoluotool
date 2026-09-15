@@ -335,8 +335,8 @@ class MainWindow(QMainWindow):
         配置为「不再询问」时不弹框，直接发起提权重启（UAC 取消则继续运行）。
         """
         if is_process_elevated():
-            logger.info("当前已是管理员权限，无需重启")
-            self.statusBar().showMessage("当前已是管理员权限，无需重启")
+            logger.info("当前已是管理员权限")
+            self.statusBar().showMessage("当前已是管理员权限")
             return
         if not self._config.automation.ask_elevation_on_start:
             logger.info("已设置「不再询问」，直接以管理员身份重启")
