@@ -146,11 +146,12 @@ def test_native_event_hotkey_triggers_failsafe(window_factory, tmp_path) -> None
 
 def test_diagnose_button_runs_and_reports(window_factory, tmp_path, monkeypatch) -> None:
     """窗口诊断：按钮触发工作线程，结果写入状态栏与日志面板。"""
+    from luoluotool.automation.window import DiagnosticResult
     from luoluotool.gui import main_window as mw
 
     monkeypatch.setattr(
-        mw, "run_window_diagnostic",
-        lambda keyword, debug_dir: f"诊断结果: {keyword}",
+        mw, "diagnose_window",
+        lambda keyword, debug_dir: DiagnosticResult(f"诊断结果: {keyword}", False),
     )
     window = window_factory(tmp_path / "config.json")
     window.settings_page.diagnose_button.click()
@@ -170,10 +171,55 @@ def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -
     def boom(keyword, debug_dir):
         raise RuntimeError("模拟失败")
 
-    monkeypatch.setattr(mw, "run_window_diagnostic", boom)
+    monkeypatch.setattr(mw, "diagnose_window", boom)
     window = window_factory(tmp_path / "config.json")
     window.settings_page.diagnose_button.click()
     assert window._diagnose_thread is not None
     assert window._diagnose_thread.wait(3000)
     _APP.processEvents()
     assert "窗口诊断失败" in window.statusBar().currentMessage()
+
+
+def test_restart_admin_button_confirmed(window_factory, tmp_path, monkeypatch) -> None:
+    """确认后带 --config 参数请求提权重启。"""
+    from luoluotool.gui import main_window as mw
+
+    recorded: dict[str, list[str]] = {}
+    monkeypatch.setattr(
+        mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True
+    )
+    monkeypatch.setattr(
+        mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.StandardButton.Yes
+    )
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.restart_admin_button.click()
+    assert recorded["args"] == ["--config", str(tmp_path / "config.json")]
+
+
+def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, monkeypatch) -> None:
+    """取消确认时不重启，仅提示。"""
+    from luoluotool.gui import main_window as mw
+
+    called: list[list[str]] = []
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: called.append(list(args)) or True)
+    monkeypatch.setattr(
+        mw.QMessageBox, "question", lambda *args, **kwargs: mw.QMessageBox.StandardButton.No
+    )
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.restart_admin_button.click()
+    assert called == []
+    assert "取消" in window.statusBar().currentMessage() or "失败" in window.statusBar().currentMessage()
+
+
+def test_elevation_check_sets_settings_hint(window_factory, tmp_path, monkeypatch) -> None:
+    """启动检测：游戏窗口权限更高且本工具未提权时，设置页给出提示。"""
+    from luoluotool.gui import main_window as mw
+
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(mw, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(mw, "is_window_elevated", lambda hwnd: True)
+    window = window_factory(tmp_path / "config.json")
+    window._check_elevation_need()
+    label = window.settings_page.elevation_hint_label
+    assert "管理员" in label.text()
+    assert label.isHidden() is False

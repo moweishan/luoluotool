@@ -111,6 +111,18 @@ def test_diagnostic_minimized_without_elevation_hints_admin(monkeypatch, tmp_pat
     assert "管理员" in message
 
 
+def test_diagnose_window_reports_needs_elevation(monkeypatch, tmp_path) -> None:
+    """置前被拒（UIPI）：结果标记需要提权。"""
+    monkeypatch.setattr(window, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: False)
+    monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "游戏")
+    monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: True)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: False)
+    result = window.diagnose_window("桃源", tmp_path)
+    assert result.needs_elevation is True
+    assert "管理员" in result.message
+
+
 def test_bring_to_front_restores_and_tops(monkeypatch) -> None:
     """置前：恢复最小化 → 显示 → SetForegroundWindow → z 序置顶；成功返回 True。"""
     calls: list[tuple] = []

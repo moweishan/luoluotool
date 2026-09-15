@@ -30,6 +30,14 @@ class SettingsPage(QWidget):
         self.failures_spin.setRange(FAILURES_MIN, FAILURES_MAX)
         self.hotkey_label = QLabel()
         self.diagnose_button = QPushButton("窗口诊断（查找游戏窗口并截图）")
+        self.elevation_hint_label = QLabel()
+        self.elevation_hint_label.setWordWrap(True)
+        self.elevation_hint_label.setVisible(False)
+        self.restart_admin_button = QPushButton("以管理员身份重启")
+        self.restart_admin_button.setToolTip(
+            "游戏以管理员权限运行时，本工具需要同等权限才能置前/截图；"
+            "点击后经系统 UAC 确认以管理员身份重启"
+        )
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -44,6 +52,8 @@ class SettingsPage(QWidget):
         layout.addLayout(failures_row)
         layout.addWidget(self.hotkey_label)
         layout.addWidget(self.diagnose_button)
+        layout.addWidget(self.elevation_hint_label)
+        layout.addWidget(self.restart_admin_button)
         layout.addStretch(1)
         self.dry_run_box.toggled.connect(self._on_dry_run_toggled)
         self.focus_loss_box.toggled.connect(self._on_focus_loss_toggled)

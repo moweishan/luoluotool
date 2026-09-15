@@ -86,4 +86,5 @@ def test_settings_page_binds_and_hotkey_readonly() -> None:
     assert "F8" in page.hotkey_label.text()
     assert "只读" in page.hotkey_label.text()
     assert "窗口诊断" in page.diagnose_button.text()
+    assert "管理员" in page.restart_admin_button.text()
     page.close()

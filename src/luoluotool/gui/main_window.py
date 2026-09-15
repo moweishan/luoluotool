@@ -7,12 +7,13 @@ from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QThread, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QMainWindow,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QTabWidget,
@@ -21,8 +22,13 @@ from PySide6.QtWidgets import (
 )
 
 from luoluotool import __version__
+from luoluotool.automation.elevation import (
+    is_process_elevated,
+    is_window_elevated,
+    restart_as_admin,
+)
 from luoluotool.automation.hotkey import WM_HOTKEY, HotkeyRegistrar
-from luoluotool.automation.window import run_window_diagnostic
+from luoluotool.automation.window import diagnose_window, find_window
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
@@ -90,9 +96,9 @@ class _RunnerThread(QThread):
 
 
 class _DiagnoseThread(QThread):
-    """在工作线程中执行窗口诊断；结果经信号回 UI 线程。"""
+    """在工作线程中执行窗口诊断；结果（消息, 是否需要提权）经信号回 UI 线程。"""
 
-    finished_message = Signal(str)
+    finished_message = Signal(str, bool)
 
     def __init__(self, keyword: str, debug_dir: Path, parent=None) -> None:
         super().__init__(parent)
@@ -101,11 +107,11 @@ class _DiagnoseThread(QThread):
 
     def run(self) -> None:
         try:
-            message = run_window_diagnostic(self._keyword, self._debug_dir)
+            result = diagnose_window(self._keyword, self._debug_dir)
+            self.finished_message.emit(result.message, result.needs_elevation)
         except Exception:
             logger.exception("窗口诊断失败")
-            message = "窗口诊断失败，详见日志"
-        self.finished_message.emit(message)
+            self.finished_message.emit("窗口诊断失败，详见日志", False)
 
 
 class MainWindow(QMainWindow):
@@ -147,6 +153,7 @@ class MainWindow(QMainWindow):
         for page, title in zip(pages, TAB_TITLES):
             self.tabs.addTab(page, title)
         self.settings_page.diagnose_button.clicked.connect(self._on_diagnose)
+        self.settings_page.restart_admin_button.clicked.connect(self._on_restart_admin_clicked)
         self.save_button = QPushButton("保存")
         self.save_button.clicked.connect(self._save)
         self.reload_button = QPushButton("重新加载")
@@ -181,6 +188,7 @@ class MainWindow(QMainWindow):
         # 必须注册到本窗口句柄：hwnd=0 的线程消息不会被 Qt 派发
         self._hotkey_hwnd = int(self.winId())
         self._hotkey.register(self._hotkey_hwnd)
+        QTimer.singleShot(0, self._check_elevation_need)
 
     def nativeEvent(self, event_type, message):
         """处理 WM_HOTKEY 急停消息。
@@ -275,10 +283,62 @@ class MainWindow(QMainWindow):
         self._diagnose_thread.finished.connect(self._on_diagnose_thread_finished)
         self._diagnose_thread.start()
 
-    def _on_diagnose_finished(self, message: str) -> None:
+    def _on_diagnose_finished(self, message: str, needs_elevation: bool) -> None:
         logger.info("%s", message)
         self.statusBar().showMessage(message)
+        if needs_elevation:
+            self._show_elevation_hint()
+            self._offer_elevated_restart()
 
     def _on_diagnose_thread_finished(self) -> None:
         self.settings_page.diagnose_button.setEnabled(True)
         self._diagnose_thread = None
+
+    def _show_elevation_hint(self) -> None:
+        """设置页显示提权提示（自动检测到权限不足时）。"""
+        self.settings_page.elevation_hint_label.setText(
+            "检测到游戏以管理员权限运行，本工具为普通权限，无法置前/截图"
+            "（后续键鼠模拟同样会被系统拦截）。请点击下方「以管理员身份重启」。"
+        )
+        self.settings_page.elevation_hint_label.setVisible(True)
+
+    def _check_elevation_need(self) -> None:
+        """启动时自动检测：游戏窗口权限更高而本工具未提权时给出提示。"""
+        if is_process_elevated():
+            return
+        hwnd = find_window(self._config.automation.window_title_keyword)
+        if hwnd is None or is_window_elevated(hwnd) is not True:
+            return
+        logger.warning("检测到游戏窗口以管理员权限运行，本工具为普通权限，建议以管理员身份重启")
+        self._show_elevation_hint()
+
+    def _relaunch_args(self) -> list[str]:
+        return ["--config", str(self._config_path)]
+
+    def _offer_elevated_restart(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "需要管理员权限",
+            "游戏以管理员权限运行，本工具权限不足，无法还原窗口/截图。\n是否立即以管理员身份重启本工具？",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._perform_elevated_restart()
+
+    def _on_restart_admin_clicked(self) -> None:
+        answer = QMessageBox.question(
+            self,
+            "以管理员身份重启",
+            "将以管理员权限重新启动本工具（会弹出 UAC 确认），当前窗口会关闭。是否继续？",
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self._perform_elevated_restart()
+        else:
+            self.statusBar().showMessage("已取消以管理员身份重启")
+
+    def _perform_elevated_restart(self) -> None:
+        if restart_as_admin(self._relaunch_args()):
+            self.statusBar().showMessage("正在以管理员身份重启…")
+            self.close()
+            QApplication.instance().quit()
+        else:
+            self.statusBar().showMessage("以管理员身份重启被取消或失败（详见日志）")

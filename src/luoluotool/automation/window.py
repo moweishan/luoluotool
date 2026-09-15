@@ -3,6 +3,7 @@
 import ctypes
 import logging
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,8 @@ import pywintypes
 import win32con
 import win32gui
 import win32ui
+
+from luoluotool.automation.elevation import is_process_elevated
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +23,12 @@ SCREENSHOT_RETRY_DELAY_SECONDS = 0.5
 ERROR_ACCESS_DENIED = 5
 
 
-def is_process_elevated() -> bool:
-    """本进程是否以管理员权限运行（用于诊断提示）。"""
-    try:
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception as exc:
-        logger.warning("检测进程权限失败：%s", exc)
-        return False
+@dataclass
+class DiagnosticResult:
+    """窗口诊断结果：人读消息 + 是否需要管理员权限。"""
+
+    message: str
+    needs_elevation: bool = False
 
 
 def find_window(keyword: str) -> int | None:
@@ -147,22 +149,29 @@ def screenshot_path(base_dir: Path, now: datetime | None = None) -> Path:
     return base_dir / f"window_{(now or datetime.now()):%Y%m%d%H%M%S}.png"
 
 
-def run_window_diagnostic(keyword: str, debug_dir: Path) -> str:
-    """查找→强制置前（恢复最小化）→截图；返回人读结果消息。"""
+def diagnose_window(keyword: str, debug_dir: Path) -> DiagnosticResult:
+    """查找→强制置前（恢复最小化）→截图，并标记是否需要提权。"""
     hwnd = find_window(keyword)
     if hwnd is None:
-        return f"未找到标题含“{keyword}”的窗口，请确认游戏已窗口化运行"
+        return DiagnosticResult(f"未找到标题含“{keyword}”的窗口，请确认游戏已窗口化运行")
     title = win32gui.GetWindowText(hwnd)
-    brought = bring_to_front(hwnd)
+    denied = not bring_to_front(hwnd) and not is_process_elevated()
     if win32gui.IsIconic(hwnd):
-        hint = ""
-        if not brought and not is_process_elevated():
-            hint = "；游戏可能以管理员权限运行，请以管理员身份运行本工具后重试"
-        return f"窗口“{title}”仍处于最小化状态，无法截图（已尝试恢复置前{hint}）"
+        hint = "；游戏可能以管理员权限运行，请以管理员身份运行本工具后重试" if denied else ""
+        return DiagnosticResult(
+            f"窗口“{title}”仍处于最小化状态，无法截图（已尝试恢复置前{hint}）", denied
+        )
     _, _, width, height = get_client_rect(hwnd)
     try:
         path = screenshot_client(hwnd, screenshot_path(debug_dir))
     except Exception as exc:
         logger.exception("截图失败")
-        return f"截图失败：{exc}（已尝试置前，请确认窗口可见）"
-    return f"窗口诊断完成：hwnd={hwnd} 标题“{title}” 客户区 {width}x{height} 截图 {path}"
+        return DiagnosticResult(f"截图失败：{exc}（已尝试置前，请确认窗口可见）", denied)
+    return DiagnosticResult(
+        f"窗口诊断完成：hwnd={hwnd} 标题“{title}” 客户区 {width}x{height} 截图 {path}", denied
+    )
+
+
+def run_window_diagnostic(keyword: str, debug_dir: Path) -> str:
+    """兼容封装：只返回诊断消息。"""
+    return diagnose_window(keyword, debug_dir).message

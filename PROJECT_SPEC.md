@@ -107,7 +107,8 @@ LuoLuoTool/
 │   │   ├── runner.py        # 执行调度器（配合 QThread 使用）
 │   │   └── state.py         # 运行状态枚举与状态机
 │   ├── automation/          # Windows 交互层
-│   │   ├── window.py        # 窗口查找/置前/截屏
+│   │   ├── window.py        # 窗口查找/置前/截屏、窗口诊断
+│   │   ├── elevation.py     # 进程/窗口权限检测与 UAC 提权重启
 │   │   ├── input_sender.py  # SendInput 封装（move/click/key）
 │   │   └── hotkey.py        # F8 全局急停
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
@@ -140,6 +141,7 @@ LuoLuoTool/
 | config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]` |
 | core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
 | automation | 找窗口、截图、SendInput 点击/按键、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
+| automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
