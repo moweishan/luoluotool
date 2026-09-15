@@ -56,6 +56,26 @@ def _wait_finished(window, timeout_ms: int = 5000) -> bool:
     return ok
 
 
+def test_start_saves_config_before_running(window_factory, tmp_path) -> None:
+    """点击启动：先把当前配置落盘，再开始执行任务。"""
+    import json
+
+    config = AppConfig.default()
+    config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
+    window = window_factory(tmp_path / "config.json", config)
+    window.settings_page.click_interval_spin.setValue(1234)
+    assert window.windowTitle().endswith("*")  # 有未保存改动
+    window._start()
+    assert _wait_finished(window)
+    assert window.windowTitle().endswith("*") is False
+    on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
+    assert on_disk["automation"]["click_interval_ms"] == 1234
+    assert on_disk["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["enabled"] is True
+    text = window.log_panel.toPlainText()
+    assert "配置已保存" in text
+    assert "启动任务" in text
+
+
 def test_start_runs_placeholder_and_logs_steps(window_factory, tmp_path) -> None:
     config = AppConfig.default()
     config.features.daily_tasks.enabled = True

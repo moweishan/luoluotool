@@ -260,6 +260,8 @@ class MainWindow(QMainWindow):
     def _start(self) -> None:
         if self._thread is not None and self._thread.isRunning():
             return
+        self._save()  # 启动前先把当前配置落盘，避免“改了没保存就运行”
+        logger.info("启动任务")
         self._runner = self._runner_factory(self._config)
         self._thread = _RunnerThread(self._runner, self)
         self._thread.finished.connect(self._on_runner_finished)
