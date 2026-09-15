@@ -104,6 +104,8 @@
 
 > 后续若采用替代方案，验收必须**同时**满足：① 点击落点在游戏内正确；② 真实光标既不消失、也不被移动。
 
+> **后续进展（2026-09-15 同日）**：该验收条件已由 **Phase 5.2「对齐窗口点击通道」** 满足——移动游戏窗口把目标坐标搬到静止光标下方，再投递窗口消息点击，点完还原窗口；实测结果为「目标点正确响应、真实光标未移动、指针未消失」。实现见 `automation/window_align.py` 与 `WindowAlignSender`，风险与前置条件见 §5。
+
 ### 4.3 已确认的风险（用户已知悉，后果自负）
 
 1. **反作弊可能直接拦截**：内核级输入驱动会被反作弊识别，可能导致游戏**无法启动**（例如出现 “Please Close Interception Before Starting the Game”），需卸载驱动并重启才能恢复；
@@ -124,6 +126,7 @@
 - **输入实现方式（2026-09-15 更新）**：允许 ① 窗口消息（默认，零侵入）② **用户态合成输入**（`ctypes` 调 `SendInput`/`SetCursorPos`，会移动真实光标，须还原）③ 驱动级注入（如 Interception，须逐项授权）。三者都必须遵守 §4.1 的"安全兜底"与"逐项授权"。
 - **输入方式限制（已知风险）**：后台窗口消息对**以物理光标位置或 Raw Input/DirectInput 独占输入**决定点击位置的游戏无效（现象为"日志正常但点击落在真实光标处"）。遇到时按顺序排查：① 子窗口定位与同步投递是否生效；② 游戏是否需要前台焦点；③ 是否改用用户态合成输入（需用户授权，见 §4.1）。
 - **合成指针会隐藏真实光标（2026-09-15 实测）**：触摸/笔注入会被系统判定为触摸输入并抑制真实光标，无法用 API 关闭或可靠恢复（详见 §4.2.1）；选用该通道时"指针消失"必须计入体验代价。改用 `SendInput` 鼠标点击则光标不消失、但会被移动（点击后须还原）。
+- **本作按真实光标位置取点，点击必须经「对齐窗口」通道（2026-09-15 实测）**：目标游戏（Unity 播放器）**忽略窗口消息里的坐标**（含 `WM_POINTER`），只按真实光标位置决定落点。因此点击前必须先**把目标客户区坐标搬到静止的真实光标下方**——即移动游戏窗口而不是移动光标（`automation/window_align.py`）——再投递窗口消息，点完立即还原窗口位置。使用该通道的前置条件与代价：① 工具与游戏同权限（UIPI 会拦截低权限进程的输入消息，未提权时 `WM_MOUSEMOVE` 直接被拒，错误码 5）；② 游戏窗口必须**窗口化**（最大化窗口无法用 `SetWindowPos` 移动；脚本检测到即拒绝点击，绝不退化成"按光标乱点"）；③ 点击期间真实鼠标需静止（`wait_cursor_idle`，速度阈值 50 px/s），否则会点错位置，此时**取消本次点击**并记日志；④ 每次点击游戏窗口会短暂位移（`SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOSIZE|SWP_NOREDRAW`，不抢焦点、不改 z 序），点完立刻还原。
 - **本机安全兜底（不得删除）**：无游戏窗口或窗口最小化/不可见时**不得注入**；合成输入前必须校验目标窗口在前台（避免点到错误窗口）；全部注入写日志；F8 急停随时可中断。
 - **政策变更带来的风险（2026-09-15）**：原禁止「DLL 注入 / 驱动级操作 / 过检测技巧 / 用户态合成输入 / 联网」的条款已按用户要求取消（见 §4.1）；未执行的三项见 §4.2。采用此类方案前必须完成逐项授权与风险声明，并优先评估风险更低的手段（窗口消息 → 用户态合成输入 → 驱动级注入）。
 - **数据保护（用户明确保留）**：不得收集或存储账号、密码、token、设备指纹；联网功能不得上传日志、配置、截图等本地数据。
@@ -137,7 +140,7 @@
 | GUI | **PySide6**（Qt for Python） | 原生渲染快、QSS 可做出简洁大气的主题、QThread 成熟、LGPL 允许闭源分发（动态链接） |
 | 配置 | 标准库 JSON + dataclass + 手写 schema 校验 | 无数据库需求；避免 pydantic 增大 exe 体积 |
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
-| 输入模拟 | 可选（按阶段任务与用户授权选择）：① 窗口消息（`SendMessageTimeout` 同步 + `PostMessage` 悬停 + `WindowFromPoint` 子窗口定位，**默认**）② 用户态合成输入（`ctypes` 调 `SendInput`/`SetCursorPos`）③ 驱动级注入（如 Interception，须逐项授权） | ① 零侵入但受游戏输入实现限制；② 能对上"只认物理光标"的游戏，代价是需移动光标（点击后还原）；③ 兼容性最强但风险最高（反作弊拦截/系统改动，见 §4.1） |
+| 输入模拟 | 窗口消息（`SendMessageTimeout` 同步 + `PostMessage` 悬停 + `WindowFromPoint` 子窗口定位，**默认**）；对「按真实光标取点」的游戏启用 **`align_window_before_click`（点击前对齐窗口，Phase 5.2，推荐）**；用户态合成输入（`SendInput`/`SetCursorPos`）与驱动级注入仅在有明确需求时逐项授权（见 §4.1） | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
 | 窗口查找/截图 | pywin32（win32gui / win32ui） | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
@@ -165,6 +168,7 @@ LuoLuoTool/
 │   │   ├── window.py        # 窗口查找/置前/截屏、窗口诊断
 │   │   ├── elevation.py     # 进程/窗口权限检测与 UAC 提权重启
 │   │   ├── input_sender.py  # 后台窗口消息输入（click/key，不接管真实键鼠）
+│   │   ├── window_align.py  # 点击前把目标坐标对齐到静止光标下方（移动窗口，不移动光标）
 │   │   └── hotkey.py        # F8 全局急停
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
@@ -196,17 +200,18 @@ LuoLuoTool/
 | config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]` |
 | core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
 | automation | 找窗口、截图、向窗口发送鼠标/键盘消息（不接管真实键鼠）、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
+| automation（对齐窗口点击） | 点击前把目标客户区坐标对齐到静止光标下方（移动窗口、不移动光标）并还原窗口 | `WindowAlignSender.click_at(x, y)`（`build_channel` 按 `automation.align_window_before_click` 选择）; `window_align.wait_cursor_idle(...) -> (bool, float)`, `window_align.align_window(hwnd, x, y) -> AlignResult`, `window_align.restore_window(hwnd, rect) -> bool`, `window_align.is_maximized(hwnd) -> bool`, `window_align.compute_window_origin(cursor, target, frame_offset)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v2）
+## 9. 数据结构（配置文件 schema v3）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 2,
+  "schema_version": 3,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -231,7 +236,8 @@ LuoLuoTool/
     "max_consecutive_failures": 3,
     "pause_on_window_focus_loss": true,
     "failsafe_hotkey": "F8",
-    "ask_elevation_on_start": true
+    "ask_elevation_on_start": true,
+    "align_window_before_click": false
   },
   "logging": { "level": "INFO", "max_file_mb": 2, "backup_count": 3 }
 }
@@ -251,8 +257,9 @@ LuoLuoTool/
 | 版本 | 变更 | 迁移函数 |
 |---|---|---|
 | v1 → v2 | 新增 `automation.ask_elevation_on_start`（默认 `true` = 启动时询问提权）；`false` 表示不再询问 | `validation.migrate()` → `_migrate_v1_to_v2` |
+| v2 → v3 | 新增 `automation.align_window_before_click`（默认 `false` = 不移动窗口；`true` = 点击前对齐游戏窗口，见 §5） | `validation.migrate()` → `_migrate_v2_to_v3` |
 
-> v3（`automation.input_mode` / `pointer_type`）曾于 2026-09-15 随合成指针通道实现，随后**随该通道撤回**（见 §4.2.1），未成为正式 schema：相关迁移函数与字段已移除，本机 `config.json` 已降级回 v2（备份见 `user_data/config.json.bak-v3-synthetic-20250915`，不入库）。
+> 另一组 v3 字段（`automation.input_mode` / `pointer_type`）曾于 2026-09-15 随合成指针通道短暂实现并**随该通道撤回**（见 §4.2.1），未成为正式 schema：其迁移函数与字段已移除。当前 v3 的语义**只包含** `align_window_before_click`；若某份配置里还残留那两个字段，`from_dict` 会忽略它们并在下次保存时清除。
 
 迁移在 `store.load()` 与 `--validate-config` 中自动执行；旧版文件迁移后**写回**为当前版本，且不会被当作损坏文件备份。
 

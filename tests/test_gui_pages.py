@@ -113,3 +113,17 @@ def test_settings_page_binds_ask_elevation_switch() -> None:
     page.set_config(config2)
     assert page.ask_elevation_box.isChecked() is True
     page.close()
+
+
+def test_settings_page_binds_align_window_switch() -> None:
+    """设置页「点击前对齐游戏窗口」绑定 automation.align_window_before_click（默认关闭）。"""
+    config = AppConfig.default()
+    page = SettingsPage(config, lambda: None)
+    assert page.align_window_box.isChecked() is False  # 默认关闭：不动他人窗口
+    page.align_window_box.setChecked(True)
+    assert config.automation.align_window_before_click is True
+    config2 = AppConfig.default()
+    config2.automation.align_window_before_click = True
+    page.set_config(config2)
+    assert page.align_window_box.isChecked() is True
+    page.close()

@@ -14,6 +14,7 @@ from typing import Protocol
 
 import win32gui
 
+from luoluotool.automation import window_align
 from luoluotool.automation.window import find_window
 from luoluotool.config.models import AppConfig
 
@@ -161,6 +162,79 @@ class WindowMessageSender:
             )
 
 
+class WindowAlignSender:
+    """真实模式：先把游戏窗口对齐到静止光标下方，再发窗口消息点击。
+
+    适用于**按真实光标位置决定点击落点**的游戏（本作实测结论，见 `PROJECT_SPEC.md` §5）：
+    把「目标客户区坐标」搬到静止的真实光标底下（移动窗口，而不是移动光标），
+    游戏按光标取点即命中目标，而真实光标全程不动、不消失。
+
+    安全约束：
+    - 只移动游戏窗口，绝不移动真实光标、绝不注入系统输入流；
+    - 前置检查：窗口可用、未最大化（最大化窗口无法对齐 → 抛可读错误，绝不误点）；
+    - 真实鼠标正在移动时不对齐、不点击（否则会点错位置）；
+    - 无论成功失败都在 `finally` 里还原窗口位置。
+    """
+
+    def __init__(
+        self,
+        hwnd: int,
+        log: logging.Logger | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self.hwnd = hwnd
+        self._logger = log or logger
+        self._sleep = sleep if sleep is not None else time.sleep
+        self._inner = WindowMessageSender(hwnd, log, sleep)
+
+    def move_to(self, x: int, y: int) -> None:
+        """悬停不影响落点，不做窗口对齐（避免无意义的窗口位移）。"""
+        self._inner.move_to(x, y)
+
+    def click(self, x: int, y: int) -> None:
+        self.click_at(x, y)
+
+    def click_at(self, x: int, y: int) -> None:
+        if not is_window_ready(self.hwnd):
+            raise WindowUnavailableError("游戏窗口已最小化或不可见，已取消本次点击")
+        window_align.ensure_alignment_supported(self.hwnd)
+
+        idle, speed = window_align.wait_cursor_idle(sleep=self._sleep)
+        if not idle:
+            raise WindowUnavailableError(
+                f"真实鼠标正在移动（{speed:.0f} px/s），为避免点错位置已取消本次点击；"
+                "请让鼠标静止或调大点击间隔后重试"
+            )
+
+        result = window_align.align_window(self.hwnd, x, y, sleep=self._sleep)
+        if not result.aligned:
+            self._restore_quietly(result.rect_before)
+            raise WindowUnavailableError(f"窗口对齐失败：{result.reason}")
+
+        try:
+            self._inner.click(x, y)
+        finally:
+            restored = window_align.restore_window(self.hwnd, result.rect_before, sleep=self._sleep)
+            if not restored:
+                self._logger.error(
+                    "窗口还原失败：请手动把游戏窗口移回对齐前位置 (%d, %d)",
+                    result.rect_before[0], result.rect_before[1],
+                )
+        self._logger.info(
+            "对齐点击完成：客户区 (%d, %d)，对齐误差=%s，尝试 %d 次，真实光标未移动且保持可见",
+            x, y, result.error, result.attempts,
+        )
+
+    def key_tap(self, vk: int) -> None:
+        """按键不需要对齐，直接走窗口消息通道。"""
+        self._inner.key_tap(vk)
+
+    def _restore_quietly(self, rect: tuple[int, int, int, int]) -> None:
+        """对齐失败时尽力还原窗口（失败只记日志，不掩盖原始错误）。"""
+        if not window_align.restore_window(self.hwnd, rect, sleep=self._sleep):
+            self._logger.error("窗口还原失败：请手动把游戏窗口移回 (%d, %d)", rect[0], rect[1])
+
+
 def window_exists(hwnd: int) -> bool:
     """窗口句柄是否仍然有效。"""
     return bool(win32gui.IsWindow(hwnd))
@@ -249,4 +323,9 @@ def build_channel(
     gate = WindowReadinessGate(
         hwnd, config.automation.pause_on_window_focus_loss, stop_event, sleep, log
     )
-    return InputChannel(WindowMessageSender(hwnd, log, sleep), gate.wait_until_ready)
+    sender: InputSender = (
+        WindowAlignSender(hwnd, log, sleep)
+        if config.automation.align_window_before_click
+        else WindowMessageSender(hwnd, log, sleep)
+    )
+    return InputChannel(sender, gate.wait_until_ready)

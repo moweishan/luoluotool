@@ -258,6 +258,57 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+## Phase 5.2 — 对齐窗口点击通道（点得准 + 不碰真实鼠标）
+
+**背景（实测）**：目标游戏是 Unity 播放器（`UnityWndClass`、已注册触摸、以管理员运行、无子窗口），**忽略窗口消息里的坐标**。2026-09-15 用「提权后的输入判定矩阵」逐一实测（脚本 `game_input_matrix.py`）：
+
+| 变体 | 结果 |
+|---|---|
+| 无害悬停 / 客户区坐标 `PostMessage` / 同步 `SendMessageTimeout` / 激活序列（ok-script、autoxkit 时序）/ 同步 `WM_POINTER` / 抢前台三件套（TOPMOST→前台→NOTOPMOST） | **全部无反应**（游戏不读消息坐标） |
+| **对齐窗口 + 投递点击**（移动窗口把目标坐标搬到静止光标下方） | **目标点正确响应 ✓，真实光标移动=False、隐藏=False** |
+| **对齐窗口 + 真实按键点击**（不发 MOVE） | 同上 ✓ |
+
+同时确认：`PostMessage` 投递 `WM_POINTER*` 被系统拒绝（只能同步）、`WM_TOUCH` 句柄无法伪造、**UIPI 会拦截未提权进程的输入消息**（`WM_MOUSEMOVE` → 错误码 5，这正是 Phase 5 结论失真的原因）。做法参考 kotonebot 的 `windows_background` 通道（`send_message.py` 的 `_align_window`/`_wait_cursor_idle`，GPL-3.0，仅借鉴思路、代码自写），并补上它缺失的「还原窗口位置」。
+
+**本次只做什么**：
+1. `src/luoluotool/automation/window_align.py`（新）：`compute_window_origin()`（纯计算）、`get_cursor_pos()`、`window_rect()`、`client_origin()`、`is_maximized()`（用 `GetWindowPlacement`，pywin32 无 `IsZoomed`）、`wait_cursor_idle()`（0.05 s 采样、速度阈值 50 px/s）、`align_window()`（对齐 + 回读校验误差 ≤1px + 光标漂移则重新对齐，最多 2 次）、`restore_window()`、`ensure_alignment_supported()`。**源码中不得出现任何移动真实光标的 API**（有测试断言）。
+2. `src/luoluotool/automation/input_sender.py`：`WindowAlignSender`（实现 `InputSender`）：窗口可用性检查 → 最大化拒绝 → 等光标静止 → 对齐 → 点击 → `finally` 还原窗口；`move_to`/`key_tap` 不对齐；`build_channel` 按 `automation.align_window_before_click` 选择通道。
+3. `src/luoluotool/config/{models,validation}.py`：新增 `automation.align_window_before_click`（默认 `false`）→ **schema v3 + `_migrate_v2_to_v3` + 布尔校验**；`user_data/config.example.json` 同步。
+4. `src/luoluotool/gui/pages/settings.py`：新增勾选框「点击前对齐游戏窗口（不移动真实鼠标）」+ 前置条件 tooltip。
+5. 测试：对齐数学、误差/失败上报、光标漂移重新对齐、重试上限、还原窗口、静止门控（含超时与先快后停）、最大化拒绝、鼠标移动时取消点击、点击抛错也还原、日志、`build_channel` 分支、schema v2→v3 迁移与校验、设置页绑定；**全部注入假实现，零真实输入/零窗口移动**。
+6. 文档：`PROJECT_SPEC.md`（§5 风险与前置条件、§6 技术栈、§7 目录、§8 接口、§9 schema v3 迁移记录）、`AGENTS.md` §2、`CHECKLIST.md`、`README.md`。
+
+**不要做什么**：不移动真实光标（这是本阶段的硬指标）；不注入系统输入流（不用 `SendInput`/`mouse_event`/触摸注入）；不复用 kotonebot 代码（GPL-3.0，仅借鉴思路）；不引入任何驱动或新依赖；不改动窗口消息通道的既有行为（开关默认关闭）。
+
+**验收命令**：
+```bash
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest tests/test_automation -q --cov=src/luoluotool/automation --cov-report=term-missing
+.venv\Scripts\python -m luoluotool --validate-config
+.venv\Scripts\python -m luoluotool --smoke-gui
+```
+
+**完成标准**：
+- [ ] 全量测试通过；`window_align.py` 覆盖率 ≥ 85%，且单测零真实输入、零窗口移动。
+- [ ] `config.json` 自动迁移到 v3（补齐新字段并写回），`--validate-config` 输出 `OK`。
+- [ ] 设置页可勾选「点击前对齐游戏窗口」；保存后 `config.json` 反映、重启保持。
+- [ ] **手动验收**：游戏窗口化并前台 → 勾选该开关 → 真实模式启动 → 游戏在配置坐标处响应，**真实光标不动、不消失**、窗口点完立即回原位、F8 可急停、失焦暂停生效。
+- [ ] 最大化窗口 / 鼠标持续移动 / 对齐失败三种情况下**都不点击**，且日志给出可读原因。
+
+**复制给 AI 的提示词**：
+
+```text
+执行 PHASE_PROMPTS.md 的 Phase 5.2（对齐窗口点击通道）。
+做法：点击前把目标客户区坐标对齐到静止的真实光标下方——移动游戏窗口而不是移动光标
+（SetWindowPos + SWP_NOACTIVATE|SWP_NOZORDER|SWP_NOSIZE|SWP_NOREDRAW），再投递窗口消息点击，
+点完立即还原窗口位置；前置检查（窗口可用、未最大化、光标静止 ≤50px/s），无法满足时不点击并报可读错误。
+硬指标：绝不移动真实光标、绝不注入系统输入流、绝不使用触摸注入。
+配置：automation.align_window_before_click（默认 false）→ schema v3 + 迁移函数 + 校验 + 设置页勾选框。
+测试必须注入假实现，单测零真实输入。完成后运行验收命令并汇报覆盖率。
+```
+
+---
+
 ## Phase 6 — 卡订单与预留功能页闭环
 
 **阶段目标**：功能二/三/四在主流程中形成完整闭环（开关→运行→日志），无推测性逻辑。

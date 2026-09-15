@@ -1,10 +1,10 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v2（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v3（dataclass 实现）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 @dataclass
@@ -132,6 +132,9 @@ class AutomationConfig:
     pause_on_window_focus_loss: bool = True
     failsafe_hotkey: str = "F8"
     ask_elevation_on_start: bool = True
+    # 点击前把游戏窗口对齐到静止光标下方（不移动真实光标）：
+    # 适用于「按真实光标位置决定点击落点」的游戏，默认关闭以免移动他人窗口。
+    align_window_before_click: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -143,6 +146,7 @@ class AutomationConfig:
             "pause_on_window_focus_loss": self.pause_on_window_focus_loss,
             "failsafe_hotkey": self.failsafe_hotkey,
             "ask_elevation_on_start": self.ask_elevation_on_start,
+            "align_window_before_click": self.align_window_before_click,
         }
 
     @classmethod
@@ -156,6 +160,7 @@ class AutomationConfig:
             data.get("pause_on_window_focus_loss", True),
             data.get("failsafe_hotkey", "F8"),
             data.get("ask_elevation_on_start", True),
+            data.get("align_window_before_click", False),
         )
 
 

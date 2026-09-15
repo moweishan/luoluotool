@@ -27,6 +27,7 @@ _BOOL_PATHS = (
     "automation.dry_run",
     "automation.pause_on_window_focus_loss",
     "automation.ask_elevation_on_start",
+    "automation.align_window_before_click",
 )
 _INT_BOUNDS = (
     ("automation.click_interval_ms", 100, 5000),
@@ -123,7 +124,16 @@ def _migrate_v1_to_v2(raw: dict) -> dict:
     return migrated
 
 
-_MIGRATIONS = {1: _migrate_v1_to_v2}
+def _migrate_v2_to_v3(raw: dict) -> dict:
+    """v2 → v3：新增 automation.align_window_before_click（默认 false = 不移动窗口）。"""
+    automation = dict(raw.get("automation") or {})
+    automation.setdefault("align_window_before_click", False)
+    migrated = dict(raw)
+    migrated["automation"] = automation
+    return migrated
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
 
 
 def migrate(raw: object) -> object:

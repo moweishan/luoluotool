@@ -52,6 +52,12 @@ class SettingsPage(QWidget):
         self.ask_elevation_box = QCheckBox(
             "启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）"
         )
+        self.align_window_box = QCheckBox("点击前对齐游戏窗口（不移动真实鼠标）")
+        self.align_window_box.setToolTip(
+            "适用于「按真实光标位置决定点击落点」的游戏：点击前把目标坐标搬到静止的光标下方"
+            "（移动游戏窗口，不移动光标），点完立即还原窗口位置。\n"
+            "要求：工具已提权、游戏窗口化（最大化无法对齐）、点击期间真实鼠标保持静止。"
+        )
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -70,6 +76,7 @@ class SettingsPage(QWidget):
         layout.addLayout(failures_row)
         layout.addLayout(hotkey_row)
         layout.addWidget(self.ask_elevation_box)
+        layout.addWidget(self.align_window_box)
         layout.addWidget(self.diagnose_button)
         layout.addWidget(self.elevation_hint_label)
         layout.addWidget(self.restart_admin_button)
@@ -79,6 +86,7 @@ class SettingsPage(QWidget):
         self.click_interval_spin.valueChanged.connect(self._on_click_interval_changed)
         self.failures_spin.valueChanged.connect(self._on_failures_changed)
         self.ask_elevation_box.toggled.connect(self._on_ask_elevation_toggled)
+        self.align_window_box.toggled.connect(self._on_align_window_toggled)
         self.hotkey_combo.currentTextChanged.connect(self._on_hotkey_changed)
         self.set_config(config)
 
@@ -101,6 +109,9 @@ class SettingsPage(QWidget):
         self.ask_elevation_box.blockSignals(True)
         self.ask_elevation_box.setChecked(automation.ask_elevation_on_start)
         self.ask_elevation_box.blockSignals(False)
+        self.align_window_box.blockSignals(True)
+        self.align_window_box.setChecked(automation.align_window_before_click)
+        self.align_window_box.blockSignals(False)
         self.hotkey_combo.blockSignals(True)
         self.hotkey_combo.setCurrentText(automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME)
         self.hotkey_combo.blockSignals(False)
@@ -123,6 +134,10 @@ class SettingsPage(QWidget):
 
     def _on_ask_elevation_toggled(self) -> None:
         self._config.automation.ask_elevation_on_start = self.ask_elevation_box.isChecked()
+        self._on_changed()
+
+    def _on_align_window_toggled(self) -> None:
+        self._config.automation.align_window_before_click = self.align_window_box.isChecked()
         self._on_changed()
 
     def _on_hotkey_changed(self, name: str) -> None:
