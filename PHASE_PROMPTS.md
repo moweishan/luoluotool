@@ -207,20 +207,21 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 **阶段目标**：接通**后台窗口消息输入**通道（不接管真实键鼠），让占位任务 A 能按配置坐标完成一次真实点击序列。
 
-> 输入方式约定（本阶段必须遵守）：通过 `PostMessage` 向游戏窗口句柄发送鼠标/键盘消息完成操作，
-> **执行期间不影响玩家真实的鼠标与键盘**——不移动真实光标、不抢占键盘焦点、不注入系统输入流。
-> 玩家应能在任务执行的同时正常使用鼠标与键盘（如打字、拖动其他窗口）。
+> 输入方式约定（本阶段必须遵守）：默认通过 `PostMessage`/`SendMessageTimeout` 向游戏窗口（或其子窗口）发送鼠标/键盘消息。
+> **2026-09-15 政策更新**：原「禁止 `SendInput`/`SetCursorPos`/`mouse_event`」的限制已按用户要求取消（见 `PROJECT_SPEC.md` §4.1）。
+> 若窗口消息无法让游戏响应（例如游戏只认物理光标位置），**经用户逐项授权后**可改用用户态合成输入，
+> 并必须遵守：注入前校验目标窗口在前台、动作后还原真实光标（可配置）、逐条记录日志、F8 急停随时可中断。
 
 **本次只做什么**：
-1. `src/luoluotool/automation/input_sender.py`：封装**后台窗口消息输入** `move_to/click/click_at/key_tap`（`SendMessageTimeout` 同步投递 + `PostMessage` 悬停提示 + `WindowFromPoint` **子窗口定位**；`WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP/WM_KEYDOWN/WM_KEYUP`；坐标为客户区坐标，子窗口场景自动换算）；每个动作前检查 stop_event；动作间隔取自配置。**禁止**调用 `SendInput`/`SetCursorPos`/`mouse_event` 等会接管真实键鼠或移动真实光标的接口。
+1. `src/luoluotool/automation/input_sender.py`：封装**输入发送** `move_to/click/click_at/key_tap`，默认实现为**后台窗口消息**（`SendMessageTimeout` 同步投递 + `PostMessage` 悬停提示 + `WindowFromPoint` **子窗口定位**；`WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP/WM_KEYDOWN/WM_KEYUP`；坐标为客户区坐标，子窗口场景自动换算）；每个动作前检查 stop_event；动作间隔取自配置。（2026-09-15 更新：窗口消息无效时，经用户逐项授权可新增**用户态合成输入**实现——`ctypes` 调 `SendInput`/`SetCursorPos`，须校验目标窗口在前台、点击后还原真实光标。）
 2. `src/luoluotool/config/models.py`：给 `placeholder_task_a.params` 定义结构 `{"click_points": [[x,y], ...], "wait_after_ms": 500}`（不改 schema 版本，只填 params 内容）。
 3. 干跑/真实分流：`TaskContext.dry_run == True` 时输入层被替换为“只写日志”；`False` 时向窗口发送真实消息。
-4. 真实模式启动前弹出确认对话框：说明“将以窗口消息方式模拟点击（不接管真实鼠标键盘）、按 F8 可急停”，并提醒封号风险；用户确认后才进入真实模式。
+4. 真实模式启动前弹出确认对话框：说明"将以【窗口消息 / 用户态合成输入，按实际实现】方式模拟点击、按 F8 可急停"，并提醒封号风险（合成输入会短暂移动光标）；用户确认后才进入真实模式（确认询问频率可配置，默认每次）。
 5. 执行前检查：找到游戏窗口且窗口未最小化（后台消息输入**不需要**窗口获得焦点）；`pause_on_window_focus_loss=true` 时，窗口失焦即暂停并提示，重新聚焦后继续（该开关语义保持不变，作为保守安全策略）。
 6. 设置页把急停键、点击间隔改为**可编辑**（保存后生效）。
 7. 测试：注入假 sender 验证点击序列与间隔、失焦暂停逻辑；单测永不产生真实输入。
 
-**不要做什么**：不做图像识别；不再新增第二个任务；不做卡订单真实逻辑；不读写游戏进程内存；不绕过 UAC/权限；**不使用 SendInput/SetCursorPos/mouse_event 等接管真实键鼠的接口**。
+**不要做什么**：不做图像识别；不再新增第二个任务；不做卡订单真实逻辑；不读写游戏进程内存；不拦截/伪造网络封包；不绕过 UAC/权限；不使用**未获用户逐项授权**的注入类/驱动级输入方案（见 `PROJECT_SPEC.md` §4.1）。
 
 **验收命令**：
 ```bash
@@ -243,11 +244,11 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ```text
 执行 PHASE_PROMPTS.md 的 Phase 5（输入模拟 + 第一个真实日常任务）。
-输入方式：PostMessage 向游戏窗口发送鼠标/键盘消息，执行期间不影响玩家真实键鼠
-（不移动真实光标、不抢占键盘）。禁止 SendInput/SetCursorPos/mouse_event。
+输入方式：默认 PostMessage/SendMessageTimeout 向游戏窗口发送鼠标/键盘消息；若实测游戏不响应，
+经用户逐项授权后可改用用户态合成输入（SendInput/SetCursorPos，须校验前台 + 点击后还原光标）。
 严格安全要求：干跑默认开启、真实模式需确认对话框、F8 急停、失焦暂停、
 每次输入注入前检查 stop_event。禁止图像识别、禁止新增第二个任务、
-禁止读写游戏内存。测试必须用注入的假 sender，绝不在单测里产生真实输入。
+禁止读写游戏内存与封包操作。测试必须用注入的假 sender，绝不在单测里产生真实输入。
 完成后运行验收命令并汇报覆盖率。
 ```
 
