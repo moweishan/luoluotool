@@ -25,6 +25,8 @@ WM_KEYDOWN = 0x0100
 WM_KEYUP = 0x0101
 MK_LBUTTON = 0x0001
 READINESS_POLL_SECONDS = 0.2
+SMTO_ABORTIFHUNG = 0x0002
+SEND_MESSAGE_TIMEOUT_MS = 500
 
 
 class WindowUnavailableError(RuntimeError):
@@ -67,36 +69,84 @@ class DryRunSender:
         self._logger.info("干跑：模拟按键 (vk=%d)", vk)
 
 
+def resolve_input_target(hwnd: int, point: tuple[int, int]) -> tuple[int, tuple[int, int]]:
+    """把主窗口客户区坐标解析为「最深的子窗口 + 该窗口客户区坐标」。
+
+    游戏常把渲染/输入放在子窗口上，直接向顶层窗口发消息可能被忽略；
+    若无可用子窗口或换算失败，则回退为顶层窗口 + 原坐标。
+    """
+    if not window_exists(hwnd):
+        raise WindowUnavailableError(f"游戏窗口已关闭（hwnd={hwnd}）")
+    try:
+        screen_point = win32gui.ClientToScreen(hwnd, point)
+        target = win32gui.WindowFromPoint(screen_point)
+    except Exception as exc:
+        logger.warning("定位输入目标窗口失败，回退顶层窗口：%s", exc)
+        return hwnd, point
+    if not target or target == hwnd:
+        return hwnd, point
+    try:
+        if not win32gui.IsChild(hwnd, target):
+            return hwnd, point
+        local = win32gui.ScreenToClient(target, screen_point)
+    except Exception as exc:
+        logger.warning("换算子窗口坐标失败，回退顶层窗口：%s", exc)
+        return hwnd, point
+    return target, local
+
+
 class WindowMessageSender:
-    """真实模式：向游戏窗口发送窗口消息（不移动真实光标、不抢占键盘焦点）。"""
+    """真实模式：向游戏窗口（或坐标处子窗口）发送窗口消息。
+
+    不移动真实光标、不抢占键盘焦点、不注入系统输入流。
+    """
 
     def __init__(self, hwnd: int, log: logging.Logger | None = None) -> None:
         self.hwnd = hwnd
         self._logger = log or logger
 
     def move_to(self, x: int, y: int) -> None:
-        self._post(WM_MOUSEMOVE, 0, _pack_point(x, y))
-        self._logger.info("已发送鼠标移动消息 (%d, %d)", x, y)
+        target, point = self._resolve(x, y)
+        self._post(target, WM_MOUSEMOVE, 0, point)
+        self._send(target, WM_MOUSEMOVE, 0, point)
+        self._logger.info("已发送鼠标移动消息 (%d, %d)（目标 hwnd=%s）", x, y, target)
 
     def click(self, x: int, y: int) -> None:
-        point = _pack_point(x, y)
-        self._post(WM_MOUSEMOVE, 0, point)
-        self._post(WM_LBUTTONDOWN, MK_LBUTTON, point)
-        self._post(WM_LBUTTONUP, 0, point)
-        self._logger.info("已发送点击消息 (%d, %d)", x, y)
+        target, point = self._resolve(x, y)
+        self._post(target, WM_MOUSEMOVE, 0, point)  # 异步：让游戏消息泵先看到悬停位置
+        self._send(target, WM_MOUSEMOVE, 0, point)  # 同步：确保先处理移动再处理按下
+        self._send(target, WM_LBUTTONDOWN, MK_LBUTTON, point)
+        self._send(target, WM_LBUTTONUP, 0, point)
+        self._logger.info("已发送点击消息 (%d, %d)（目标 hwnd=%s）", x, y, target)
 
     def click_at(self, x: int, y: int) -> None:
         self.click(x, y)
 
     def key_tap(self, vk: int) -> None:
-        self._post(WM_KEYDOWN, vk, 0)
-        self._post(WM_KEYUP, vk, 0)
+        self._send(self.hwnd, WM_KEYDOWN, vk, 0)
+        self._send(self.hwnd, WM_KEYUP, vk, 0)
         self._logger.info("已发送按键消息 (vk=%d)", vk)
 
-    def _post(self, message: int, wparam: int, lparam: int) -> None:
-        if not ctypes.windll.user32.PostMessageW(self.hwnd, message, wparam, lparam):
+    def _resolve(self, x: int, y: int) -> tuple[int, int]:
+        target, local_point = resolve_input_target(self.hwnd, (x, y))
+        return target, _pack_point(*local_point)
+
+    def _post(self, target: int, message: int, wparam: int, lparam: int) -> None:
+        if not ctypes.windll.user32.PostMessageW(target, message, wparam, lparam):
             raise WindowUnavailableError(
-                f"向游戏窗口发送消息失败（hwnd={self.hwnd}，消息=0x{message:04X}），窗口可能已关闭"
+                f"向窗口投递消息失败（hwnd={target}，消息=0x{message:04X}），窗口可能已关闭"
+            )
+
+    def _send(self, target: int, message: int, wparam: int, lparam: int) -> None:
+        """同步投递（带超时与防挂起标志），失败即视为窗口不可用。"""
+        result = ctypes.c_size_t()
+        ok = ctypes.windll.user32.SendMessageTimeoutW(
+            target, message, wparam, lparam,
+            SMTO_ABORTIFHUNG, SEND_MESSAGE_TIMEOUT_MS, ctypes.byref(result),
+        )
+        if not ok:
+            raise WindowUnavailableError(
+                f"向窗口同步发送消息失败（hwnd={target}，消息=0x{message:04X}），窗口可能无响应"
             )
 
 

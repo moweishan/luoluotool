@@ -104,7 +104,7 @@ AI 编辑器的新会话不会记得之前的对话。每次新开会话时，�
 | 语言 | Python 3.11+（Windows x64） |
 | GUI | PySide6（Qt），QSS 主题，四页签布局 |
 | 配置存储 | 本地 JSON（`user_data/config.json`），无数据库 |
-| 自动化输入 | Windows 窗口消息 `PostMessage`（ctypes 调用；**不接管真实键鼠**，执行期间键鼠可正常使用） |
+| 自动化输入 | Windows 窗口消息（`SendMessageTimeout` 同步 + `PostMessage`，含子窗口定位；**不接管真实键鼠**，执行期间键鼠可正常使用） |
 | 窗口/截图 | pywin32；图像锚点匹配后期可选引入 OpenCV |
 | 打包 | PyInstaller one-dir（先目录后单文件） |
 | 外部 API / LLM / 网络 | 全部不需要，程序离线运行 |

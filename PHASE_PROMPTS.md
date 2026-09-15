@@ -212,7 +212,7 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 > 玩家应能在任务执行的同时正常使用鼠标与键盘（如打字、拖动其他窗口）。
 
 **本次只做什么**：
-1. `src/luoluotool/automation/input_sender.py`：封装**后台窗口消息输入** `move_to/click/click_at/key_tap`（`PostMessage` + 客户区坐标 + `WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP/WM_KEYDOWN/WM_KEYUP`）；每个动作前检查 stop_event；动作间隔取自配置。**禁止**调用 `SendInput`/`SetCursorPos`/`mouse_event` 等会接管真实键鼠的接口。
+1. `src/luoluotool/automation/input_sender.py`：封装**后台窗口消息输入** `move_to/click/click_at/key_tap`（`SendMessageTimeout` 同步投递 + `PostMessage` 悬停提示 + `WindowFromPoint` **子窗口定位**；`WM_MOUSEMOVE/WM_LBUTTONDOWN/WM_LBUTTONUP/WM_KEYDOWN/WM_KEYUP`；坐标为客户区坐标，子窗口场景自动换算）；每个动作前检查 stop_event；动作间隔取自配置。**禁止**调用 `SendInput`/`SetCursorPos`/`mouse_event` 等会接管真实键鼠或移动真实光标的接口。
 2. `src/luoluotool/config/models.py`：给 `placeholder_task_a.params` 定义结构 `{"click_points": [[x,y], ...], "wait_after_ms": 500}`（不改 schema 版本，只填 params 内容）。
 3. 干跑/真实分流：`TaskContext.dry_run == True` 时输入层被替换为“只写日志”；`False` 时向窗口发送真实消息。
 4. 真实模式启动前弹出确认对话框：说明“将以窗口消息方式模拟点击（不接管真实鼠标键盘）、按 F8 可急停”，并提醒封号风险；用户确认后才进入真实模式。
