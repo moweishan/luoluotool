@@ -26,9 +26,14 @@ def window_factory(request):
     logging.getLogger().setLevel(logging.INFO)
     created = []
 
-    def make(path, config=None):
+    def make(path, config=None, auto_elevate=False):
         config = config if config is not None else AppConfig.default()
-        window = MainWindow(config, path, runner_factory=lambda cfg: Runner(cfg, sleep=lambda s: None))
+        window = MainWindow(
+            config,
+            path,
+            runner_factory=lambda cfg: Runner(cfg, sleep=lambda s: None),
+            auto_elevate=auto_elevate,
+        )
         created.append(window)
         return window
 
@@ -250,3 +255,73 @@ def test_elevation_check_sets_settings_hint(window_factory, tmp_path, monkeypatc
     label = window.settings_page.elevation_hint_label
     assert "管理员" in label.text()
     assert label.isHidden() is False
+
+
+def test_startup_auto_elevate_prompts_and_restarts(window_factory, tmp_path, monkeypatch) -> None:
+    """启动自动流程：非管理员 → 弹确认框 → 确认后请求提权重启。"""
+    from luoluotool.gui import main_window as mw
+
+    recorded: dict[str, list[str]] = {}
+    asked: list[tuple] = []
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(
+        mw.QMessageBox, "question",
+        lambda *args, **kwargs: asked.append(args) or mw.QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
+    window = window_factory(tmp_path / "config.json", auto_elevate=True)
+    window._startup_elevation_flow()
+    assert len(asked) == 1
+    assert recorded["args"] == ["--config", str(tmp_path / "config.json")]
+
+
+def test_startup_auto_elevate_declined(window_factory, tmp_path, monkeypatch) -> None:
+    """启动自动流程：用户拒绝 → 不重启，提示已取消。"""
+    from luoluotool.gui import main_window as mw
+
+    restart_calls: list[list[str]] = []
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(
+        mw.QMessageBox, "question",
+        lambda *args, **kwargs: mw.QMessageBox.StandardButton.No,
+    )
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
+    window = window_factory(tmp_path / "config.json", auto_elevate=True)
+    window._startup_elevation_flow()
+    assert restart_calls == []
+    assert "取消" in window.statusBar().currentMessage()
+
+
+def test_startup_auto_elevate_when_admin_skips_modal(window_factory, tmp_path, monkeypatch) -> None:
+    """启动自动流程：已是管理员 → 只提示无需重启，不弹任何确认框。"""
+    from luoluotool.gui import main_window as mw
+
+    questions: list[tuple] = []
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: True)
+    monkeypatch.setattr(
+        mw.QMessageBox, "question",
+        lambda *args, **kwargs: questions.append(args) or mw.QMessageBox.StandardButton.Yes,
+    )
+    window = window_factory(tmp_path / "config.json", auto_elevate=True)
+    window._startup_elevation_flow()
+    assert questions == []
+    assert "已是管理员权限" in window.statusBar().currentMessage()
+
+
+def test_startup_auto_elevate_disabled_in_smoke(window_factory, tmp_path, monkeypatch) -> None:
+    """auto_elevate=False（冒烟/测试）：启动流程不弹确认框。"""
+    from luoluotool.gui import main_window as mw
+
+    questions: list[tuple] = []
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(
+        mw.QMessageBox, "question",
+        lambda *args, **kwargs: questions.append(args) or mw.QMessageBox.StandardButton.Yes,
+    )
+    window = window_factory(tmp_path / "config.json", auto_elevate=False)
+    window._startup_elevation_flow()
+    assert questions == []

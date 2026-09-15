@@ -21,7 +21,9 @@ def window_factory(request):
     created = []
 
     def make(path, config=None):
-        window = MainWindow(config if config is not None else AppConfig.default(), path)
+        window = MainWindow(
+            config if config is not None else AppConfig.default(), path, auto_elevate=False
+        )
         created.append(window)
         return window
 

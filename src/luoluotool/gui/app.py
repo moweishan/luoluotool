@@ -50,7 +50,7 @@ def run(
     app.setWindowIcon(load_window_icon())
     path = Path(config_path) if config_path else get_user_data_dir() / "config.json"
     config = store.load(path)
-    window = MainWindow(config, path)
+    window = MainWindow(config, path, auto_elevate=not smoke)
     window.show()
     if smoke:
         app.processEvents()

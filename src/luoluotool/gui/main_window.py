@@ -122,11 +122,13 @@ class MainWindow(QMainWindow):
         config: AppConfig,
         config_path: Path,
         runner_factory: Callable[[AppConfig], Runner] | None = None,
+        auto_elevate: bool = True,
     ) -> None:
         super().__init__()
         self._config = config
         self._config_path = config_path
         self._runner_factory = runner_factory or _default_runner_factory
+        self._auto_elevate_enabled = auto_elevate
         self._runner: Runner | None = None
         self._thread: _RunnerThread | None = None
         self._diagnose_thread: _DiagnoseThread | None = None
@@ -189,7 +191,11 @@ class MainWindow(QMainWindow):
         # 必须注册到本窗口句柄：hwnd=0 的线程消息不会被 Qt 派发
         self._hotkey_hwnd = int(self.winId())
         self._hotkey.register(self._hotkey_hwnd)
-        QTimer.singleShot(0, self._check_elevation_need)
+        # 用窗口子对象的定时器：窗口销毁后回调自动失效（避免悬空调用）
+        self._startup_timer = QTimer(self)
+        self._startup_timer.setSingleShot(True)
+        self._startup_timer.timeout.connect(self._startup_elevation_flow)
+        self._startup_timer.start(0)
 
     def nativeEvent(self, event_type, message):
         """处理 WM_HOTKEY 急停消息。
@@ -205,6 +211,7 @@ class MainWindow(QMainWindow):
         return super().nativeEvent(event_type, message)
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self._startup_timer.stop()  # 窗口关闭后不再执行启动逻辑
         self._stop()
         if self._diagnose_thread is not None and self._diagnose_thread.isRunning():
             self._diagnose_thread.wait(THREAD_WAIT_TIMEOUT_MS)
@@ -312,6 +319,25 @@ class MainWindow(QMainWindow):
             return
         logger.warning("检测到游戏窗口以管理员权限运行，本工具为普通权限，建议以管理员身份重启")
         self._show_elevation_hint()
+
+    def _startup_elevation_flow(self) -> None:
+        """启动完成后：权限检测（提示条）+ 自动走一次提权重启流程。"""
+        self._check_elevation_need()
+        if not self._auto_elevate_enabled:
+            return
+        self._auto_elevate_if_needed()
+
+    def _auto_elevate_if_needed(self) -> None:
+        """非管理员时自动执行「以管理员身份重启」的询问流程。
+
+        已是管理员时只记录日志与状态栏提示，不弹窗（避免每次启动都需确认）。
+        """
+        if is_process_elevated():
+            logger.info("当前已是管理员权限，无需重启")
+            self.statusBar().showMessage("当前已是管理员权限，无需重启")
+            return
+        logger.info("启动时未以管理员权限运行，询问是否提权重启")
+        self._on_restart_admin_clicked()
 
     def _relaunch_args(self) -> list[str]:
         return ["--config", str(self._config_path)]

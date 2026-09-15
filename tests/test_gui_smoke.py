@@ -20,7 +20,7 @@ def window_factory(request):
     created = []
 
     def make(path):
-        window = MainWindow(AppConfig.default(), path)
+        window = MainWindow(AppConfig.default(), path, auto_elevate=False)
         created.append(window)
         return window
 
