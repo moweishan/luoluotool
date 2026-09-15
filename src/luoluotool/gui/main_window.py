@@ -332,14 +332,15 @@ class MainWindow(QMainWindow):
         """非管理员时自动执行「以管理员身份重启」的询问流程。
 
         已是管理员时只记录日志与状态栏提示，不弹窗（避免每次启动都需确认）；
-        配置为「不再询问」时直接跳过。
+        配置为「不再询问」时不弹框，直接发起提权重启（UAC 取消则继续运行）。
         """
         if is_process_elevated():
             logger.info("当前已是管理员权限，无需重启")
             self.statusBar().showMessage("当前已是管理员权限，无需重启")
             return
         if not self._config.automation.ask_elevation_on_start:
-            logger.info("已设置「不再询问」，跳过启动提权询问")
+            logger.info("已设置「不再询问」，直接以管理员身份重启")
+            self._perform_elevated_restart()
             return
         logger.info("启动时未以管理员权限运行，询问是否提权重启")
         confirmed, dont_ask = self._ask_restart_confirmation(allow_dont_ask=True)
@@ -382,7 +383,7 @@ class MainWindow(QMainWindow):
         box.setDefaultButton(QMessageBox.StandardButton.No)
         dont_ask_box = None
         if allow_dont_ask:
-            dont_ask_box = QCheckBox("不再询问（可在设置页重新开启）")
+            dont_ask_box = QCheckBox("不再询问（以后启动直接提权重启，可在设置页改回）")
             box.setCheckBox(dont_ask_box)
         answer = box.exec()
         return answer == QMessageBox.StandardButton.Yes, bool(dont_ask_box and dont_ask_box.isChecked())

@@ -335,14 +335,14 @@ def test_startup_auto_elevate_disabled_in_smoke(window_factory, tmp_path, monkey
 
 
 def test_startup_dont_ask_persists_and_skips_next_time(window_factory, tmp_path, monkeypatch) -> None:
-    """勾选「不再询问」：落盘为 false、设置页同步、下次启动不再询问。"""
+    """勾选「不再询问」：落盘为 false、设置页同步。"""
     import json
 
     from luoluotool.gui import main_window as mw
 
     monkeypatch.setattr(mw, "find_window", lambda keyword: None)
     monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: True)
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: False)
     monkeypatch.setattr(
         mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, True)
     )
@@ -353,14 +353,41 @@ def test_startup_dont_ask_persists_and_skips_next_time(window_factory, tmp_path,
     on_disk = json.loads((tmp_path / "config.json").read_text(encoding="utf-8"))
     assert on_disk["automation"]["ask_elevation_on_start"] is False
 
+
+def test_startup_dont_ask_elevates_directly(window_factory, tmp_path, monkeypatch) -> None:
+    """已设置「不再询问」：启动不弹框，直接请求提权重启。"""
+    from luoluotool.gui import main_window as mw
+
     asked: list[bool] = []
+    recorded: dict[str, list[str]] = {}
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw.MainWindow,
         "_ask_restart_confirmation",
-        lambda self, allow_dont_ask=False: asked.append(allow_dont_ask) or (True, False),
+        lambda self, allow_dont_ask=False: asked.append(allow_dont_ask) or (False, False),
     )
-    next_window = window_factory(
-        tmp_path / "config.json", window._config, auto_elevate=True
-    )
-    next_window._startup_elevation_flow()
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
+    config = AppConfig.default()
+    config.automation.ask_elevation_on_start = False
+    window = window_factory(tmp_path / "config.json", config, auto_elevate=True)
+    window._startup_elevation_flow()
     assert asked == []
+    assert recorded["args"] == ["--config", str(tmp_path / "config.json")]
+
+
+def test_startup_dont_ask_elevation_cancelled_keeps_running(window_factory, tmp_path, monkeypatch) -> None:
+    """「不再询问」直连提权但用户取消了 UAC：程序继续以普通权限运行，不循环重试。"""
+    from luoluotool.gui import main_window as mw
+
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
+    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(mw, "restart_as_admin", lambda args: calls.append(list(args)) or False)
+    config = AppConfig.default()
+    config.automation.ask_elevation_on_start = False
+    window = window_factory(tmp_path / "config.json", config, auto_elevate=True)
+    window._startup_elevation_flow()
+    assert len(calls) == 1
+    assert window.isVisible() is False  # 未关闭主窗口，继续运行
+    assert "取消" in window.statusBar().currentMessage() or "失败" in window.statusBar().currentMessage()

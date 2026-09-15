@@ -38,7 +38,9 @@ class SettingsPage(QWidget):
             "游戏以管理员权限运行时，本工具需要同等权限才能置前/截图；"
             "点击后经系统 UAC 确认以管理员身份重启"
         )
-        self.ask_elevation_box = QCheckBox("启动时自动询问提权（取消勾选 = 不再询问）")
+        self.ask_elevation_box = QCheckBox(
+            "启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）"
+        )
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
