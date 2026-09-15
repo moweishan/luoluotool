@@ -18,20 +18,27 @@ _APP = QApplication.instance() or QApplication([])
 
 @pytest.fixture
 def window_factory(request):
-    """创建主窗口（注入无等待 Runner 工厂）并注册清理。
+    """创建主窗口（注入无等待 Runner 工厂与安全输入通道）并注册清理。
 
-    生产路径由 app.run -> setup_logging 把根级别设为 INFO；
-    测试中 MainWindow 独立构造，这里模拟同等条件。
+    默认通道工厂始终返回干跑 sender：测试绝不触碰真实窗口、绝不产生真实输入。
+    需要验证真实模式行为的用例请显式传入自己的 channel_factory。
     """
+    from luoluotool.automation.input_sender import DryRunSender, InputChannel
+
     logging.getLogger().setLevel(logging.INFO)
     created = []
 
-    def make(path, config=None, auto_elevate=False):
+    def _safe_channel(config, stop_event, sleep, log):
+        return InputChannel(DryRunSender())
+
+    def make(path, config=None, auto_elevate=False, channel_factory=None):
         config = config if config is not None else AppConfig.default()
         window = MainWindow(
             config,
             path,
-            runner_factory=lambda cfg: Runner(cfg, sleep=lambda s: None),
+            runner_factory=lambda cfg: Runner(
+                cfg, sleep=lambda s: None, channel_factory=channel_factory or _safe_channel
+            ),
             auto_elevate=auto_elevate,
         )
         created.append(window)
@@ -80,6 +87,10 @@ def test_start_runs_placeholder_and_logs_steps(window_factory, tmp_path) -> None
     config = AppConfig.default()
     config.features.daily_tasks.enabled = True
     config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
+    config.features.daily_tasks.tasks["placeholder_task_a"].params = {
+        "click_points": [[11, 22]],
+        "wait_after_ms": 0,
+    }
     window = window_factory(tmp_path / "config.json", config)
     window._start()
     assert window.start_button.isEnabled() is False
@@ -87,16 +98,97 @@ def test_start_runs_placeholder_and_logs_steps(window_factory, tmp_path) -> None
     assert "干跑" in window.statusBar().currentMessage()
     assert _wait_finished(window)
     text = window.log_panel.toPlainText()
-    assert "模拟点击" in text
+    assert "干跑：模拟点击 (11, 22)" in text
     assert "开始执行任务：placeholder_task_a" in text
     assert window.start_button.isEnabled() is True
     assert "版本" in window.statusBar().currentMessage()
+
+
+def test_real_mode_requires_confirmation(window_factory, tmp_path, monkeypatch) -> None:
+    """真实模式：未确认时不启动任何任务。"""
+    from luoluotool.gui import main_window as mw
+
+    monkeypatch.setattr(mw.MainWindow, "_confirm_real_mode", lambda self: False)
+    config = AppConfig.default()
+    config.automation.dry_run = False
+    window = window_factory(tmp_path / "config.json", config)
+    window._start()
+    assert window._thread is None
+    assert window.start_button.isEnabled() is True
+    assert "取消" in window.statusBar().currentMessage()
+
+
+def test_real_mode_confirmed_uses_sender_and_red_status(window_factory, tmp_path, monkeypatch) -> None:
+    """真实模式：确认后经注入的 sender 发送序列，状态栏红色提示，结束后复位。"""
+    from luoluotool.automation.input_sender import InputChannel
+    from luoluotool.gui import main_window as mw
+
+    sent: list[tuple] = []
+
+    class _FakeSender:
+        def move_to(self, x, y): sent.append(("move_to", x, y))
+        def click(self, x, y): sent.append(("click", x, y))
+        def click_at(self, x, y): sent.append(("click_at", x, y))
+        def key_tap(self, vk): sent.append(("key_tap", vk))
+
+    def fake_channel(config, stop_event, sleep, log):
+        return InputChannel(_FakeSender())
+
+    monkeypatch.setattr(mw.MainWindow, "_confirm_real_mode", lambda self: True)
+    config = AppConfig.default()
+    config.automation.dry_run = False
+    config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
+    config.features.daily_tasks.tasks["placeholder_task_a"].params = {
+        "click_points": [[5, 6]],
+        "wait_after_ms": 0,
+    }
+    window = window_factory(tmp_path / "config.json", config, channel_factory=fake_channel)
+    window._start()
+    assert "真实模式" in window.statusBar().currentMessage()
+    assert window.statusBar().styleSheet() != ""  # 红色醒目样式
+    assert _wait_finished(window)
+    assert sent == [("click_at", 5, 6)]
+    assert window.statusBar().styleSheet() == ""
+    assert "版本" in window.statusBar().currentMessage()
+
+
+def test_save_reapplies_hotkey_change(window_factory, tmp_path, monkeypatch, caplog) -> None:
+    """修改急停键并保存后：注销旧键并注册新键。"""
+    from luoluotool.gui import main_window as mw
+
+    calls: list[tuple] = []
+
+    class FakeRegistrar:
+        def __init__(self, hotkey_id=0xF8, vk=0x77, modifiers=0, name="F8") -> None:
+            self.hotkey_id = hotkey_id
+            self.vk = vk
+            self.name = name
+
+        def register(self, hwnd: int = 0) -> bool:
+            calls.append(("register", self.name, self.vk))
+            return True
+
+        def unregister(self, hwnd: int = 0) -> None:
+            calls.append(("unregister", self.name))
+
+    monkeypatch.setattr(mw, "HotkeyRegistrar", FakeRegistrar)
+    window = window_factory(tmp_path / "config.json")
+    calls.clear()
+    window.settings_page.hotkey_combo.setCurrentText("F9")
+    window._save()
+    assert ("unregister", "F8") in calls
+    assert ("register", "F9", 0x78) in calls
+    assert "急停热键已更新为 F9" in caplog.text or "急停热键已更新为 F9" in window.log_panel.toPlainText()
 
 
 def test_stop_button_stops_loop(window_factory, tmp_path) -> None:
     config = AppConfig.default()
     config.features.daily_tasks.enabled = True
     config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
+    config.features.daily_tasks.tasks["placeholder_task_a"].params = {
+        "click_points": [[100, 100]],
+        "wait_after_ms": 1000,
+    }
     config.features.daily_tasks.loop.enabled = True
     config.features.daily_tasks.loop.interval_seconds = 5
     window = window_factory(tmp_path / "config.json", config)
@@ -129,6 +221,11 @@ def test_hotkey_registered_with_window_hwnd(window_factory, tmp_path, monkeypatc
     class FakeRegistrar:
         hotkey_id = 0xF8
 
+        def __init__(self, hotkey_id: int = 0xF8, vk: int = 0x77, modifiers: int = 0, name: str = "F8") -> None:
+            self.hotkey_id = hotkey_id
+            self.vk = vk
+            self.name = name
+
         def register(self, hwnd: int = 0) -> bool:
             captured["register_hwnd"] = hwnd
             return True
@@ -136,7 +233,7 @@ def test_hotkey_registered_with_window_hwnd(window_factory, tmp_path, monkeypatc
         def unregister(self, hwnd: int = 0) -> None:
             captured["unregister_hwnd"] = hwnd
 
-    monkeypatch.setattr(mw, "HotkeyRegistrar", lambda: FakeRegistrar())
+    monkeypatch.setattr(mw, "HotkeyRegistrar", FakeRegistrar)
     window = window_factory(tmp_path / "config.json")
     hwnd = int(window.winId())
     assert captured.get("register_hwnd") == hwnd

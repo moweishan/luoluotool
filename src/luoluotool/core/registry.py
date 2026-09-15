@@ -1,5 +1,6 @@
 """任务注册表：任务 ID → 任务类；内置占位任务 A。"""
 
+from luoluotool.config.models import PlaceholderTaskParams
 from luoluotool.core.task import BaseTask, TaskContext, TaskResult
 
 _REGISTRY: dict[str, type[BaseTask]] = {}
@@ -28,17 +29,27 @@ def registered_ids() -> list[str]:
 
 @register
 class PlaceholderTaskA(BaseTask):
-    """占位任务 A：每秒输出一条模拟点击日志；尊重停止请求。"""
+    """占位任务 A：按 params.click_points 依次点击。
+
+    真实/干跑由输入层决定：干跑模式只写日志，绝不产生真实输入。
+    """
 
     task_id = "placeholder_task_a"
-    steps: int = 3
-    step_interval_seconds: float = 1.0
-    click_point: tuple[int, int] = (100, 100)
 
     def run(self, ctx: TaskContext) -> TaskResult:
-        for step in range(1, self.steps + 1):
-            if ctx.should_stop():
-                return TaskResult(self.task_id, True, f"第 {step} 步前收到停止请求")
-            ctx.logger.info("模拟点击 (%d, %d)（第 %d 步）", *self.click_point, step)
-            ctx.interruptible_sleep(self.step_interval_seconds)
-        return TaskResult(self.task_id, True, f"完成 {self.steps} 步模拟")
+        params = PlaceholderTaskParams.from_dict(ctx.params)
+        total = len(params.click_points)
+        if total == 0:
+            ctx.logger.warning(
+                "占位任务 A 未配置点击坐标（params.click_points 为空），本轮无操作；"
+                '示例："params": {"click_points": [[100, 100]], "wait_after_ms": 500}'
+            )
+            return TaskResult(self.task_id, True, "未配置点击坐标，跳过")
+        for index, point in enumerate(params.click_points, start=1):
+            if not ctx.wait_until_ready():
+                return TaskResult(self.task_id, True, f"第 {index} 步前收到停止请求")
+            x, y = int(point[0]), int(point[1])
+            ctx.logger.info("步骤 %d/%d：点击 (%d, %d)", index, total, x, y)
+            ctx.sender.click_at(x, y)
+            ctx.interruptible_sleep(params.wait_after_ms / 1000)
+        return TaskResult(self.task_id, True, f"完成 {total} 步点击")

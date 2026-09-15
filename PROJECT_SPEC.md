@@ -187,7 +187,10 @@ LuoLuoTool/
 字段约定：
 - 所有新增字段**必须**提供默认值；修改结构时必须把 `schema_version` +1 并实现迁移函数。
 - 布尔开关一律 `false` 为出厂默认；`dry_run` 出厂默认必须为 `true`。
-- `params` 为每任务私有参数，先在占位任务中使用 `{}`，后续阶段再定义。
+- `params` 为每任务私有参数，按任务类型定义结构（缺省键回落默认值）：
+  - `placeholder_task_a`：`{"click_points": [[x, y], ...], "wait_after_ms": 500}`
+    - `click_points`：客户区坐标序列（`[[x, y], ...]`，允许为空列表，此时任务只写提示日志不动作）；
+    - `wait_after_ms`：每次点击后的等待毫秒数（0–60000）。
 - 配置文件为 UTF-8；读写使用临时文件 + `os.replace` 原子替换。
 
 ### 版本迁移记录
@@ -234,7 +237,7 @@ LuoLuoTool/
 | Phase 2 | GUI 与配置双向同步，修改有脏标记与保存 |
 | Phase 3 | 干跑任务可启停，F8 急停生效，无真实输入 |
 | Phase 4 | 能定位游戏窗口并截图到 `user_data/debug/` |
-| Phase 5 | 真实输入可启停、日志完整、失焦暂停生效 |
+| Phase 5 | 窗口消息输入（PostMessage，不接管真实键鼠）可启停、日志完整、失焦暂停生效 |
 | Phase 6 | 卡订单与预留页逻辑闭环，配置全项可持久化 |
 | Phase 7 | exe 在干净 Windows 上冒烟通过 |
 

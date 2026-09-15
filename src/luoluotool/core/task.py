@@ -1,4 +1,4 @@
-"""任务协议与执行上下文（不依赖 PySide6/win32）。"""
+"""任务协议与执行上下文（不依赖 PySide6/win32；输入经自动化层注入）。"""
 
 import logging
 import threading
@@ -6,12 +6,14 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
+from luoluotool.automation.input_sender import DryRunSender, InputSender
+
 DEFAULT_TASK_LOGGER_NAME = "luoluotool.core"
 
 
 @dataclass
 class TaskContext:
-    """任务执行上下文：stop_event、dry_run、logger 与可注入 sleep。"""
+    """任务执行上下文：stop_event、dry_run、logger、可注入 sleep/sender/params。"""
 
     stop_event: threading.Event = field(default_factory=threading.Event)
     dry_run: bool = True
@@ -19,6 +21,9 @@ class TaskContext:
         default_factory=lambda: logging.getLogger(DEFAULT_TASK_LOGGER_NAME)
     )
     sleep: Callable[[float], None] = time.sleep
+    params: dict = field(default_factory=dict)
+    sender: InputSender = field(default_factory=DryRunSender)
+    readiness_check: Callable[[], bool] | None = None
 
     def should_stop(self) -> bool:
         """是否已收到停止请求。"""
@@ -31,6 +36,17 @@ class TaskContext:
             chunk = min(0.1, remaining)
             self.sleep(chunk)
             remaining -= chunk
+
+    def wait_until_ready(self) -> bool:
+        """检查停止请求与窗口就绪（真实模式失焦时内部暂停等待）。
+
+        返回 False 表示应终止本次任务（停止请求或窗口不可用）。
+        """
+        if self.should_stop():
+            return False
+        if self.readiness_check is None:
+            return True
+        return self.readiness_check()
 
 
 @dataclass

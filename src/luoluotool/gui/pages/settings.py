@@ -2,8 +2,18 @@
 
 from collections.abc import Callable
 
-from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QSpinBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
 
+from luoluotool.automation.hotkey import DEFAULT_HOTKEY_NAME, supported_hotkeys
 from luoluotool.config.models import AppConfig
 
 CLICK_INTERVAL_MIN_MS = 100
@@ -28,7 +38,8 @@ class SettingsPage(QWidget):
         self.click_interval_spin.setSuffix(" ms")
         self.failures_spin = QSpinBox()
         self.failures_spin.setRange(FAILURES_MIN, FAILURES_MAX)
-        self.hotkey_label = QLabel()
+        self.hotkey_combo = QComboBox()
+        self.hotkey_combo.addItems(supported_hotkeys())
         self.diagnose_button = QPushButton("窗口诊断（查找游戏窗口并截图）")
         self.elevation_hint_label = QLabel()
         self.elevation_hint_label.setWordWrap(True)
@@ -49,11 +60,15 @@ class SettingsPage(QWidget):
         failures_row.addWidget(QLabel("连续失败上限"))
         failures_row.addWidget(self.failures_spin)
         failures_row.addStretch(1)
+        hotkey_row = QHBoxLayout()
+        hotkey_row.addWidget(QLabel("急停热键"))
+        hotkey_row.addWidget(self.hotkey_combo)
+        hotkey_row.addStretch(1)
         layout.addWidget(self.dry_run_box)
         layout.addWidget(self.focus_loss_box)
         layout.addLayout(click_row)
         layout.addLayout(failures_row)
-        layout.addWidget(self.hotkey_label)
+        layout.addLayout(hotkey_row)
         layout.addWidget(self.ask_elevation_box)
         layout.addWidget(self.diagnose_button)
         layout.addWidget(self.elevation_hint_label)
@@ -64,6 +79,7 @@ class SettingsPage(QWidget):
         self.click_interval_spin.valueChanged.connect(self._on_click_interval_changed)
         self.failures_spin.valueChanged.connect(self._on_failures_changed)
         self.ask_elevation_box.toggled.connect(self._on_ask_elevation_toggled)
+        self.hotkey_combo.currentTextChanged.connect(self._on_hotkey_changed)
         self.set_config(config)
 
     def set_config(self, config: AppConfig) -> None:
@@ -85,7 +101,9 @@ class SettingsPage(QWidget):
         self.ask_elevation_box.blockSignals(True)
         self.ask_elevation_box.setChecked(automation.ask_elevation_on_start)
         self.ask_elevation_box.blockSignals(False)
-        self.hotkey_label.setText(f"急停热键（当前版本只读）：{automation.failsafe_hotkey}")
+        self.hotkey_combo.blockSignals(True)
+        self.hotkey_combo.setCurrentText(automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME)
+        self.hotkey_combo.blockSignals(False)
 
     def _on_dry_run_toggled(self) -> None:
         self._config.automation.dry_run = self.dry_run_box.isChecked()
@@ -105,4 +123,8 @@ class SettingsPage(QWidget):
 
     def _on_ask_elevation_toggled(self) -> None:
         self._config.automation.ask_elevation_on_start = self.ask_elevation_box.isChecked()
+        self._on_changed()
+
+    def _on_hotkey_changed(self, name: str) -> None:
+        self._config.automation.failsafe_hotkey = name
         self._on_changed()

@@ -61,3 +61,20 @@ def test_non_windows_platform_skips(monkeypatch) -> None:
     monkeypatch.setattr(hotkey.sys, "platform", "linux")
     registrar = hotkey.HotkeyRegistrar()
     assert registrar.register() is False
+
+
+def test_resolve_vk_supported_names() -> None:
+    assert hotkey.resolve_vk("F8") == 0x77
+    assert hotkey.resolve_vk("f9") == 0x78
+    assert hotkey.resolve_vk("F12") == 0x7B
+    assert hotkey.resolve_vk("F1") is None
+    assert hotkey.resolve_vk("") is None
+
+
+def test_registrar_uses_custom_name_and_vk(fake_windll, caplog) -> None:
+    import logging
+
+    caplog.set_level(logging.INFO)
+    registrar = hotkey.HotkeyRegistrar(vk=hotkey.resolve_vk("F9"), name="F9")
+    assert registrar.register() is True
+    assert "F9" in caplog.text

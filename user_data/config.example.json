@@ -7,7 +7,10 @@
         "placeholder_task_a": {
           "enabled": false,
           "order": 1,
-          "params": {}
+          "params": {
+            "click_points": [],
+            "wait_after_ms": 500
+          }
         }
       },
       "loop": {

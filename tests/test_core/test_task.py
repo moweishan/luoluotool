@@ -52,3 +52,25 @@ def test_task_result_fields() -> None:
     result = TaskResult("t1", True, "ok")
     assert (result.task_id, result.success, result.message) == ("t1", True, "ok")
     assert TaskResult("t2", False).message == ""
+
+
+def test_context_defaults_are_safe() -> None:
+    """默认上下文：params 空、sender 为干跑（绝无真实输入）、无就绪守卫。"""
+    from luoluotool.automation.input_sender import DryRunSender
+
+    ctx = TaskContext()
+    assert ctx.params == {}
+    assert isinstance(ctx.sender, DryRunSender)
+    assert ctx.readiness_check is None
+
+
+def test_wait_until_ready_paths() -> None:
+    ctx = TaskContext()
+    assert ctx.wait_until_ready() is True  # 无守卫时只看停止标记
+    ctx.stop_event.set()
+    assert ctx.wait_until_ready() is False
+
+    ctx2 = TaskContext(readiness_check=lambda: False)
+    assert ctx2.wait_until_ready() is False
+    ctx3 = TaskContext(readiness_check=lambda: True)
+    assert ctx3.wait_until_ready() is True

@@ -74,6 +74,29 @@ def _validate_version(raw: dict, errors: list[str]) -> None:
         errors.append(f"不支持的 schema_version：{version}（当前支持 {SCHEMA_VERSION}）")
 
 
+def _is_point(value: object) -> bool:
+    """判断是否为 [x, y] 形式的非负整数坐标。"""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return False
+    return all(
+        isinstance(item, int) and not isinstance(item, bool) and item >= 0 for item in value
+    )
+
+
+def _validate_task_params(task_id: str, params: object, errors: list[str]) -> None:
+    """校验任务私有参数结构（缺省键合法，回落默认值）。"""
+    prefix = f"features.daily_tasks.tasks.{task_id}.params"
+    if not isinstance(params, dict):
+        errors.append(f"{prefix} 必须是对象")
+        return
+    points = params.get("click_points", [])
+    if not isinstance(points, list) or not all(_is_point(point) for point in points):
+        errors.append(f"{prefix}.click_points 必须是 [[x, y], ...] 形式的非负整数坐标数组")
+    wait = params.get("wait_after_ms", 500)
+    if isinstance(wait, bool) or not isinstance(wait, int) or not (0 <= wait <= 60000):
+        errors.append(f"{prefix}.wait_after_ms 必须是 0–60000 之间的整数")
+
+
 def _validate_tasks(raw: dict, errors: list[str]) -> None:
     tasks = _get(raw, "features.daily_tasks.tasks")
     if not isinstance(tasks, dict):
@@ -88,8 +111,7 @@ def _validate_tasks(raw: dict, errors: list[str]) -> None:
         order = task.get("order")
         if isinstance(order, bool) or not isinstance(order, int) or not (1 <= order <= 999):
             errors.append(f"features.daily_tasks.tasks.{task_id}.order 必须是 1–999 之间的整数")
-        if not isinstance(task.get("params"), dict):
-            errors.append(f"features.daily_tasks.tasks.{task_id}.params 必须是对象")
+        _validate_task_params(task_id, task.get("params"), errors)
 
 
 def _migrate_v1_to_v2(raw: dict) -> dict:

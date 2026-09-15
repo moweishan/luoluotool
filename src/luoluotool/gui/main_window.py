@@ -28,7 +28,13 @@ from luoluotool.automation.elevation import (
     is_window_elevated,
     restart_as_admin,
 )
-from luoluotool.automation.hotkey import WM_HOTKEY, HotkeyRegistrar
+from luoluotool.automation.hotkey import (
+    DEFAULT_HOTKEY_NAME,
+    VK_F8,
+    WM_HOTKEY,
+    HotkeyRegistrar,
+    resolve_vk,
+)
 from luoluotool.automation.window import diagnose_window, find_window
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
@@ -49,6 +55,8 @@ WINDOW_ICON_FILES = ("luoluoTool.png", "luoluoTool.ico")
 _ICO_MAGIC = b"\x00\x00\x01\x00"
 _PNG_MAGIC = b"\x89PNG"
 STATUS_RUNNING_DRY = "运行中 · 干跑"
+STATUS_RUNNING_REAL = "运行中 · 真实模式"
+STATUS_REAL_STYLE = "color: #c62828; font-weight: bold;"
 THREAD_WAIT_TIMEOUT_MS = 2000
 LOG_PANEL_MAX_BLOCKS = 1000
 
@@ -188,7 +196,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(self._idle_status)
         self._log_handler = LogPanelHandler(self.log_panel)
         logging.getLogger().addHandler(self._log_handler)
-        self._hotkey = HotkeyRegistrar()
+        self._hotkey_name = self._config.automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME
+        self._hotkey = HotkeyRegistrar(
+            vk=resolve_vk(self._hotkey_name) or VK_F8, name=self._hotkey_name
+        )
         # 必须注册到本窗口句柄：hwnd=0 的线程消息不会被 Qt 派发
         self._hotkey_hwnd = int(self.winId())
         self._hotkey.register(self._hotkey_hwnd)
@@ -233,6 +244,22 @@ class MainWindow(QMainWindow):
         self._refresh_title()
         logger.info("配置已保存：%s", self._config_path)
         self.statusBar().showMessage(f"配置已保存：{self._config_path}")
+        self._apply_hotkey_config()
+
+    def _apply_hotkey_config(self) -> None:
+        """保存后使急停键配置生效（热键变更时重新注册）。"""
+        name = self._config.automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME
+        if name == self._hotkey_name:
+            return
+        vk = resolve_vk(name)
+        if vk is None:
+            logger.warning("不支持的急停热键 %s，继续使用 %s", name, self._hotkey_name)
+            return
+        self._hotkey.unregister(self._hotkey_hwnd)
+        self._hotkey = HotkeyRegistrar(vk=vk, name=name)
+        self._hotkey.register(self._hotkey_hwnd)
+        self._hotkey_name = name
+        logger.info("急停热键已更新为 %s", name)
 
     def _reload(self) -> None:
         self._config = store.load(self._config_path)
@@ -261,14 +288,39 @@ class MainWindow(QMainWindow):
         if self._thread is not None and self._thread.isRunning():
             return
         self._save()  # 启动前先把当前配置落盘，避免“改了没保存就运行”
-        logger.info("启动任务")
+        dry_run = self._config.automation.dry_run
+        if not dry_run and not self._confirm_real_mode():
+            self.statusBar().showMessage("已取消启动（未确认真实模式）")
+            return
+        logger.info("启动任务（%s）", "干跑" if dry_run else "真实模式")
         self._runner = self._runner_factory(self._config)
         self._thread = _RunnerThread(self._runner, self)
         self._thread.finished.connect(self._on_runner_finished)
         self.start_button.setEnabled(False)
         self.stop_button.setEnabled(True)
-        self.statusBar().showMessage(STATUS_RUNNING_DRY)
+        if dry_run:
+            self.statusBar().setStyleSheet("")
+            self.statusBar().showMessage(STATUS_RUNNING_DRY)
+        else:
+            self.statusBar().setStyleSheet(STATUS_REAL_STYLE)
+            self.statusBar().showMessage(STATUS_RUNNING_REAL)
         self._thread.start()
+
+    def _confirm_real_mode(self) -> bool:
+        """真实模式启动前的确认：说明不接管真实键鼠、急停方式与封号风险。"""
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle("确认真实模式")
+        box.setText(
+            "即将以真实模式执行：程序会向游戏窗口发送模拟点击/按键消息，"
+            "不接管你的真实鼠标键盘（执行期间键鼠仍可正常使用）。\n\n"
+            "· 会在游戏内产生真实操作，可能违反游戏用户协议，封号风险自负\n"
+            f"· 运行中按 {self._hotkey_name} 可立即急停\n"
+            "· 游戏窗口失焦时按配置暂停\n\n是否继续？"
+        )
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
 
     def _stop(self) -> None:
         if self._runner is not None:
@@ -290,6 +342,7 @@ class MainWindow(QMainWindow):
         self._thread = None
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+        self.statusBar().setStyleSheet("")
         self.statusBar().showMessage(self._idle_status)
 
     def _on_failsafe(self) -> None:

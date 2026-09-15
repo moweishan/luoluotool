@@ -28,13 +28,27 @@ def test_defaults_are_safe() -> None:
 
 
 def test_default_contains_placeholder_task_a() -> None:
-    """默认配置含占位任务 A：关、order=1、params 为空。"""
+    """默认配置含占位任务 A：关、order=1、params 为新的坐标结构默认值。"""
     config = models.AppConfig.default()
     assert set(config.features.daily_tasks.tasks) == {"placeholder_task_a"}
     task = config.features.daily_tasks.tasks["placeholder_task_a"]
     assert task.enabled is False
     assert task.order == 1
-    assert task.params == {}
+    assert task.params == {"click_points": [], "wait_after_ms": 500}
+
+
+def test_placeholder_params_defaults_and_roundtrip() -> None:
+    """params 结构：缺失键回落默认值，往返一致。"""
+    assert models.PlaceholderTaskParams.from_dict({}).to_dict() == {
+        "click_points": [],
+        "wait_after_ms": 500,
+    }
+    params = models.PlaceholderTaskParams.from_dict(
+        {"click_points": [[10, 20], [30, 40]], "wait_after_ms": 800}
+    )
+    assert params.click_points == [[10, 20], [30, 40]]
+    assert params.to_dict() == {"click_points": [[10, 20], [30, 40]], "wait_after_ms": 800}
+    assert models.PlaceholderTaskParams.from_dict(None).wait_after_ms == 500
 
 
 def test_to_dict_from_dict_roundtrip() -> None:

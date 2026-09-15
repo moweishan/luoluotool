@@ -39,6 +39,26 @@ class LoopConfig:
 
 
 @dataclass
+class PlaceholderTaskParams:
+    """placeholder_task_a 的私有参数（params 内容，缺省键回落默认值）。"""
+
+    click_points: list[list[int]] = field(default_factory=list)
+    wait_after_ms: int = 500
+
+    def to_dict(self) -> dict:
+        return {
+            "click_points": [list(point) for point in self.click_points],
+            "wait_after_ms": self.wait_after_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> PlaceholderTaskParams:
+        raw = data or {}
+        points = [list(point) for point in (raw.get("click_points") or [])]
+        return cls(points, raw.get("wait_after_ms", 500))
+
+
+@dataclass
 class DailyTasksConfig:
     """功能一：日常任务。"""
 
@@ -193,9 +213,11 @@ class AppConfig:
 
     @classmethod
     def default(cls) -> AppConfig:
-        """返回出厂默认配置（含占位任务 A）。"""
+        """返回出厂默认配置（含占位任务 A 及其 params 结构）。"""
         config = cls()
-        config.features.daily_tasks.tasks["placeholder_task_a"] = TaskConfig()
+        config.features.daily_tasks.tasks["placeholder_task_a"] = TaskConfig(
+            params=PlaceholderTaskParams().to_dict()
+        )
         return config
 
     def to_dict(self) -> dict:

@@ -83,10 +83,22 @@ def test_settings_page_binds_and_hotkey_readonly() -> None:
     assert config.automation.max_consecutive_failures == 7
     page.focus_loss_box.setChecked(False)
     assert config.automation.pause_on_window_focus_loss is False
-    assert "F8" in page.hotkey_label.text()
-    assert "只读" in page.hotkey_label.text()
     assert "窗口诊断" in page.diagnose_button.text()
     assert "管理员" in page.restart_admin_button.text()
+    page.close()
+
+
+def test_settings_page_binds_hotkey_combo() -> None:
+    """急停键改为可编辑下拉框：可选值有限、写回配置、刷新同步。"""
+    config = AppConfig.default()
+    page = SettingsPage(config, lambda: None)
+    assert page.hotkey_combo.currentText() == "F8"
+    assert "F9" in [page.hotkey_combo.itemText(i) for i in range(page.hotkey_combo.count())]
+    page.hotkey_combo.setCurrentText("F9")
+    assert config.automation.failsafe_hotkey == "F9"
+    config2 = AppConfig.default()
+    page.set_config(config2)
+    assert page.hotkey_combo.currentText() == "F8"
     page.close()
 
 

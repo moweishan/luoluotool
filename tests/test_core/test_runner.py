@@ -41,6 +41,15 @@ class _FakeFailTask(BaseTask):
         return TaskResult(self.task_id, False, "模拟失败")
 
 
+@register
+class _FakeCrashTask(BaseTask):
+    task_id = "test_fake_crash"
+
+    def run(self, ctx: TaskContext) -> TaskResult:
+        EXECUTION_LOG.append("crash")
+        raise RuntimeError("模拟任务内异常")
+
+
 def _config(tasks: list[tuple[str, bool, int]], loop_enabled: bool = False,
             interval: int = 5, max_failures: int = 3) -> AppConfig:
     config = AppConfig.default()
@@ -154,4 +163,45 @@ def test_unregistered_task_id_goes_error_and_recovers() -> None:
     config.features.daily_tasks.tasks = {"test_fake_one": TaskConfig(enabled=True, order=1)}
     runner.start()  # ERROR 允许重新启动（内部先复位 IDLE）
     assert runner.state is RunState.IDLE
+    assert EXECUTION_LOG == ["one"]
+
+
+def test_task_exception_counts_as_failure_and_auto_stops(caplog) -> None:
+    """任务内抛异常：按失败计数处理（不整体 ERROR），达到上限自动停止。"""
+    config = _config([("test_fake_crash", True, 1)], loop_enabled=True, max_failures=3)
+    runner = Runner(config, sleep=lambda s: None)
+    runner.start()
+    assert EXECUTION_LOG.count("crash") == 3
+    assert runner.state is RunState.IDLE
+    assert "执行异常" in caplog.text
+    assert "自动停止" in caplog.text
+
+
+def test_real_mode_without_window_goes_error(monkeypatch, caplog) -> None:
+    """真实模式找不到游戏窗口：给出可读错误并以 ERROR 结束（不发任何输入）。"""
+    from luoluotool.automation import input_sender
+
+    monkeypatch.setattr(input_sender, "find_window", lambda keyword: None)
+    config = _config([("test_fake_one", True, 1)])
+    config.automation.dry_run = False
+    runner = Runner(config)
+    runner.start()
+    assert runner.state is RunState.ERROR
+    assert "未找到" in caplog.text
+
+
+def test_channel_factory_is_used_for_sender(monkeypatch) -> None:
+    """Runner 通过注入的通道工厂构建 sender（测试注入假 sender 的入口）。"""
+    from luoluotool.automation.input_sender import DryRunSender, InputChannel
+
+    created: list[str] = []
+
+    def fake_factory(config, stop_event, sleep, log):
+        created.append("built")
+        return InputChannel(DryRunSender())
+
+    config = _config([("test_fake_one", True, 1)])
+    runner = Runner(config, channel_factory=fake_factory)
+    runner.start()
+    assert created == ["built"]
     assert EXECUTION_LOG == ["one"]

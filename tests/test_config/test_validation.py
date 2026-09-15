@@ -121,3 +121,28 @@ def test_task_entries_validation() -> None:
     assert any("placeholder_task_a 必须是对象" in e for e in validate(raw))
     _set_path(raw, "features.daily_tasks.tasks", "bad")
     assert any("tasks 必须是对象" in e for e in validate(raw))
+
+
+def test_task_params_structure_validation() -> None:
+    """params 内容：缺省键合法；坐标数组与等待时间需符合结构。"""
+    raw = _default_raw()
+    tasks = raw["features"]["daily_tasks"]["tasks"]
+
+    tasks["placeholder_task_a"]["params"] = {}
+    assert validate(raw) == []  # 缺失键回落到默认值
+
+    tasks["placeholder_task_a"]["params"] = {"click_points": [], "wait_after_ms": 0}
+    assert validate(raw) == []  # 空坐标列表合法（不崩溃）
+
+    tasks["placeholder_task_a"]["params"] = {"click_points": [[10, 20]], "wait_after_ms": 500}
+    assert validate(raw) == []
+
+    for bad_points in ("bad", [[10]], [[-1, 5]], [[1.5, 2]], [[True, 2]], [["a", "b"]], [10, 20]):
+        tasks["placeholder_task_a"]["params"] = {"click_points": bad_points}
+        errors = validate(raw)
+        assert any("click_points" in e for e in errors), bad_points
+
+    for bad_wait in (-1, 60001, "500", True):
+        tasks["placeholder_task_a"]["params"] = {"wait_after_ms": bad_wait}
+        errors = validate(raw)
+        assert any("wait_after_ms" in e for e in errors), bad_wait
