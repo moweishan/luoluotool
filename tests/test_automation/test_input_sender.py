@@ -201,33 +201,6 @@ def test_build_channel_real_mode_returns_message_sender(monkeypatch) -> None:
     assert channel.readiness is not None
 
 
-def test_build_channel_selects_synthetic_pointer_sender(monkeypatch) -> None:
-    from luoluotool.automation.pointer_sender import SyntheticPointerSender
-
-    monkeypatch.setattr(input_sender, "find_window", lambda keyword: 777)
-    monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)
-    config = AppConfig.default()
-    config.automation.dry_run = False
-    config.automation.input_mode = "synthetic_pointer"
-    config.automation.pointer_type = "pen"
-    channel = input_sender.build_channel(config, threading.Event(), lambda s: None, input_sender.logger)
-    assert isinstance(channel.sender, SyntheticPointerSender)
-    assert channel.sender.hwnd == 777
-    assert channel.sender.pointer_type == "pen"
-    assert channel.readiness is not None
-
-
-def test_build_channel_dry_run_ignores_input_mode(monkeypatch) -> None:
-    def boom(*args, **kwargs):
-        raise AssertionError("干跑模式不得查询窗口")
-
-    monkeypatch.setattr(input_sender, "find_window", boom)
-    config = AppConfig.default()
-    config.automation.input_mode = "synthetic_pointer"
-    channel = input_sender.build_channel(config, threading.Event(), lambda s: None, input_sender.logger)
-    assert isinstance(channel.sender, input_sender.DryRunSender)
-
-
 def test_readiness_gate_ready_and_focused(monkeypatch) -> None:
     monkeypatch.setattr(input_sender, "window_exists", lambda hwnd: True)
     monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)

@@ -4,17 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 3
-
-# 输入通道选择（automation.input_mode）
-INPUT_MODE_WINDOW_MESSAGE = "window_message"
-INPUT_MODE_SYNTHETIC_POINTER = "synthetic_pointer"
-INPUT_MODES: tuple[str, ...] = (INPUT_MODE_WINDOW_MESSAGE, INPUT_MODE_SYNTHETIC_POINTER)
-
-# 合成指针类型（automation.pointer_type）
-POINTER_TYPE_TOUCH = "touch"
-POINTER_TYPE_PEN = "pen"
-POINTER_TYPES: tuple[str, ...] = (POINTER_TYPE_TOUCH, POINTER_TYPE_PEN)
+SCHEMA_VERSION = 2
 
 
 @dataclass
@@ -142,8 +132,6 @@ class AutomationConfig:
     pause_on_window_focus_loss: bool = True
     failsafe_hotkey: str = "F8"
     ask_elevation_on_start: bool = True
-    input_mode: str = INPUT_MODE_WINDOW_MESSAGE
-    pointer_type: str = POINTER_TYPE_TOUCH
 
     def to_dict(self) -> dict:
         return {
@@ -155,8 +143,6 @@ class AutomationConfig:
             "pause_on_window_focus_loss": self.pause_on_window_focus_loss,
             "failsafe_hotkey": self.failsafe_hotkey,
             "ask_elevation_on_start": self.ask_elevation_on_start,
-            "input_mode": self.input_mode,
-            "pointer_type": self.pointer_type,
         }
 
     @classmethod
@@ -170,8 +156,6 @@ class AutomationConfig:
             data.get("pause_on_window_focus_loss", True),
             data.get("failsafe_hotkey", "F8"),
             data.get("ask_elevation_on_start", True),
-            data.get("input_mode", INPUT_MODE_WINDOW_MESSAGE),
-            data.get("pointer_type", POINTER_TYPE_TOUCH),
         )
 
 

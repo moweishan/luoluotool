@@ -14,13 +14,7 @@ from PySide6.QtWidgets import (
 )
 
 from luoluotool.automation.hotkey import DEFAULT_HOTKEY_NAME, supported_hotkeys
-from luoluotool.config.models import INPUT_MODES, POINTER_TYPES, AppConfig
-
-INPUT_MODE_LABELS = {
-    "window_message": "窗口消息（不注入输入）",
-    "synthetic_pointer": "合成指针（触摸/笔，不移动光标）",
-}
-POINTER_TYPE_LABELS = {"touch": "触摸", "pen": "笔"}
+from luoluotool.config.models import AppConfig
 
 CLICK_INTERVAL_MIN_MS = 100
 CLICK_INTERVAL_MAX_MS = 5000
@@ -55,13 +49,9 @@ class SettingsPage(QWidget):
             "游戏以管理员权限运行时，本工具需要同等权限才能置前/截图；"
             "点击后经系统 UAC 确认以管理员身份重启"
         )
-        self.ask_elevation_box = QCheckBox("启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）")
-        self.input_mode_combo = QComboBox()
-        for mode in INPUT_MODES:
-            self.input_mode_combo.addItem(INPUT_MODE_LABELS.get(mode, mode), mode)
-        self.pointer_type_combo = QComboBox()
-        for pointer in POINTER_TYPES:
-            self.pointer_type_combo.addItem(POINTER_TYPE_LABELS.get(pointer, pointer), pointer)
+        self.ask_elevation_box = QCheckBox(
+            "启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）"
+        )
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -74,18 +64,11 @@ class SettingsPage(QWidget):
         hotkey_row.addWidget(QLabel("急停热键"))
         hotkey_row.addWidget(self.hotkey_combo)
         hotkey_row.addStretch(1)
-        input_row = QHBoxLayout()
-        input_row.addWidget(QLabel("输入方式"))
-        input_row.addWidget(self.input_mode_combo)
-        input_row.addWidget(QLabel("指针类型"))
-        input_row.addWidget(self.pointer_type_combo)
-        input_row.addStretch(1)
         layout.addWidget(self.dry_run_box)
         layout.addWidget(self.focus_loss_box)
         layout.addLayout(click_row)
         layout.addLayout(failures_row)
         layout.addLayout(hotkey_row)
-        layout.addLayout(input_row)
         layout.addWidget(self.ask_elevation_box)
         layout.addWidget(self.diagnose_button)
         layout.addWidget(self.elevation_hint_label)
@@ -97,8 +80,6 @@ class SettingsPage(QWidget):
         self.failures_spin.valueChanged.connect(self._on_failures_changed)
         self.ask_elevation_box.toggled.connect(self._on_ask_elevation_toggled)
         self.hotkey_combo.currentTextChanged.connect(self._on_hotkey_changed)
-        self.input_mode_combo.currentIndexChanged.connect(self._on_input_mode_changed)
-        self.pointer_type_combo.currentIndexChanged.connect(self._on_pointer_type_changed)
         self.set_config(config)
 
     def set_config(self, config: AppConfig) -> None:
@@ -123,14 +104,6 @@ class SettingsPage(QWidget):
         self.hotkey_combo.blockSignals(True)
         self.hotkey_combo.setCurrentText(automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME)
         self.hotkey_combo.blockSignals(False)
-        for combo, value in (
-            (self.input_mode_combo, automation.input_mode),
-            (self.pointer_type_combo, automation.pointer_type),
-        ):
-            combo.blockSignals(True)
-            index = combo.findData(value)
-            combo.setCurrentIndex(index if index >= 0 else 0)
-            combo.blockSignals(False)
 
     def _on_dry_run_toggled(self) -> None:
         self._config.automation.dry_run = self.dry_run_box.isChecked()
@@ -154,12 +127,4 @@ class SettingsPage(QWidget):
 
     def _on_hotkey_changed(self, name: str) -> None:
         self._config.automation.failsafe_hotkey = name
-        self._on_changed()
-
-    def _on_input_mode_changed(self) -> None:
-        self._config.automation.input_mode = self.input_mode_combo.currentData()
-        self._on_changed()
-
-    def _on_pointer_type_changed(self) -> None:
-        self._config.automation.pointer_type = self.pointer_type_combo.currentData()
         self._on_changed()

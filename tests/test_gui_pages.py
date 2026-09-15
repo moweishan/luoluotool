@@ -88,25 +88,6 @@ def test_settings_page_binds_and_hotkey_readonly() -> None:
     page.close()
 
 
-def test_settings_page_binds_input_mode_combos() -> None:
-    """输入方式与指针类型下拉：可选值有限、写回配置、刷新同步。"""
-    config = AppConfig.default()
-    page = SettingsPage(config, lambda: None)
-    assert page.input_mode_combo.currentData() == "window_message"
-    assert page.pointer_type_combo.currentData() == "touch"
-    modes = [page.input_mode_combo.itemData(i) for i in range(page.input_mode_combo.count())]
-    assert modes == ["window_message", "synthetic_pointer"]
-    page.input_mode_combo.setCurrentIndex(page.input_mode_combo.findData("synthetic_pointer"))
-    assert config.automation.input_mode == "synthetic_pointer"
-    page.pointer_type_combo.setCurrentIndex(page.pointer_type_combo.findData("pen"))
-    assert config.automation.pointer_type == "pen"
-    config2 = AppConfig.default()
-    page.set_config(config2)
-    assert page.input_mode_combo.currentData() == "window_message"
-    assert page.pointer_type_combo.currentData() == "touch"
-    page.close()
-
-
 def test_settings_page_binds_hotkey_combo() -> None:
     """急停键改为可编辑下拉框：可选值有限、写回配置、刷新同步。"""
     config = AppConfig.default()

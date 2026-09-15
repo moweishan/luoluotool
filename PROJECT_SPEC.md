@@ -74,8 +74,6 @@
 
 取消后**仍然必须遵守**的约束：
 
-**实测证据（2026-09-15）**：独立验证脚本（不入库）在目标游戏上实测——`PT_TOUCH` 合成指针注入（`CreateSyntheticPointerDevice` + `InjectSyntheticPointerInput`）**有效**（游戏在客户区中心 (773, 473) 处响应），且**真实光标全程未移动**（注入前后 `GetCursorPos` 一致）。据此新增 Phase 5.1 接入该通道。
-
 - **逐项授权**：驱动级 / 注入类 / 过检测类 / 联网功能，必须先写入对应阶段的「本次只做什么」并取得用户明确确认，**禁止静默引入**；
 - **可回退**：必须保证「不安装驱动、不做注入」的基础模式仍可独立运行；
 - **数据保护**：不得上传或传输日志、配置、截图等本地数据；不得收集账号/密码/token；
@@ -125,7 +123,7 @@
 | GUI | **PySide6**（Qt for Python） | 原生渲染快、QSS 可做出简洁大气的主题、QThread 成熟、LGPL 允许闭源分发（动态链接） |
 | 配置 | 标准库 JSON + dataclass + 手写 schema 校验 | 无数据库需求；避免 pydantic 增大 exe 体积 |
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
-| 输入模拟 | ① 窗口消息（`SendMessageTimeout` + `PostMessage` + `WindowFromPoint` 子窗口定位，**默认**）② **合成指针输入**（`CreateSyntheticPointerDevice` + `InjectSyntheticPointerInput`，回退 `InitializeTouchInjection` + `InjectTouchInput`，**不移动真实光标**）③ 用户态合成输入（`SendInput`）④ 驱动级注入（须逐项授权） | ① 零侵入但游戏若只认物理光标则点不准；② **已实测对目标游戏有效且不动光标**（本项默认推荐）；③ 兼容性最强但会移动光标；④ 风险最高（见 §4.1） |
+| 输入模拟 | 可选（按阶段任务与用户授权选择）：① 窗口消息（`SendMessageTimeout` 同步 + `PostMessage` 悬停 + `WindowFromPoint` 子窗口定位，**默认**）② 用户态合成输入（`ctypes` 调 `SendInput`/`SetCursorPos`）③ 驱动级注入（如 Interception，须逐项授权） | ① 零侵入但受游戏输入实现限制；② 能对上"只认物理光标"的游戏，代价是需移动光标（点击后还原）；③ 兼容性最强但风险最高（反作弊拦截/系统改动，见 §4.1） |
 | 窗口查找/截图 | pywin32（win32gui / win32ui） | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
@@ -152,10 +150,8 @@ LuoLuoTool/
 │   ├── automation/          # Windows 交互层
 │   │   ├── window.py        # 窗口查找/置前/截屏、窗口诊断
 │   │   ├── elevation.py     # 进程/窗口权限检测与 UAC 提权重启
-│   │   ├── errors.py        # 自动化层异常（WindowUnavailableError）
-│   │   ├── input_sender.py  # 输入通道：窗口消息 / 干跑（build_channel）
-│   │   ├── pointer_sender.py# 合成指针输入（触摸/笔，不移动真实光标）
-│   │   └── hotkey.py        # 全局急停热键
+│   │   ├── input_sender.py  # 后台窗口消息输入（click/key，不接管真实键鼠）
+│   │   └── hotkey.py        # F8 全局急停
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
 │   │   ├── main_window.py   # 主窗口（页签 + 启动/停止 + 状态栏）
@@ -187,17 +183,16 @@ LuoLuoTool/
 | core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
 | automation | 找窗口、截图、向窗口发送鼠标/键盘消息（不接管真实键鼠）、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
-| automation（输入通道） | 干跑/窗口消息/合成指针三种 sender，统一 `InputSender` 协议；按 `automation.input_mode` 选择 | `build_channel(config, stop_event, sleep, log) -> InputChannel`; `SyntheticPointerSender(hwnd, pointer_type, log, sleep)`; `InputSender` 协议：`move_to/click/click_at/key_tap`; `WindowUnavailableError` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v3）
+## 9. 数据结构（配置文件 schema v2）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 2,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -222,9 +217,7 @@ LuoLuoTool/
     "max_consecutive_failures": 3,
     "pause_on_window_focus_loss": true,
     "failsafe_hotkey": "F8",
-    "ask_elevation_on_start": true,
-    "input_mode": "window_message",
-    "pointer_type": "touch"
+    "ask_elevation_on_start": true
   },
   "logging": { "level": "INFO", "max_file_mb": 2, "backup_count": 3 }
 }
@@ -244,7 +237,6 @@ LuoLuoTool/
 | 版本 | 变更 | 迁移函数 |
 |---|---|---|
 | v1 → v2 | 新增 `automation.ask_elevation_on_start`（默认 `true` = 启动时询问提权）；`false` 表示不再询问 | `validation.migrate()` → `_migrate_v1_to_v2` |
-| v2 → v3 | 新增 `automation.input_mode`（默认 `window_message`，可选 `synthetic_pointer`）与 `automation.pointer_type`（默认 `touch`，可选 `pen`） | `validation.migrate()` → `_migrate_v2_to_v3` |
 
 迁移在 `store.load()` 与 `--validate-config` 中自动执行；旧版文件迁移后**写回**为当前版本，且不会被当作损坏文件备份。
 
