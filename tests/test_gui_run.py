@@ -209,9 +209,13 @@ def test_reset_button_logs_and_status(window_factory, tmp_path) -> None:
 
 
 def test_stop_button_logs_when_no_task_running(window_factory, tmp_path) -> None:
-    """停止（无运行任务）：提示当前没有运行中的任务。"""
+    """停止处理器（无运行任务）：提示当前没有运行中的任务。
+
+    空闲时停止按钮为禁用态（点击无效），因此直接调用处理器验证反馈逻辑。
+    """
     window = window_factory(tmp_path / "config.json")
-    window.stop_button.click()
+    assert window.stop_button.isEnabled() is False
+    window._on_stop_clicked()
     _APP.processEvents()
     assert "没有运行中的任务" in window.log_panel.toPlainText()
 
