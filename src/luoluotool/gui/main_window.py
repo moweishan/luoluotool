@@ -168,7 +168,7 @@ class MainWindow(QMainWindow):
         self.start_button.clicked.connect(self._start)
         self.stop_button = QPushButton("停止")
         self.stop_button.setEnabled(False)
-        self.stop_button.clicked.connect(self._stop)
+        self.stop_button.clicked.connect(self._on_stop_clicked)
         self.log_panel = QPlainTextEdit()
         self.log_panel.setReadOnly(True)
         self.log_panel.setMaximumBlockCount(LOG_PANEL_MAX_BLOCKS)
@@ -231,6 +231,8 @@ class MainWindow(QMainWindow):
         store.save(self._config, self._config_path)
         self._dirty = False
         self._refresh_title()
+        logger.info("配置已保存：%s", self._config_path)
+        self.statusBar().showMessage(f"配置已保存：{self._config_path}")
 
     def _reload(self) -> None:
         self._config = store.load(self._config_path)
@@ -240,6 +242,8 @@ class MainWindow(QMainWindow):
         self._config = AppConfig.default()
         self._apply_config()
         self._mark_dirty()
+        logger.info("已恢复默认配置（尚未保存，点击「保存」后写入文件）")
+        self.statusBar().showMessage("已恢复默认配置（点击「保存」后生效）")
 
     def _apply_config(self) -> None:
         for page in (
@@ -269,6 +273,16 @@ class MainWindow(QMainWindow):
             self._runner.request_stop()
         if self._thread is not None and self._thread.isRunning():
             self._thread.wait(THREAD_WAIT_TIMEOUT_MS)
+
+    def _on_stop_clicked(self) -> None:
+        """停止按钮：给出日志与状态栏反馈。"""
+        if self._runner is None:
+            logger.info("停止：当前没有运行中的任务")
+            self.statusBar().showMessage("当前没有运行中的任务")
+            return
+        logger.info("已请求停止任务")
+        self.statusBar().showMessage("已请求停止…")
+        self._stop()
 
     def _on_runner_finished(self) -> None:
         self._thread = None

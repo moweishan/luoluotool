@@ -185,6 +185,54 @@ def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -
     assert "窗口诊断失败" in window.statusBar().currentMessage()
 
 
+def test_save_button_logs_and_status(window_factory, tmp_path) -> None:
+    """保存：日志面板与状态栏都有提示。"""
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.click_interval_spin.setValue(1234)
+    window._save()
+    _APP.processEvents()
+    text = window.log_panel.toPlainText()
+    assert "配置已保存" in text
+    assert "配置已保存" in window.statusBar().currentMessage()
+
+
+def test_reset_button_logs_and_status(window_factory, tmp_path) -> None:
+    """恢复默认：日志面板提示已恢复（并提醒需保存）。"""
+    window = window_factory(tmp_path / "config.json")
+    window.settings_page.click_interval_spin.setValue(1234)
+    window._reset()
+    _APP.processEvents()
+    text = window.log_panel.toPlainText()
+    assert "恢复默认" in text
+    assert "保存" in text
+    assert "恢复默认" in window.statusBar().currentMessage()
+
+
+def test_stop_button_logs_when_no_task_running(window_factory, tmp_path) -> None:
+    """停止（无运行任务）：提示当前没有运行中的任务。"""
+    window = window_factory(tmp_path / "config.json")
+    window.stop_button.click()
+    _APP.processEvents()
+    assert "没有运行中的任务" in window.log_panel.toPlainText()
+
+
+def test_stop_button_logs_when_runner_active(window_factory, tmp_path) -> None:
+    """停止（运行中）：日志出现「已请求停止」，且任务确实停止。"""
+    config = AppConfig.default()
+    config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
+    config.features.daily_tasks.loop.enabled = True
+    window = window_factory(tmp_path / "config.json", config)
+    window._start()
+    deadline = time.time() + 3
+    while time.time() < deadline and "模拟点击" not in window.log_panel.toPlainText():
+        _APP.processEvents()
+        time.sleep(0.01)
+    window.stop_button.click()
+    _APP.processEvents()
+    assert "已请求停止" in window.log_panel.toPlainText()
+    assert _wait_finished(window)
+
+
 def test_restart_admin_button_confirmed(window_factory, tmp_path, monkeypatch) -> None:
     """确认后带 --config 参数请求提权重启；按钮场景不提供「不再询问」。"""
     from luoluotool.gui import main_window as mw
