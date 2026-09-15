@@ -7,6 +7,7 @@
 import ctypes
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
@@ -27,6 +28,8 @@ MK_LBUTTON = 0x0001
 READINESS_POLL_SECONDS = 0.2
 SMTO_ABORTIFHUNG = 0x0002
 SEND_MESSAGE_TIMEOUT_MS = 500
+# 消息间隔：让游戏分帧处理“移动/按下/抬起”，避免同一帧内连发被忽略或用到旧的指针位置
+MESSAGE_GAP_SECONDS = 0.05
 
 
 class WindowUnavailableError(RuntimeError):
@@ -101,9 +104,15 @@ class WindowMessageSender:
     不移动真实光标、不抢占键盘焦点、不注入系统输入流。
     """
 
-    def __init__(self, hwnd: int, log: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        hwnd: int,
+        log: logging.Logger | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
         self.hwnd = hwnd
         self._logger = log or logger
+        self._sleep = sleep if sleep is not None else time.sleep
 
     def move_to(self, x: int, y: int) -> None:
         target, point = self._resolve(x, y)
@@ -115,7 +124,9 @@ class WindowMessageSender:
         target, point = self._resolve(x, y)
         self._post(target, WM_MOUSEMOVE, 0, point)  # 异步：让游戏消息泵先看到悬停位置
         self._send(target, WM_MOUSEMOVE, 0, point)  # 同步：确保先处理移动再处理按下
+        self._sleep(MESSAGE_GAP_SECONDS)
         self._send(target, WM_LBUTTONDOWN, MK_LBUTTON, point)
+        self._sleep(MESSAGE_GAP_SECONDS)
         self._send(target, WM_LBUTTONUP, 0, point)
         self._logger.info("已发送点击消息 (%d, %d)（目标 hwnd=%s）", x, y, target)
 
@@ -238,4 +249,4 @@ def build_channel(
     gate = WindowReadinessGate(
         hwnd, config.automation.pause_on_window_focus_loss, stop_event, sleep, log
     )
-    return InputChannel(WindowMessageSender(hwnd, log), gate.wait_until_ready)
+    return InputChannel(WindowMessageSender(hwnd, log, sleep), gate.wait_until_ready)

@@ -81,9 +81,10 @@ def test_dry_run_sender_only_logs(fake_windll, caplog) -> None:
 
 
 def test_window_sender_click_posts_and_sends_in_order(fake_windll, top_window_target) -> None:
-    """点击序列：异步悬停提示 + 同步「移动 → 按下 → 抬起」。"""
+    """点击序列：异步悬停提示 + 同步「移动 → 间隔 → 按下 → 间隔 → 抬起」。"""
     top_window_target(1234)
-    sender = input_sender.WindowMessageSender(hwnd=1234)
+    gaps: list[float] = []
+    sender = input_sender.WindowMessageSender(hwnd=1234, sleep=gaps.append)
     sender.click(11, 22)
     point = input_sender._pack_point(11, 22)
     assert fake_windll.user32.posted == [(1234, input_sender.WM_MOUSEMOVE, 0, point)]
@@ -92,6 +93,8 @@ def test_window_sender_click_posts_and_sends_in_order(fake_windll, top_window_ta
         (1234, input_sender.WM_LBUTTONDOWN, input_sender.MK_LBUTTON, point),
         (1234, input_sender.WM_LBUTTONUP, 0, point),
     ]
+    # 让游戏分帧处理“移动/按下/抬起”，避免同一帧内连发被忽略
+    assert gaps == [input_sender.MESSAGE_GAP_SECONDS] * 2
 
 
 def test_window_sender_targets_child_window(fake_windll, monkeypatch) -> None:
@@ -99,7 +102,7 @@ def test_window_sender_targets_child_window(fake_windll, monkeypatch) -> None:
     monkeypatch.setattr(
         input_sender, "resolve_input_target", lambda window, point: (999, (5, 6))
     )
-    sender = input_sender.WindowMessageSender(hwnd=1234)
+    sender = input_sender.WindowMessageSender(hwnd=1234, sleep=lambda s: None)
     sender.click(40, 50)
     point = input_sender._pack_point(5, 6)
     assert fake_windll.user32.posted == [(999, input_sender.WM_MOUSEMOVE, 0, point)]
@@ -130,7 +133,7 @@ def test_resolve_input_target_requires_live_window(monkeypatch) -> None:
 
 
 def test_window_sender_key_tap_sends_down_and_up(fake_windll) -> None:
-    sender = input_sender.WindowMessageSender(hwnd=99)
+    sender = input_sender.WindowMessageSender(hwnd=99, sleep=lambda s: None)
     sender.key_tap(0x41)
     assert fake_windll.user32.posted == []
     assert fake_windll.user32.sent == [
@@ -143,7 +146,7 @@ def test_window_sender_raises_when_post_fails(monkeypatch, top_window_target) ->
     fake = _FakeUser32(post_result=0)
     monkeypatch.setattr(input_sender.ctypes, "windll", type("Windll", (), {"user32": fake})())
     top_window_target(1)
-    sender = input_sender.WindowMessageSender(hwnd=1)
+    sender = input_sender.WindowMessageSender(hwnd=1, sleep=lambda s: None)
     with pytest.raises(input_sender.WindowUnavailableError):
         sender.click(1, 1)
 
@@ -152,7 +155,7 @@ def test_window_sender_raises_when_send_times_out(monkeypatch, top_window_target
     fake = _FakeUser32(send_result=0)
     monkeypatch.setattr(input_sender.ctypes, "windll", type("Windll", (), {"user32": fake})())
     top_window_target(1)
-    sender = input_sender.WindowMessageSender(hwnd=1)
+    sender = input_sender.WindowMessageSender(hwnd=1, sleep=lambda s: None)
     with pytest.raises(input_sender.WindowUnavailableError):
         sender.click(1, 1)
 
