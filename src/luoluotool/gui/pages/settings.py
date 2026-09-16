@@ -14,7 +14,12 @@ from PySide6.QtWidgets import (
 )
 
 from luoluotool.automation.hotkey import DEFAULT_HOTKEY_NAME, supported_hotkeys
-from luoluotool.config.models import AppConfig
+from luoluotool.config.models import (
+    INPUT_MODE_REAL_INPUT,
+    INPUT_MODE_WINDOW_ALIGN,
+    INPUT_MODE_WINDOW_MESSAGE,
+    AppConfig,
+)
 
 CLICK_INTERVAL_MIN_MS = 100
 CLICK_INTERVAL_MAX_MS = 5000
@@ -52,12 +57,18 @@ class SettingsPage(QWidget):
         self.ask_elevation_box = QCheckBox(
             "启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）"
         )
-        self.align_window_box = QCheckBox("点击前对齐游戏窗口（不移动真实鼠标）")
-        self.align_window_box.setToolTip(
-            "适用于「按真实光标位置决定点击落点」的游戏：点击前把目标坐标搬到静止的光标下方"
-            "（移动游戏窗口，不移动光标），点完立即还原窗口位置。\n"
-            "要求：工具已提权、游戏窗口化（最大化无法对齐）、点击期间真实鼠标保持静止。"
+        self.input_mode_combo = QComboBox()
+        self.input_mode_combo.addItem("窗口消息（默认，不抢前台、不动光标）", INPUT_MODE_WINDOW_MESSAGE)
+        self.input_mode_combo.addItem("对齐窗口点击（点准且不动光标，游戏窗口会短暂位移）", INPUT_MODE_WINDOW_ALIGN)
+        self.input_mode_combo.addItem("真实鼠标键盘（SendInput；每次输入前把游戏窗口置顶，会抢前台）",
+                                      INPUT_MODE_REAL_INPUT)
+        self.input_mode_combo.setToolTip(
+            "窗口消息：零侵入，但被「按真实光标取点」的游戏忽略坐标。\n"
+            "对齐窗口点击：点击前把目标坐标搬到静止光标下方（移动窗口而非光标），点完还原窗口位置。\n"
+            "真实鼠标键盘：真实移动光标并模拟真实键鼠；每次点击/按键前都会校验游戏窗口是否在最顶层，"
+            "不在则先置顶再置前；点击后按下方开关决定是否把鼠标移回原位。"
         )
+        self.restore_cursor_box = QCheckBox("每次点击后把真实鼠标移回原位置（仅真实鼠标键盘方式生效）")
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -76,7 +87,9 @@ class SettingsPage(QWidget):
         layout.addLayout(failures_row)
         layout.addLayout(hotkey_row)
         layout.addWidget(self.ask_elevation_box)
-        layout.addWidget(self.align_window_box)
+        layout.addWidget(QLabel("输入方式"))
+        layout.addWidget(self.input_mode_combo)
+        layout.addWidget(self.restore_cursor_box)
         layout.addWidget(self.diagnose_button)
         layout.addWidget(self.elevation_hint_label)
         layout.addWidget(self.restart_admin_button)
@@ -86,7 +99,8 @@ class SettingsPage(QWidget):
         self.click_interval_spin.valueChanged.connect(self._on_click_interval_changed)
         self.failures_spin.valueChanged.connect(self._on_failures_changed)
         self.ask_elevation_box.toggled.connect(self._on_ask_elevation_toggled)
-        self.align_window_box.toggled.connect(self._on_align_window_toggled)
+        self.input_mode_combo.currentIndexChanged.connect(self._on_input_mode_changed)
+        self.restore_cursor_box.toggled.connect(self._on_restore_cursor_toggled)
         self.hotkey_combo.currentTextChanged.connect(self._on_hotkey_changed)
         self.set_config(config)
 
@@ -109,9 +123,13 @@ class SettingsPage(QWidget):
         self.ask_elevation_box.blockSignals(True)
         self.ask_elevation_box.setChecked(automation.ask_elevation_on_start)
         self.ask_elevation_box.blockSignals(False)
-        self.align_window_box.blockSignals(True)
-        self.align_window_box.setChecked(automation.align_window_before_click)
-        self.align_window_box.blockSignals(False)
+        self.input_mode_combo.blockSignals(True)
+        index = self.input_mode_combo.findData(automation.input_mode)
+        self.input_mode_combo.setCurrentIndex(index if index >= 0 else 0)
+        self.input_mode_combo.blockSignals(False)
+        self.restore_cursor_box.blockSignals(True)
+        self.restore_cursor_box.setChecked(automation.restore_cursor_after_click)
+        self.restore_cursor_box.blockSignals(False)
         self.hotkey_combo.blockSignals(True)
         self.hotkey_combo.setCurrentText(automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME)
         self.hotkey_combo.blockSignals(False)
@@ -136,8 +154,14 @@ class SettingsPage(QWidget):
         self._config.automation.ask_elevation_on_start = self.ask_elevation_box.isChecked()
         self._on_changed()
 
-    def _on_align_window_toggled(self) -> None:
-        self._config.automation.align_window_before_click = self.align_window_box.isChecked()
+    def _on_input_mode_changed(self) -> None:
+        mode = self.input_mode_combo.currentData()
+        if mode:
+            self._config.automation.input_mode = mode
+            self._on_changed()
+
+    def _on_restore_cursor_toggled(self) -> None:
+        self._config.automation.restore_cursor_after_click = self.restore_cursor_box.isChecked()
         self._on_changed()
 
     def _on_hotkey_changed(self, name: str) -> None:

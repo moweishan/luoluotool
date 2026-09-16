@@ -168,6 +168,24 @@
 
 **边界**：用户在自己机器上以"理解原理"为目的的独立研究属其自由；工程负责人**不提供绕过步骤、不编写相关代码**，也不将该能力并入本项目。
 
+### 4.2.3 真实鼠标键盘通道（Phase 5.3，2026-09-16 用户选定）
+
+用户明确指示改用「直接移动真实鼠标 + 模拟真实键盘」的方案，并提出硬规则：**每一次鼠标点击与键盘输入之前都必须校验游戏窗口是否在最顶层，不在最顶层时将窗口置于最顶层再输入或点击**。
+
+实现（`automation/real_input.py` + `RealInputSender`）：
+
+| 要求 | 落实方式 |
+|---|---|
+| 每次输入前校验是否在最顶层 | `real_input.ensure_window_front()` 在**每一次** `click_at()`/`key_tap()` 前调用（有测试断言调用次数） |
+| 不在最顶层则置顶 | `SetWindowPos(HWND_TOPMOST)`（`SWP_NOSIZE|SWP_NOMOVE|SWP_SHOWWINDOW|SWP_NOACTIVATE`） |
+| 键盘必须落在游戏窗口 | 置顶之外再 `SetForegroundWindow`（前台锁定失败时用 `AttachThreadInput` 兜底），并**回读 `GetForegroundWindow` 复核** |
+| 无法确保在最前 | **绝不输入**：返回 `FrontResult.ok=False` → 抛可读错误拒绝本次输入 |
+| 最小化窗口 | 先 `ShowWindow(SW_RESTORE)` 再置顶/置前 |
+| 输入后收拾现场 | 取消**本次由我们设置的**置顶（避免游戏窗口长期浮在最上层）；按 `restore_cursor_after_click` 把真实光标移回原位 |
+| 注入面收敛 | `SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`（有跨模块守卫测试） |
+
+**代价（用户已知情并选择）**：输入期间会**抢前台**，因此运行时不宜同时操作其它软件；`pause_on_window_focus_loss` 对该通道自动失效（否则会互相等待：暂停 → 不输入 → 永不复位），并在日志中说明。
+
 ### 4.3 已确认的风险（用户已知悉，后果自负）
 
 1. **反作弊可能直接拦截**：内核级输入驱动会被反作弊识别，可能导致游戏**无法启动**（例如出现 “Please Close Interception Before Starting the Game”），需卸载驱动并重启才能恢复；
@@ -203,7 +221,7 @@
 | GUI | **PySide6**（Qt for Python） | 原生渲染快、QSS 可做出简洁大气的主题、QThread 成熟、LGPL 允许闭源分发（动态链接） |
 | 配置 | 标准库 JSON + dataclass + 手写 schema 校验 | 无数据库需求；避免 pydantic 增大 exe 体积 |
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
-| 输入模拟 | 窗口消息（`SendMessageTimeout` 同步 + `PostMessage` 悬停 + `WindowFromPoint` 子窗口定位，**默认**）；对「按真实光标取点」的游戏启用 **`align_window_before_click`（点击前对齐窗口，Phase 5.2，推荐）**；用户态合成输入（`SendInput`/`SetCursorPos`）与驱动级注入仅在有明确需求时逐项授权（见 §4.1） | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
+| 输入模拟 | 由 `automation.input_mode` 选择：① `window_message` 窗口消息（默认，零侵入、不抢前台，但被「按真实光标取点」的游戏忽略坐标）② `window_align` 点击前对齐窗口（Phase 5.2：点准且不动光标，代价是游戏窗口短暂位移）③ `real_input` 真实鼠标键盘（Phase 5.3：`SendInput` 真实移动光标 + 模拟真实键鼠，每次输入前校验并置顶/置前游戏窗口，代价是**抢前台**；点击后按 `restore_cursor_after_click` 还原光标） | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
 | 窗口查找/截图 | pywin32（win32gui / win32ui） | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
@@ -232,6 +250,7 @@ LuoLuoTool/
 │   │   ├── elevation.py     # 进程/窗口权限检测与 UAC 提权重启
 │   │   ├── input_sender.py  # 后台窗口消息输入（click/key，不接管真实键鼠）
 │   │   ├── window_align.py  # 点击前把目标坐标对齐到静止光标下方（移动窗口，不移动光标）
+│   │   ├── real_input.py    # 真实键鼠输入（SendInput）：唯一允许调用注入 API 的模块 + 输入前置顶校验
 │   │   └── hotkey.py        # F8 全局急停
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
@@ -265,10 +284,11 @@ LuoLuoTool/
 | automation | 找窗口、截图、向窗口发送鼠标/键盘消息（不接管真实键鼠）、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
 | automation（对齐窗口点击） | 点击前把目标客户区坐标对齐到静止光标下方（移动窗口、不移动光标）并还原窗口 | `WindowAlignSender.click_at(x, y)`（`build_channel` 按 `automation.align_window_before_click` 选择）; `window_align.wait_cursor_idle(...) -> (bool, float)`, `window_align.align_window(hwnd, x, y) -> AlignResult`, `window_align.restore_window(hwnd, rect) -> bool`, `window_align.is_maximized(hwnd) -> bool`, `window_align.compute_window_origin(cursor, target, frame_offset)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
+| automation（真实键鼠） | 真实移动光标 + 模拟真实键鼠；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入 | `RealInputSender.click_at(x, y)` / `key_tap(vk)`（`build_channel` 按 `automation.input_mode == real_input` 选择）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click()`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v3）
+## 9. 数据结构（配置文件 schema v4）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
@@ -300,7 +320,8 @@ LuoLuoTool/
     "pause_on_window_focus_loss": true,
     "failsafe_hotkey": "F8",
     "ask_elevation_on_start": true,
-    "align_window_before_click": false
+    "input_mode": "window_message",
+    "restore_cursor_after_click": true
   },
   "logging": { "level": "INFO", "max_file_mb": 2, "backup_count": 3 }
 }
@@ -321,6 +342,7 @@ LuoLuoTool/
 |---|---|---|
 | v1 → v2 | 新增 `automation.ask_elevation_on_start`（默认 `true` = 启动时询问提权）；`false` 表示不再询问 | `validation.migrate()` → `_migrate_v1_to_v2` |
 | v2 → v3 | 新增 `automation.align_window_before_click`（默认 `false` = 不移动窗口；`true` = 点击前对齐游戏窗口，见 §5） | `validation.migrate()` → `_migrate_v2_to_v3` |
+| v3 → v4 | `align_window_before_click` 布尔升级为 `automation.input_mode` 枚举（`window_message` / `window_align` / `real_input`），并新增 `automation.restore_cursor_after_click`（默认 `true`）；旧布尔 `true` 无损迁移为 `window_align` | `validation.migrate()` → `_migrate_v3_to_v4` |
 
 > 另一组 v3 字段（`automation.input_mode` / `pointer_type`）曾于 2026-09-15 随合成指针通道短暂实现并**随该通道撤回**（见 §4.2.1），未成为正式 schema：其迁移函数与字段已移除。当前 v3 的语义**只包含** `align_window_before_click`；若某份配置里还残留那两个字段，`from_dict` 会忽略它们并在下次保存时清除。
 

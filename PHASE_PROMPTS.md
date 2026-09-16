@@ -309,6 +309,46 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+## Phase 5.3 — 真实鼠标键盘输入通道（SendInput，输入前置顶校验）
+
+**背景（用户指示，2026-09-16）**：用户明确改用「**直接移动真实鼠标 + 模拟真实键盘**」的方案，并提出硬规则：
+
+> 「注意使用此方案时每次一次鼠标点击和键盘输入前都必须校验游戏窗口是否至于最顶层，不在最顶层时将窗口置于最顶层再输入或点击」
+
+（背景：此前三档方案的代价分别是——触摸注入让系统隐藏指针、对齐窗口让游戏窗口短暂位移、窗口消息被游戏忽略；用户选择接受"抢前台 + 移动真实光标"这一档。）
+
+**本次只做什么**：
+
+1. `src/luoluotool/automation/real_input.py`（新）：**唯一允许调用输入注入 API 的模块**
+   - `ensure_window_front(hwnd) -> FrontResult`：**每次输入前**执行——最小化先 `SW_RESTORE`；未置顶则 `SetWindowPos(HWND_TOPMOST, SWP_NOSIZE|SWP_NOMOVE|SWP_SHOWWINDOW|SWP_NOACTIVATE)`；不在前台则 `SetForegroundWindow`（前台锁定失败用 `AttachThreadInput` 兜底）并**回读 `GetForegroundWindow` 复核**；仍不行则返回 `ok=False`（调用方据此拒绝输入）；
+   - `release_topmost(hwnd)`、`is_topmost()`、`is_foreground()`、`is_minimized()`、`client_to_screen()`；
+   - 输入原语：`move_cursor_absolute()`（绝对移动、`VIRTUALDESK` 归一化）、`send_left_click()`、`send_key_tap()`（扫描码按下/抬起，保证不卡键）、`get_cursor_pos()`、`set_cursor_pos()`；
+   - `normalize_absolute()` 纯函数（多显示器虚拟桌面归一化，有单测）。
+2. `src/luoluotool/automation/input_sender.py`：`RealInputSender` —— 每次 `click_at()`/`key_tap()` 前调 `ensure_window_front`，失败即抛可读错误且**不输入**；点击后按 `restore_cursor_after_click` 还原光标；`finally` 里取消本次由我们设置的置顶；`move_to()` 不移动真实光标（仅记 debug 日志）。
+3. `src/luoluotool/config/{models,validation}.py`：`automation.input_mode`（`window_message` / `window_align` / `real_input`）+ `automation.restore_cursor_after_click`（默认 `true`）→ **schema v4 + `_migrate_v3_to_v4`**（旧的 `align_window_before_click=true` 无损升级为 `input_mode=window_align`）+ 枚举与布尔校验；`config.example.json` 同步。
+4. `gui/pages/settings.py`：「输入方式」下拉（三项，含代价说明）+「每次点击后把真实鼠标移回原位置」勾选。
+5. `build_channel`：三档分流；`real_input` 档**强制关闭**「窗口失焦时暂停」（该通道自己抢前台，否则互相等待）并记日志。
+6. 测试（全部注入假 user32 / 假 real_input，**单测零真实输入**）：置顶+置前顺序、已在前台且置顶时不打扰、最小化先恢复、`AttachThreadInput` 兜底、无法置前时拒绝输入、`_set_window_pos` 的 pywin32-None 语义回归、绝对坐标归一化（含多显示器）、点击按下/抬起、键盘扫描码、**每次输入都重新校验**、还原光标可配置、异常时也还原并取消置顶、`move_to` 不动光标、三档 `build_channel`、schema v3→v4 迁移与枚举校验、设置页绑定、**注入 API 只允许出现在 `real_input.py`** 的跨模块守卫。
+7. 文档：`PROJECT_SPEC.md` §4.2.3（用户硬规则与落实方式表）、§5、§6、§7、§8、§9（schema v4 迁移记录）、`AGENTS.md` §2、`CHECKLIST.md`、`README.md`。
+
+**不要做什么**：不实现绕过/对抗反作弊（见 §4.2.2，工程负责人不执行项）；不在无法确保窗口在最前时输入；不让游戏窗口长期保持 TOPMOST；不把注入 API 扩散到 `real_input.py` 以外；不改动窗口消息与对齐通道的既有行为。
+
+**验收命令**：
+```bash
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest tests/test_automation -q --cov=src/luoluotool/automation --cov-report=term-missing
+.venv\Scripts\python -m luoluotool --validate-config
+.venv\Scripts\python -m luoluotool --smoke-gui
+```
+
+**完成标准**：
+- [ ] 全量测试通过；`real_input.py` 覆盖率 ≥ 80%，单测零真实输入。
+- [ ] `config.json` 自动迁移到 v4；`--validate-config` 输出 `OK`。
+- [ ] 设置页可切「输入方式」三档、可关「还原鼠标位置」；保存后配置反映、重启保持。
+- [ ] **手动验收**：切到「真实鼠标键盘」→ 真实模式启动 → 游戏在配置坐标处响应；**每次点击/按键前**游戏窗口被置顶（若原本不在最顶层）；点击后鼠标回到原位置（开关打开时）；F8/F9 可急停；窗口最小化/无法置前时日志给出可读原因且**不产生输入**。
+
+---
+
 ## Phase 6 — 卡订单与预留功能页闭环
 
 **阶段目标**：功能二/三/四在主流程中形成完整闭环（开关→运行→日志），无推测性逻辑。

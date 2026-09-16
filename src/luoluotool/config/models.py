@@ -1,10 +1,16 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v3（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v4（dataclass 实现）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
+
+# 输入方式（automation.input_mode）
+INPUT_MODE_WINDOW_MESSAGE = "window_message"   # 窗口消息（默认，不抢前台）
+INPUT_MODE_WINDOW_ALIGN = "window_align"       # 点击前对齐游戏窗口（点准、不动光标，窗口短暂位移）
+INPUT_MODE_REAL_INPUT = "real_input"           # 真实鼠标键盘（SendInput；每次输入前置顶/置前，会抢前台）
+INPUT_MODES = (INPUT_MODE_WINDOW_MESSAGE, INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_REAL_INPUT)
 
 
 @dataclass
@@ -132,9 +138,10 @@ class AutomationConfig:
     pause_on_window_focus_loss: bool = True
     failsafe_hotkey: str = "F8"
     ask_elevation_on_start: bool = True
-    # 点击前把游戏窗口对齐到静止光标下方（不移动真实光标）：
-    # 适用于「按真实光标位置决定点击落点」的游戏，默认关闭以免移动他人窗口。
-    align_window_before_click: bool = False
+    # 输入方式：窗口消息（默认）/ 对齐窗口点击 / 真实鼠标键盘（SendInput）
+    input_mode: str = INPUT_MODE_WINDOW_MESSAGE
+    # 真实键鼠通道：每次点击后是否把真实光标移回原位（用户要求"动作后还原光标"可配置）
+    restore_cursor_after_click: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -146,7 +153,8 @@ class AutomationConfig:
             "pause_on_window_focus_loss": self.pause_on_window_focus_loss,
             "failsafe_hotkey": self.failsafe_hotkey,
             "ask_elevation_on_start": self.ask_elevation_on_start,
-            "align_window_before_click": self.align_window_before_click,
+            "input_mode": self.input_mode,
+            "restore_cursor_after_click": self.restore_cursor_after_click,
         }
 
     @classmethod
@@ -160,7 +168,8 @@ class AutomationConfig:
             data.get("pause_on_window_focus_loss", True),
             data.get("failsafe_hotkey", "F8"),
             data.get("ask_elevation_on_start", True),
-            data.get("align_window_before_click", False),
+            data.get("input_mode", INPUT_MODE_WINDOW_MESSAGE),
+            data.get("restore_cursor_after_click", True),
         )
 
 

@@ -1,5 +1,5 @@
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -39,7 +39,8 @@
     "pause_on_window_focus_loss": true,
     "failsafe_hotkey": "F8",
     "ask_elevation_on_start": true,
-    "align_window_before_click": false
+    "input_mode": "window_message",
+    "restore_cursor_after_click": true
   },
   "logging": {
     "level": "INFO",

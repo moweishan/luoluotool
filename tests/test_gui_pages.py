@@ -115,15 +115,38 @@ def test_settings_page_binds_ask_elevation_switch() -> None:
     page.close()
 
 
-def test_settings_page_binds_align_window_switch() -> None:
-    """设置页「点击前对齐游戏窗口」绑定 automation.align_window_before_click（默认关闭）。"""
+def test_settings_page_binds_input_mode_and_restore_cursor() -> None:
+    """设置页「输入方式」下拉绑定 automation.input_mode；「还原鼠标位置」绑定对应开关。"""
+    from luoluotool.config.models import (
+        INPUT_MODE_REAL_INPUT,
+        INPUT_MODE_WINDOW_ALIGN,
+        INPUT_MODE_WINDOW_MESSAGE,
+    )
+
     config = AppConfig.default()
     page = SettingsPage(config, lambda: None)
-    assert page.align_window_box.isChecked() is False  # 默认关闭：不动他人窗口
-    page.align_window_box.setChecked(True)
-    assert config.automation.align_window_before_click is True
+    # 默认：窗口消息 + 还原鼠标
+    assert page.input_mode_combo.currentData() == INPUT_MODE_WINDOW_MESSAGE
+    assert page.restore_cursor_box.isChecked() is True
+    modes = [page.input_mode_combo.itemData(i) for i in range(page.input_mode_combo.count())]
+    assert modes == [INPUT_MODE_WINDOW_MESSAGE, INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_REAL_INPUT]
+
+    page.input_mode_combo.setCurrentIndex(modes.index(INPUT_MODE_REAL_INPUT))
+    assert config.automation.input_mode == INPUT_MODE_REAL_INPUT
+    page.restore_cursor_box.setChecked(False)
+    assert config.automation.restore_cursor_after_click is False
+
     config2 = AppConfig.default()
-    config2.automation.align_window_before_click = True
+    config2.automation.input_mode = INPUT_MODE_WINDOW_ALIGN
+    config2.automation.restore_cursor_after_click = False
     page.set_config(config2)
-    assert page.align_window_box.isChecked() is True
+    assert page.input_mode_combo.currentData() == INPUT_MODE_WINDOW_ALIGN
+    assert page.restore_cursor_box.isChecked() is False
+    page.close()
+
+    # 配置里出现未知取值时不得崩溃（回落到第一项）
+    config3 = AppConfig.default()
+    config3.automation.input_mode = "unknown"
+    page.set_config(config3)
+    assert page.input_mode_combo.currentData() == INPUT_MODE_WINDOW_MESSAGE
     page.close()

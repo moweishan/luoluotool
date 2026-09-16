@@ -55,13 +55,26 @@ def top_window_target(monkeypatch):
 
 
 def test_source_contains_no_input_takeover_apis() -> None:
-    """红线：src 全量源码中不得出现接管真实键鼠的接口名。"""
-    forbidden = ("Send" + "Input", "SetCursor" + "Pos", "mouse_" + "event")
+    """架构红线（2026-09-16 更新）：输入注入 API 只允许出现在 `real_input.py` 里。
+
+    背景：用户选定「真实鼠标键盘（SendInput）」方案后，`real_input.py` 成为唯一允许直接调用
+    注入 API 的模块；其余模块（含本模块 `input_sender.py` 的各发送器）只能调用 `real_input`
+    暴露的语义化函数，便于审计、替换与回归。
+    """
+    forbidden_calls = (
+        "Send" + "Input(",
+        "SetCursor" + "Pos(",
+        "mouse_" + "event(",
+        "keybd_" + "event(",
+        "InjectSyntheticPointer" + "Input(",
+    )
     offenders: list[str] = []
     for path in SRC_ROOT.rglob("*.py"):
+        if path.name == "real_input.py":
+            continue  # 唯一允许的注入入口（有独立守卫测试覆盖它）
         text = path.read_text(encoding="utf-8")
-        offenders.extend(f"{path.name}:{name}" for name in forbidden if name in text)
-    assert offenders == []
+        offenders.extend(f"{path.name}:{call}" for call in forbidden_calls if call in text)
+    assert offenders == [], f"这些模块不得直接调用输入注入 API：{offenders}"
 
 
 def test_pack_point_packs_client_coordinates() -> None:

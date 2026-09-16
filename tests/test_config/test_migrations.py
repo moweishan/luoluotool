@@ -1,6 +1,10 @@
-"""config 迁移测试：schema v1 → v2 → v3。"""
+"""config 迁移测试：schema v1 → v2 → v3 → v4。"""
 
-from luoluotool.config.models import SCHEMA_VERSION
+from luoluotool.config.models import (
+    INPUT_MODE_WINDOW_ALIGN,
+    INPUT_MODE_WINDOW_MESSAGE,
+    SCHEMA_VERSION,
+)
 from luoluotool.config.validation import migrate
 
 
@@ -39,7 +43,7 @@ def test_migrate_v1_to_v2_adds_field_and_preserves_values() -> None:
     raw = v1_raw()
     raw["automation"]["click_interval_ms"] = 1234
     migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 3  # 一次迁移到最新版本
+    assert migrated["schema_version"] == SCHEMA_VERSION == 4  # 一次迁移到最新版本
     assert migrated["automation"]["ask_elevation_on_start"] is True
     assert migrated["automation"]["click_interval_ms"] == 1234
     assert migrated["automation"]["dry_run"] is True
@@ -75,27 +79,60 @@ def v2_raw() -> dict:
 
 
 def test_migrate_v2_to_v3_adds_align_window_flag() -> None:
-    """v2 → v3：新增「点击前对齐游戏窗口」开关，默认关闭，其余取值保持不变。"""
+    """v2 一路迁移到最新版本：v3 补上对齐开关，v4 再把该布尔升级为 input_mode 枚举。"""
     raw = v2_raw()
     raw["automation"]["click_interval_ms"] = 1500
     migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 3
-    assert migrated["automation"]["align_window_before_click"] is False
+    assert migrated["schema_version"] == SCHEMA_VERSION == 4
+    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_MESSAGE
+    assert "align_window_before_click" not in migrated["automation"]
+    assert migrated["automation"]["restore_cursor_after_click"] is True
     assert migrated["automation"]["click_interval_ms"] == 1500
     assert migrated["automation"]["ask_elevation_on_start"] is False
     assert migrated["automation"]["dry_run"] is True
 
 
-def test_migrate_v1_all_the_way_to_v3() -> None:
-    """老配置必须能一次连跳两级（v1 → v2 → v3）。"""
+def test_migrate_v1_all_the_way_to_v4() -> None:
+    """老配置必须能一次连跳三级（v1 → v2 → v3 → v4）。"""
     migrated = migrate(v1_raw())
-    assert migrated["schema_version"] == SCHEMA_VERSION == 3
+    assert migrated["schema_version"] == SCHEMA_VERSION == 4
     assert migrated["automation"]["ask_elevation_on_start"] is True
-    assert migrated["automation"]["align_window_before_click"] is False
+    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_MESSAGE
 
 
-def test_migrate_v2_to_v3_keeps_existing_align_value() -> None:
-    """已经是 v2 但已手工写了新字段时，迁移不得覆盖用户取值。"""
+def test_migrate_v3_align_true_becomes_window_align_mode() -> None:
+    """v3 里 align_window_before_click=true 的配置必须无损升级为 input_mode=window_align。"""
     raw = v2_raw()
+    raw["schema_version"] = 3
     raw["automation"]["align_window_before_click"] = True
-    assert migrate(raw)["automation"]["align_window_before_click"] is True
+    migrated = migrate(raw)
+    assert migrated["schema_version"] == 4
+    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_ALIGN
+    assert "align_window_before_click" not in migrated["automation"]
+
+
+def test_migrate_v3_align_false_becomes_window_message_mode() -> None:
+    """v3 里 align_window_before_click=false → input_mode 保持默认 window_message。"""
+    raw = v2_raw()
+    raw["schema_version"] = 3
+    raw["automation"]["align_window_before_click"] = False
+    migrated = migrate(raw)
+    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_MESSAGE
+
+
+def test_migrate_v3_to_v4_keeps_existing_input_mode() -> None:
+    """已经是 v3 但已手工写了 input_mode 时，迁移不得覆盖用户取值。"""
+    raw = v2_raw()
+    raw["schema_version"] = 3
+    raw["automation"]["input_mode"] = "real_input"
+    assert migrate(raw)["automation"]["input_mode"] == "real_input"
+
+
+def test_migrate_v2_to_v3_keeps_existing_align_value(monkeypatch) -> None:
+    """v2 里已手工写了 v4 字段时同样不得被覆盖。"""
+    raw = v2_raw()
+    raw["automation"]["input_mode"] = "real_input"
+    raw["automation"]["restore_cursor_after_click"] = False
+    migrated = migrate(raw)
+    assert migrated["automation"]["input_mode"] == "real_input"
+    assert migrated["automation"]["restore_cursor_after_click"] is False

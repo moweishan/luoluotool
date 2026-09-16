@@ -14,9 +14,9 @@ from typing import Protocol
 
 import win32gui
 
-from luoluotool.automation import window_align
+from luoluotool.automation import real_input, window_align
 from luoluotool.automation.window import find_window
-from luoluotool.config.models import AppConfig
+from luoluotool.config.models import INPUT_MODE_REAL_INPUT, INPUT_MODE_WINDOW_ALIGN, AppConfig
 
 logger = logging.getLogger(__name__)
 
@@ -235,6 +235,77 @@ class WindowAlignSender:
             self._logger.error("窗口还原失败：请手动把游戏窗口移回 (%d, %d)", rect[0], rect[1])
 
 
+class RealInputSender:
+    """真实键鼠输入通道（`SendInput`）：真实移动光标 + 模拟真实鼠标/键盘。
+
+    硬规则（用户 2026-09-16 指定，**每次**点击/按键前都执行）：校验游戏窗口是否在最顶层，
+    不在则先置顶再置前；无法确保窗口在最前时**绝不输入**（抛可读错误）。
+    每次点击后按配置把真实光标移回原位；输入结束取消由我们设置的 TOPMOST。
+
+    代价（用户已知情并选择）：输入期间会抢前台，因此运行时不宜同时操作其它软件。
+    """
+
+    def __init__(
+        self,
+        hwnd: int,
+        restore_cursor: bool = True,
+        log: logging.Logger | None = None,
+        sleep: Callable[[float], None] | None = None,
+    ) -> None:
+        self.hwnd = hwnd
+        self.restore_cursor = restore_cursor
+        self._logger = log or logger
+        self._sleep = sleep if sleep is not None else time.sleep
+
+    def move_to(self, x: int, y: int) -> None:
+        """悬停不点击：真实输入通道下不做任何光标移动（避免无意义地干扰用户的鼠标）。"""
+        self._logger.debug("真实输入通道不执行悬停，已忽略 move_to(%d, %d)", x, y)
+
+    def click(self, x: int, y: int) -> None:
+        self.click_at(x, y)
+
+    def click_at(self, x: int, y: int) -> None:
+        front = self._ensure_front_or_raise("点击")
+        saved = real_input.get_cursor_pos()
+        try:
+            screen = real_input.client_to_screen(self.hwnd, (x, y))
+            real_input.move_cursor_absolute(*screen)
+            self._sleep(real_input.INPUT_SETTLE_SECONDS)
+            if not real_input.send_left_click(self._sleep):
+                raise WindowUnavailableError("真实鼠标点击注入失败（SendInput 未被系统接受）")
+            self._logger.info(
+                "真实点击完成：客户区 (%d, %d) → 屏幕 %s（已确保窗口在最顶层）", x, y, screen
+            )
+        finally:
+            if self.restore_cursor:
+                real_input.set_cursor_pos(*saved)
+            self._release_topmost_if_needed(front)
+
+    def key_tap(self, vk: int) -> None:
+        front = self._ensure_front_or_raise("按键")
+        try:
+            if not real_input.send_key_tap(vk, self._sleep):
+                raise WindowUnavailableError("真实按键注入失败（SendInput 未被系统接受）")
+            self._logger.info("真实按键完成：vk=%d（已确保窗口在最顶层）", vk)
+        finally:
+            self._release_topmost_if_needed(front)
+
+    def _ensure_front_or_raise(self, action: str) -> real_input.FrontResult:
+        if not is_window_ready(self.hwnd):
+            raise WindowUnavailableError("游戏窗口已最小化或不可见，已取消本次%s" % action)
+        front = real_input.ensure_window_front(self.hwnd, self._logger, self._sleep)
+        if not front.ok:
+            raise WindowUnavailableError(
+                f"无法把游戏窗口置于最前，已取消本次{action}（真实键鼠输入只能送到最前窗口）：{front.reason}"
+            )
+        return front
+
+    def _release_topmost_if_needed(self, front: real_input.FrontResult) -> None:
+        """只取消"本次由我们设置的"置顶，避免改变用户原本的窗口层级。"""
+        if front.set_topmost and not real_input.release_topmost(self.hwnd):
+            self._logger.warning("取消窗口置顶失败：游戏窗口可能仍浮在所有窗口之上")
+
+
 def window_exists(hwnd: int) -> bool:
     """窗口句柄是否仍然有效。"""
     return bool(win32gui.IsWindow(hwnd))
@@ -320,12 +391,25 @@ def build_channel(
         raise WindowUnavailableError(f"未找到标题含“{keyword}”的窗口，请确认游戏已窗口化运行")
     if not is_window_ready(hwnd):
         raise WindowUnavailableError("游戏窗口已最小化或不可见，请恢复窗口后重试")
-    gate = WindowReadinessGate(
-        hwnd, config.automation.pause_on_window_focus_loss, stop_event, sleep, log
-    )
-    sender: InputSender = (
-        WindowAlignSender(hwnd, log, sleep)
-        if config.automation.align_window_before_click
-        else WindowMessageSender(hwnd, log, sleep)
-    )
+    mode = config.automation.input_mode
+    if mode == INPUT_MODE_REAL_INPUT:
+        # 真实键鼠通道自己会在每次输入前抢前台；若再叠加"失焦暂停"会互相等待（暂停→不输入→永不复位）
+        if config.automation.pause_on_window_focus_loss:
+            (log or logger).info(
+                "输入方式=真实鼠标键盘：已忽略「窗口失焦时暂停」（该通道每次输入前会自行把游戏窗口置前）"
+            )
+        gate = WindowReadinessGate(hwnd, False, stop_event, sleep, log)
+        sender: InputSender = RealInputSender(
+            hwnd, config.automation.restore_cursor_after_click, log, sleep
+        )
+    elif mode == INPUT_MODE_WINDOW_ALIGN:
+        gate = WindowReadinessGate(
+            hwnd, config.automation.pause_on_window_focus_loss, stop_event, sleep, log
+        )
+        sender = WindowAlignSender(hwnd, log, sleep)
+    else:
+        gate = WindowReadinessGate(
+            hwnd, config.automation.pause_on_window_focus_loss, stop_event, sleep, log
+        )
+        sender = WindowMessageSender(hwnd, log, sleep)
     return InputChannel(sender, gate.wait_until_ready)

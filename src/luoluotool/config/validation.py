@@ -2,7 +2,7 @@
 
 import logging
 
-from luoluotool.config.models import SCHEMA_VERSION
+from luoluotool.config.models import INPUT_MODES, INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_WINDOW_MESSAGE, SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +27,7 @@ _BOOL_PATHS = (
     "automation.dry_run",
     "automation.pause_on_window_focus_loss",
     "automation.ask_elevation_on_start",
-    "automation.align_window_before_click",
+    "automation.restore_cursor_after_click",
 )
 _INT_BOUNDS = (
     ("automation.click_interval_ms", 100, 5000),
@@ -40,6 +40,7 @@ _INT_BOUNDS = (
 _STR_LIMITS = (
     ("automation.window_title_keyword", 100),
     ("automation.failsafe_hotkey", 20),
+    ("automation.input_mode", 20),
 )
 
 
@@ -133,7 +134,20 @@ def _migrate_v2_to_v3(raw: dict) -> dict:
     return migrated
 
 
-_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3}
+def _migrate_v3_to_v4(raw: dict) -> dict:
+    """v3 → v4：布尔开关 `align_window_before_click` 升级为枚举 `input_mode`，并新增还原光标开关。"""
+    automation = dict(raw.get("automation") or {})
+    align = automation.pop("align_window_before_click", False)
+    automation.setdefault(
+        "input_mode", INPUT_MODE_WINDOW_ALIGN if align else INPUT_MODE_WINDOW_MESSAGE
+    )
+    automation.setdefault("restore_cursor_after_click", True)
+    migrated = dict(raw)
+    migrated["automation"] = automation
+    return migrated
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4}
 
 
 def migrate(raw: object) -> object:
@@ -186,6 +200,10 @@ def validate(raw: object) -> list[str]:
         value = _get(raw, path)
         if not isinstance(value, str) or not value or len(value) > max_len:
             errors.append(f"{path} 必须是非空字符串（最长 {max_len}）")
+    if "automation" not in missing:
+        mode = _get(raw, "automation.input_mode")
+        if isinstance(mode, str) and mode not in INPUT_MODES:
+            errors.append(f"automation.input_mode 必须是 {'/'.join(INPUT_MODES)} 之一")
     if "logging" not in missing:
         level = _get(raw, "logging.level")
         if not isinstance(level, str) or level not in _LOG_LEVELS:

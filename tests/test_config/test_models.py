@@ -4,9 +4,9 @@ from luoluotool.config import models
 
 
 def test_defaults_are_safe() -> None:
-    """出厂默认：开关全关，dry_run 开启，schema_version=3。"""
+    """出厂默认：开关全关，dry_run 开启，schema_version=4。"""
     config = models.AppConfig.default()
-    assert config.schema_version == models.SCHEMA_VERSION == 3
+    assert config.schema_version == models.SCHEMA_VERSION == 4
     assert config.automation.dry_run is True
     assert config.automation.pause_on_window_focus_loss is True
     assert config.features.daily_tasks.enabled is False
@@ -92,7 +92,8 @@ def test_to_dict_keys_match_schema_v1() -> None:
         "pause_on_window_focus_loss",
         "failsafe_hotkey",
         "ask_elevation_on_start",
-        "align_window_before_click",
+        "input_mode",
+        "restore_cursor_after_click",
     }
     assert set(data["logging"]) == {"level", "max_file_mb", "backup_count"}
     task = data["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]

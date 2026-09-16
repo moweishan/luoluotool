@@ -29,11 +29,11 @@ def test_root_must_be_dict() -> None:
 
 def test_schema_version_checks() -> None:
     raw = _default_raw()
-    raw["schema_version"] = 4
+    raw["schema_version"] = 5
     assert any("schema_version" in e for e in validate(raw))
     raw["schema_version"] = 0
     assert any("schema_version" in e for e in validate(raw))
-    raw["schema_version"] = "3"
+    raw["schema_version"] = "4"
     assert any("schema_version" in e for e in validate(raw))
     del raw["schema_version"]
     assert any("schema_version" in e for e in validate(raw))
@@ -58,7 +58,7 @@ _BOOL_PATHS = (
     "automation.dry_run",
     "automation.pause_on_window_focus_loss",
     "automation.ask_elevation_on_start",
-    "automation.align_window_before_click",
+    "automation.restore_cursor_after_click",
 )
 
 

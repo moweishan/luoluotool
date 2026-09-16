@@ -11,7 +11,7 @@ from luoluotool.automation.input_sender import (
     WindowMessageSender,
     WindowUnavailableError,
 )
-from luoluotool.config.models import AppConfig
+from luoluotool.config.models import INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_WINDOW_MESSAGE, AppConfig
 
 
 @pytest.fixture(autouse=True)
@@ -166,11 +166,11 @@ def test_build_channel_uses_align_sender_when_enabled(monkeypatch) -> None:
 
     config = AppConfig.default()
     config.automation.dry_run = False
-    config.automation.align_window_before_click = True
+    config.automation.input_mode = INPUT_MODE_WINDOW_ALIGN
     channel = input_sender.build_channel(config, __import__("threading").Event(), lambda _s: None)
     assert isinstance(channel.sender, WindowAlignSender)
 
-    config.automation.align_window_before_click = False
+    config.automation.input_mode = INPUT_MODE_WINDOW_MESSAGE
     channel = input_sender.build_channel(config, __import__("threading").Event(), lambda _s: None)
     assert isinstance(channel.sender, WindowMessageSender)
     assert not isinstance(channel.sender, WindowAlignSender)
