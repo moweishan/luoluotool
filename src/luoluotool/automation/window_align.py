@@ -80,8 +80,17 @@ def is_maximized(hwnd: int) -> bool:
 
 
 def _move_window(hwnd: int, left: int, top: int) -> bool:
-    """只移动窗口左上角（不改尺寸、不激活、不改 z 序）。"""
-    return bool(win32gui.SetWindowPos(hwnd, 0, int(left), int(top), 0, 0, ALIGN_FLAGS))
+    """只移动窗口左上角（不改尺寸、不激活、不改 z 序）；失败返回 False。
+
+    注意：pywin32 的 `win32gui.SetWindowPos` **成功时返回 `None`、失败时抛异常**，
+    因此不能用 `bool(...)` 判成败（否则永远为假，对齐通道会在真实窗口上必然失败）。
+    """
+    try:
+        win32gui.SetWindowPos(hwnd, 0, int(left), int(top), 0, 0, ALIGN_FLAGS)
+    except Exception as exc:  # 窗口已关闭 / 权限不足 / 句柄失效等
+        logger.warning("移动窗口失败（hwnd=%s，目标位置=(%s, %s)）：%s", hwnd, left, top, exc)
+        return False
+    return True
 
 
 def compute_window_origin(

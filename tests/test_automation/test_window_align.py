@@ -27,6 +27,49 @@ def test_compute_window_origin_handles_negative_offsets() -> None:
     assert (left, top) == (-200, -300)
 
 
+def test_move_window_treats_pywin32_none_return_as_success(monkeypatch) -> None:
+    """回归测试：pywin32 的 `SetWindowPos` 成功时返回 None、失败才抛异常。
+
+    曾经用 `bool(SetWindowPos(...))` 判成败 → 永远为 False → 对齐通道在真实窗口上
+    必然报"对齐失败"且一次都不点击（单测因 monkeypatch 掉整个 `_move_window` 而漏掉）。
+    """
+    calls: list[tuple] = []
+
+    def fake_set_window_pos(hwnd, after, x, y, cx, cy, flags):
+        calls.append((hwnd, after, x, y, cx, cy, flags))
+        return None  # pywin32 成功时的真实返回值
+
+    monkeypatch.setattr(window_align.win32gui, "SetWindowPos", fake_set_window_pos)
+    assert window_align._move_window(555, 10, 20) is True
+    assert len(calls) == 1
+    assert calls[0][0] == 555 and calls[0][2:4] == (10, 20)
+    assert calls[0][6] == window_align.ALIGN_FLAGS
+
+
+def test_move_window_reports_failure_when_win32_raises(monkeypatch) -> None:
+    """pywin32 失败时抛异常（如窗口已关闭/拒绝访问）→ `_move_window` 必须返回 False。"""
+
+    def boom(*args, **kwargs):
+        raise OSError("拒绝访问（5）")
+
+    monkeypatch.setattr(window_align.win32gui, "SetWindowPos", boom)
+    assert window_align._move_window(555, 10, 20) is False
+
+
+def test_restore_window_reports_python_none_return_path(monkeypatch) -> None:
+    """还原路径走同一个 `_move_window`：成功返回 None 时也必须判为还原成功。"""
+    state = {"left": 700, "top": 500}
+
+    def fake_set_window_pos(hwnd, after, x, y, cx, cy, flags):
+        state["left"], state["top"] = x, y
+        return None
+
+    monkeypatch.setattr(window_align.win32gui, "SetWindowPos", fake_set_window_pos)
+    monkeypatch.setattr(window_align, "window_rect",
+                        lambda hwnd: (state["left"], state["top"], state["left"] + 100, state["top"] + 100))
+    assert window_align.restore_window(555, (100, 100, 1200, 800), sleep=lambda _s: None) is True
+
+
 class _FakeDesktop:
     """假桌面：窗口矩形、客户区原点、光标位置都可脚本化。"""
 
