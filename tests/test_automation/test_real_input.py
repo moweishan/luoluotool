@@ -408,22 +408,21 @@ def test_real_sender_move_to_never_moves_the_real_cursor(recording) -> None:
     assert recording.events == []
 
 
-def test_build_channel_selects_real_input_when_configured(monkeypatch) -> None:
-    """配置为真实键鼠时通道改用 RealInputSender，并关闭"失焦暂停"（该通道自己抢前台）。"""
+def test_build_channel_uses_real_input_in_real_mode(monkeypatch) -> None:
+    """真实模式（dry_run=False）下通道固定使用 RealInputSender（唯一保留的实现方式）。"""
     import threading
 
-    from luoluotool.config.models import INPUT_MODE_REAL_INPUT, AppConfig
+    from luoluotool.config.models import AppConfig
 
     monkeypatch.setattr(input_sender, "find_window", lambda keyword: 777)
     monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)
     config = AppConfig.default()
     config.automation.dry_run = False
-    config.automation.input_mode = INPUT_MODE_REAL_INPUT
-    config.automation.pause_on_window_focus_loss = True
+    config.automation.restore_cursor_after_click = False
     channel = input_sender.build_channel(config, threading.Event(), lambda _s: None)
     assert isinstance(channel.sender, RealInputSender)
-    assert isinstance(channel.sender, RealInputSender)
-    assert channel.sender.restore_cursor is True
+    assert channel.sender.restore_cursor is False
+    assert channel.readiness is not None
 
 
 def test_sendinput_is_confined_to_real_input_module() -> None:

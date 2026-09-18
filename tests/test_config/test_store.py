@@ -41,7 +41,6 @@ def test_load_migrates_v1_file_and_rewrites(tmp_path) -> None:
             "click_interval_ms": 1234,
             "post_click_wait_ms": 500,
             "max_consecutive_failures": 3,
-            "pause_on_window_focus_loss": True,
             "failsafe_hotkey": "F8",
         },
         "logging": {"level": "INFO", "max_file_mb": 2, "backup_count": 3},

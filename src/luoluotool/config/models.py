@@ -1,16 +1,10 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v4（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v5（dataclass 实现）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 4
-
-# 输入方式（automation.input_mode）
-INPUT_MODE_WINDOW_MESSAGE = "window_message"   # 窗口消息（默认，不抢前台）
-INPUT_MODE_WINDOW_ALIGN = "window_align"       # 点击前对齐游戏窗口（点准、不动光标，窗口短暂位移）
-INPUT_MODE_REAL_INPUT = "real_input"           # 真实鼠标键盘（SendInput；每次输入前置顶/置前，会抢前台）
-INPUT_MODES = (INPUT_MODE_WINDOW_MESSAGE, INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_REAL_INPUT)
+SCHEMA_VERSION = 5
 
 
 @dataclass
@@ -135,12 +129,11 @@ class AutomationConfig:
     click_interval_ms: int = 800
     post_click_wait_ms: int = 500
     max_consecutive_failures: int = 3
-    pause_on_window_focus_loss: bool = True
     failsafe_hotkey: str = "F8"
     ask_elevation_on_start: bool = True
-    # 输入方式：窗口消息（默认）/ 对齐窗口点击 / 真实鼠标键盘（SendInput）
-    input_mode: str = INPUT_MODE_WINDOW_MESSAGE
-    # 真实键鼠通道：每次点击后是否把真实光标移回原位（用户要求"动作后还原光标"可配置）
+    # 输入实现方式固定为「真实鼠标键盘（SendInput）」，故不再有 input_mode 选项；
+    # 该通道每次输入前会自行把游戏窗口置顶/置前，因此也没有"失焦暂停"开关。
+    # 每次点击后是否把真实光标移回原位（用户要求"动作后还原光标"可配置）
     restore_cursor_after_click: bool = True
 
     def to_dict(self) -> dict:
@@ -150,10 +143,8 @@ class AutomationConfig:
             "click_interval_ms": self.click_interval_ms,
             "post_click_wait_ms": self.post_click_wait_ms,
             "max_consecutive_failures": self.max_consecutive_failures,
-            "pause_on_window_focus_loss": self.pause_on_window_focus_loss,
             "failsafe_hotkey": self.failsafe_hotkey,
             "ask_elevation_on_start": self.ask_elevation_on_start,
-            "input_mode": self.input_mode,
             "restore_cursor_after_click": self.restore_cursor_after_click,
         }
 
@@ -165,10 +156,8 @@ class AutomationConfig:
             data.get("click_interval_ms", 800),
             data.get("post_click_wait_ms", 500),
             data.get("max_consecutive_failures", 3),
-            data.get("pause_on_window_focus_loss", True),
             data.get("failsafe_hotkey", "F8"),
             data.get("ask_elevation_on_start", True),
-            data.get("input_mode", INPUT_MODE_WINDOW_MESSAGE),
             data.get("restore_cursor_after_click", True),
         )
 

@@ -1,15 +1,16 @@
-"""config 迁移测试：schema v1 → v2 → v3 → v4。"""
+"""config 迁移测试：schema v1 → v2 → v3 → v4 → v5。
 
-from luoluotool.config.models import (
-    INPUT_MODE_WINDOW_ALIGN,
-    INPUT_MODE_WINDOW_MESSAGE,
-    SCHEMA_VERSION,
-)
+v1 加 `ask_elevation_on_start`；v2→v3 加 `align_window_before_click`；
+v3→v4 去掉该布尔并加 `restore_cursor_after_click`；
+v4→v5 因输入实现方式固定为「真实鼠标键盘」而移除 `input_mode` 与已失效的 `pause_on_window_focus_loss`。
+"""
+
+from luoluotool.config.models import SCHEMA_VERSION
 from luoluotool.config.validation import migrate
 
 
 def v1_raw() -> dict:
-    """一份合法的 schema v1 配置（不含 v2 新字段）。"""
+    """一份合法的 schema v1 配置（不含后续版本的新字段）。"""
     return {
         "schema_version": 1,
         "features": {
@@ -39,21 +40,47 @@ def v1_raw() -> dict:
     }
 
 
-def test_migrate_v1_to_v2_adds_field_and_preserves_values() -> None:
+def v2_raw() -> dict:
+    """v2：已有 ask_elevation_on_start，但还没有 v3/v4/v5 的字段。"""
+    raw = v1_raw()
+    raw["schema_version"] = 2
+    raw["automation"]["ask_elevation_on_start"] = False
+    return raw
+
+
+def v4_raw() -> dict:
+    """v4：含 input_mode 与失焦暂停开关（v5 将移除它们）。"""
+    raw = v2_raw()
+    raw["schema_version"] = 4
+    raw["automation"]["input_mode"] = "real_input"
+    raw["automation"]["restore_cursor_after_click"] = False
+    return raw
+
+
+def test_migrate_v1_to_latest_adds_fields_and_preserves_values() -> None:
     raw = v1_raw()
     raw["automation"]["click_interval_ms"] = 1234
     migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 4  # 一次迁移到最新版本
+    assert migrated["schema_version"] == SCHEMA_VERSION == 5
     assert migrated["automation"]["ask_elevation_on_start"] is True
+    assert migrated["automation"]["restore_cursor_after_click"] is True
     assert migrated["automation"]["click_interval_ms"] == 1234
     assert migrated["automation"]["dry_run"] is True
     assert migrated["features"]["order_hold"]["reserved_switch_1"] is False
 
 
+def test_migrate_drops_removed_fields_everywhere_in_the_chain() -> None:
+    """v1 里的 pause_on_window_focus_loss、v3 里的 align_window_before_click 最终都不应残留。"""
+    migrated = migrate(v1_raw())
+    automation = migrated["automation"]
+    assert "pause_on_window_focus_loss" not in automation
+    assert "align_window_before_click" not in automation
+    assert "input_mode" not in automation
+
+
 def test_migrate_current_version_is_noop() -> None:
     raw = v1_raw()
     raw["schema_version"] = SCHEMA_VERSION
-    raw["automation"]["ask_elevation_on_start"] = False
     assert migrate(raw) is raw
 
 
@@ -70,69 +97,33 @@ def test_migrate_invalid_input_returns_unchanged() -> None:
     assert migrate(raw) is raw
 
 
-def v2_raw() -> dict:
-    """一份合法的 schema v2 配置（不含 v3 新字段）。"""
-    raw = v1_raw()
-    raw["schema_version"] = 2
-    raw["automation"]["ask_elevation_on_start"] = False
-    return raw
-
-
-def test_migrate_v2_to_v3_adds_align_window_flag() -> None:
-    """v2 一路迁移到最新版本：v3 补上对齐开关，v4 再把该布尔升级为 input_mode 枚举。"""
-    raw = v2_raw()
-    raw["automation"]["click_interval_ms"] = 1500
-    migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 4
-    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_MESSAGE
-    assert "align_window_before_click" not in migrated["automation"]
-    assert migrated["automation"]["restore_cursor_after_click"] is True
-    assert migrated["automation"]["click_interval_ms"] == 1500
-    assert migrated["automation"]["ask_elevation_on_start"] is False
-    assert migrated["automation"]["dry_run"] is True
-
-
-def test_migrate_v1_all_the_way_to_v4() -> None:
-    """老配置必须能一次连跳三级（v1 → v2 → v3 → v4）。"""
-    migrated = migrate(v1_raw())
-    assert migrated["schema_version"] == SCHEMA_VERSION == 4
-    assert migrated["automation"]["ask_elevation_on_start"] is True
-    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_MESSAGE
-
-
-def test_migrate_v3_align_true_becomes_window_align_mode() -> None:
-    """v3 里 align_window_before_click=true 的配置必须无损升级为 input_mode=window_align。"""
+def test_migrate_v3_drops_align_flag_and_adds_restore_cursor() -> None:
+    """v3 的 align_window_before_click 属于已删除的对齐通道：迁移后必须被移除。"""
     raw = v2_raw()
     raw["schema_version"] = 3
     raw["automation"]["align_window_before_click"] = True
     migrated = migrate(raw)
-    assert migrated["schema_version"] == 4
-    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_ALIGN
+    assert migrated["schema_version"] == 5
     assert "align_window_before_click" not in migrated["automation"]
+    assert migrated["automation"]["restore_cursor_after_click"] is True
 
 
-def test_migrate_v3_align_false_becomes_window_message_mode() -> None:
-    """v3 里 align_window_before_click=false → input_mode 保持默认 window_message。"""
-    raw = v2_raw()
-    raw["schema_version"] = 3
-    raw["automation"]["align_window_before_click"] = False
+def test_migrate_v4_drops_input_mode_and_focus_pause() -> None:
+    """v4 → v5：输入实现方式已固定，input_mode 与失焦暂停开关都必须移除。"""
+    migrated = migrate(v4_raw())
+    assert migrated["schema_version"] == 5
+    automation = migrated["automation"]
+    assert "input_mode" not in automation
+    assert "pause_on_window_focus_loss" not in automation
+    # 用户显式设置过的还原光标开关必须保留
+    assert automation["restore_cursor_after_click"] is False
+
+
+def test_migrate_v4_keeps_other_user_values() -> None:
+    raw = v4_raw()
+    raw["automation"]["click_interval_ms"] = 1500
+    raw["automation"]["failsafe_hotkey"] = "F9"
     migrated = migrate(raw)
-    assert migrated["automation"]["input_mode"] == INPUT_MODE_WINDOW_MESSAGE
-
-
-def test_migrate_v3_to_v4_keeps_existing_input_mode() -> None:
-    """已经是 v3 但已手工写了 input_mode 时，迁移不得覆盖用户取值。"""
-    raw = v2_raw()
-    raw["schema_version"] = 3
-    raw["automation"]["input_mode"] = "real_input"
-    assert migrate(raw)["automation"]["input_mode"] == "real_input"
-
-
-def test_migrate_v2_to_v3_keeps_existing_align_value(monkeypatch) -> None:
-    """v2 里已手工写了 v4 字段时同样不得被覆盖。"""
-    raw = v2_raw()
-    raw["automation"]["input_mode"] = "real_input"
-    raw["automation"]["restore_cursor_after_click"] = False
-    migrated = migrate(raw)
-    assert migrated["automation"]["input_mode"] == "real_input"
-    assert migrated["automation"]["restore_cursor_after_click"] is False
+    assert migrated["automation"]["click_interval_ms"] == 1500
+    assert migrated["automation"]["failsafe_hotkey"] == "F9"
+    assert migrated["automation"]["ask_elevation_on_start"] is False

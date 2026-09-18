@@ -13,7 +13,7 @@
 3. **先测试后实现**：核心逻辑（config/core/automation 的纯逻辑部分）先写失败测试，再实现。
 4. **分层单向依赖**：`gui → core → automation/utils`。`core` 不得 import PySide6/win32；`automation` 不得 import PySide6；任何反向 import 都视为缺陷。
 5. **UI 与业务分离**：GUI 文件里不允许出现任务流程、输入注入、文件读写等逻辑；只允许出现事件绑定与展示。
-6. **默认安全**：一切自动化默认 dry-run；任何真实输入注入路径都必须经过显式用户确认（询问频率可配置，默认每次）+ 急停可中断。输入实现方式可选：窗口消息（默认）／**对齐窗口点击（对「按真实光标位置取点」的游戏，默认关闭，见第 2 节与 `PROJECT_SPEC.md` §5）**／用户态合成输入（`SendInput`、`SetCursorPos`，须校验前台并还原光标）／驱动级注入（须逐项授权，见 `PROJECT_SPEC.md` §4.1）。
+6. **默认安全**：一切自动化默认 dry-run；任何真实输入注入路径都必须经过显式用户确认（询问频率可配置，默认每次）+ 急停可中断。输入实现方式：**唯一保留「真实鼠标键盘」（`SendInput`，规则见第 2 节、背景见 `PROJECT_SPEC.md` §4.2.3）**；其余通道（窗口消息、合成指针、对齐窗口）已按用户要求删除；驱动级注入等其他方案须逐项授权（见 `PROJECT_SPEC.md` §4.1）。
 7. **可观测**：所有关键动作写日志；异常必须记录完整堆栈；不允许 `pass` 掉异常或 `except Exception: continue` 式的吞错。
 8. **最小依赖**：只允许使用 `requirements.txt` / `requirements-dev.txt` 中列出的包。需要新依赖时：先改 requirements 文件 → 在提交说明写明理由 → 才可 import。
 
@@ -26,7 +26,7 @@
 - 时间间隔类配置必须有上下限校验（例如 `click_interval_ms` 限 100–5000）。
 - GUI：长任务一律放工作线程（QThread），禁止在主线程 sleep 或忙等；按钮防重复点击（启动后禁用启动钮）。
 - 每次真实输入注入前检查 stop 事件；停止请求发出后 500ms 内必须停止动作序列。
-- 输入注入实现方式（`automation.input_mode` 三选一）：① 窗口消息发到游戏窗口或其子窗口；**② 真实鼠标键盘通道**（`automation/real_input.py`，Phase 5.3）必须：**每次点击/按键前**校验游戏窗口是否在最顶层，不在则先 `HWND_TOPMOST` 置顶再 `SetForegroundWindow` 置前（失败用 `AttachThreadInput` 兜底）并回读复核；无法确保窗口在最前时**绝不输入**（抛可读错误）；最小化先 `SW_RESTORE`；输入结束取消本次由我们设置的置顶；点击后按 `restore_cursor_after_click` 还原真实光标；`SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`；若使用**对齐窗口点击**（`automation/window_align.py`），必须：只移动游戏窗口、绝不移动真实光标、源码中不得出现移动光标的 API（`SetCursorPos`/`mouse_event`/`SendInput`/合成指针注入）、点击前等真实光标静止（速度阈值 50 px/s）、最大化窗口直接拒绝点击（不得退化成"按光标乱点"）、无论成功失败都要在 `finally` 里还原窗口位置、逐条记录对齐误差与还原结果；若使用用户态合成输入，必须与游戏权限对齐、注入前校验目标窗口在前台、动作后还原真实光标（可配置）、逐条记录坐标/按键日志。
+- 输入注入实现方式（**只有一种**：真实鼠标键盘 `SendInput`；窗口消息/合成指针/对齐窗口三种实现已按用户要求删除）：`automation/real_input.py`（Phase 5.3）必须：**每次点击/按键前**校验游戏窗口是否在最顶层，不在则先 `HWND_TOPMOST` 置顶再 `SetForegroundWindow` 置前（失败用 `AttachThreadInput` 兜底）并回读复核；无法确保窗口在最前时**绝不输入**（抛可读错误）；最小化先 `SW_RESTORE`；输入结束取消本次由我们设置的置顶；点击后按 `restore_cursor_after_click` 还原真实光标；`SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`；
 - 文件长度控制：单个文件超过 400 行必须先考虑拆分；超过 600 行必须拆分（模板生成的 UI 文件除外）。
 
 ## 3. 禁止事项（红线）
@@ -40,7 +40,7 @@
 7. 禁止重写历史（force push）、禁止把 `user_data/config.json`、日志、截图、构建产物提交入库。
 8. 禁止删除/破坏既有测试来让测试通过；测试失败必须修代码或（经用户同意后）修测试。
 9. 禁止一次性生成超过一个阶段的代码；禁止跨阶段“顺手重构”。
-10. 禁止在游戏窗口未找到、已最小化或不可见时执行输入注入；失焦行为必须遵守 `pause_on_window_focus_loss` 配置。
+10. 禁止在游戏窗口未找到、已最小化或不可见时执行输入注入（真实键鼠通道会在每次输入前置顶/置前并回读复核，无法确保时绝不输入）。
 
 ## 4. 测试要求
 

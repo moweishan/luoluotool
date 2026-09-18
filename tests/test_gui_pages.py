@@ -81,8 +81,6 @@ def test_settings_page_binds_and_hotkey_readonly() -> None:
     assert config.automation.click_interval_ms == 4321
     page.failures_spin.setValue(7)
     assert config.automation.max_consecutive_failures == 7
-    page.focus_loss_box.setChecked(False)
-    assert config.automation.pause_on_window_focus_loss is False
     assert "窗口诊断" in page.diagnose_button.text()
     assert "管理员" in page.restart_admin_button.text()
     page.close()
@@ -115,38 +113,15 @@ def test_settings_page_binds_ask_elevation_switch() -> None:
     page.close()
 
 
-def test_settings_page_binds_input_mode_and_restore_cursor() -> None:
-    """设置页「输入方式」下拉绑定 automation.input_mode；「还原鼠标位置」绑定对应开关。"""
-    from luoluotool.config.models import (
-        INPUT_MODE_REAL_INPUT,
-        INPUT_MODE_WINDOW_ALIGN,
-        INPUT_MODE_WINDOW_MESSAGE,
-    )
-
+def test_settings_page_binds_restore_cursor_switch() -> None:
+    """设置页「每次点击后把真实鼠标移回原位置」绑定 automation.restore_cursor_after_click。"""
     config = AppConfig.default()
     page = SettingsPage(config, lambda: None)
-    # 默认：窗口消息 + 还原鼠标
-    assert page.input_mode_combo.currentData() == INPUT_MODE_WINDOW_MESSAGE
-    assert page.restore_cursor_box.isChecked() is True
-    modes = [page.input_mode_combo.itemData(i) for i in range(page.input_mode_combo.count())]
-    assert modes == [INPUT_MODE_WINDOW_MESSAGE, INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_REAL_INPUT]
-
-    page.input_mode_combo.setCurrentIndex(modes.index(INPUT_MODE_REAL_INPUT))
-    assert config.automation.input_mode == INPUT_MODE_REAL_INPUT
+    assert page.restore_cursor_box.isChecked() is True  # 默认还原
     page.restore_cursor_box.setChecked(False)
     assert config.automation.restore_cursor_after_click is False
-
     config2 = AppConfig.default()
-    config2.automation.input_mode = INPUT_MODE_WINDOW_ALIGN
     config2.automation.restore_cursor_after_click = False
     page.set_config(config2)
-    assert page.input_mode_combo.currentData() == INPUT_MODE_WINDOW_ALIGN
     assert page.restore_cursor_box.isChecked() is False
-    page.close()
-
-    # 配置里出现未知取值时不得崩溃（回落到第一项）
-    config3 = AppConfig.default()
-    config3.automation.input_mode = "unknown"
-    page.set_config(config3)
-    assert page.input_mode_combo.currentData() == INPUT_MODE_WINDOW_MESSAGE
     page.close()

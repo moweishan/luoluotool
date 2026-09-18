@@ -309,6 +309,10 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+> **注记（2026-09-16）**：按用户指示，本阶段（对齐窗口点击通道）的实现与测试**已整体删除**：用户确定改用「真实鼠标键盘」方案，要求删除其它实现方式。相关文件 `automation/window_align.py`、`tests/test_automation/test_window_align.py`、`tests/test_automation/test_align_sender.py` 已移除，配置项 `align_window_before_click` / `input_mode` 随 schema v5 一并删除；实现保留在 git 历史（`90752fe`、`5cf6710`）。
+
+---
+
 ## Phase 5.3 — 真实鼠标键盘输入通道（SendInput，输入前置顶校验）
 
 **背景（用户指示，2026-09-16）**：用户明确改用「**直接移动真实鼠标 + 模拟真实键盘**」的方案，并提出硬规则：
@@ -325,6 +329,8 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
    - 输入原语：`move_cursor_absolute()`（绝对移动、`VIRTUALDESK` 归一化）、`send_left_click()`、`send_key_tap()`（扫描码按下/抬起，保证不卡键）、`get_cursor_pos()`、`set_cursor_pos()`；
    - `normalize_absolute()` 纯函数（多显示器虚拟桌面归一化，有单测）。
 2. `src/luoluotool/automation/input_sender.py`：`RealInputSender` —— 每次 `click_at()`/`key_tap()` 前调 `ensure_window_front`，失败即抛可读错误且**不输入**；点击后按 `restore_cursor_after_click` 还原光标；`finally` 里取消本次由我们设置的置顶；`move_to()` 不移动真实光标（仅记 debug 日志）。
+> **注记（2026-09-16）**：用户随后确定**只保留本阶段的「真实鼠标键盘」实现**，其它通道（窗口消息、合成指针、对齐窗口）与 `input_mode` 枚举、`pause_on_window_focus_loss` 开关均已删除（schema v5），`build_channel` 在真实模式下固定返回 `RealInputSender`。以下原文保留作为阶段记录。
+
 3. `src/luoluotool/config/{models,validation}.py`：`automation.input_mode`（`window_message` / `window_align` / `real_input`）+ `automation.restore_cursor_after_click`（默认 `true`）→ **schema v4 + `_migrate_v3_to_v4`**（旧的 `align_window_before_click=true` 无损升级为 `input_mode=window_align`）+ 枚举与布尔校验；`config.example.json` 同步。
 4. `gui/pages/settings.py`：「输入方式」下拉（三项，含代价说明）+「每次点击后把真实鼠标移回原位置」勾选。
 5. `build_channel`：三档分流；`real_input` 档**强制关闭**「窗口失焦时暂停」（该通道自己抢前台，否则互相等待）并记日志。

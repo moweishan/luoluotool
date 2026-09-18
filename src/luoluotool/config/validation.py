@@ -2,7 +2,7 @@
 
 import logging
 
-from luoluotool.config.models import INPUT_MODES, INPUT_MODE_WINDOW_ALIGN, INPUT_MODE_WINDOW_MESSAGE, SCHEMA_VERSION
+from luoluotool.config.models import SCHEMA_VERSION
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,6 @@ _BOOL_PATHS = (
     "features.feature_3.enabled",
     "features.feature_4.enabled",
     "automation.dry_run",
-    "automation.pause_on_window_focus_loss",
     "automation.ask_elevation_on_start",
     "automation.restore_cursor_after_click",
 )
@@ -40,7 +39,6 @@ _INT_BOUNDS = (
 _STR_LIMITS = (
     ("automation.window_title_keyword", 100),
     ("automation.failsafe_hotkey", 20),
-    ("automation.input_mode", 20),
 )
 
 
@@ -135,19 +133,32 @@ def _migrate_v2_to_v3(raw: dict) -> dict:
 
 
 def _migrate_v3_to_v4(raw: dict) -> dict:
-    """v3 → v4：布尔开关 `align_window_before_click` 升级为枚举 `input_mode`，并新增还原光标开关。"""
+    """v3 → v4：移除已废弃的 `align_window_before_click`（对齐窗口通道已按用户要求删除），
+    并新增「点击后还原真实光标」开关。
+
+    历史说明：v4 曾把该布尔升级成 `input_mode` 枚举（窗口消息/对齐窗口/真实键鼠三选一）；
+    2026-09-16 用户确定只保留真实鼠标键盘实现后，`input_mode` 已在 v5 移除。
+    """
     automation = dict(raw.get("automation") or {})
-    align = automation.pop("align_window_before_click", False)
-    automation.setdefault(
-        "input_mode", INPUT_MODE_WINDOW_ALIGN if align else INPUT_MODE_WINDOW_MESSAGE
-    )
+    automation.pop("align_window_before_click", None)
     automation.setdefault("restore_cursor_after_click", True)
     migrated = dict(raw)
     migrated["automation"] = automation
     return migrated
 
 
-_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4}
+def _migrate_v4_to_v5(raw: dict) -> dict:
+    """v4 → v5：输入实现方式固定为「真实鼠标键盘」，移除 input_mode 与已失效的失焦暂停开关。"""
+    automation = dict(raw.get("automation") or {})
+    automation.pop("input_mode", None)
+    automation.pop("pause_on_window_focus_loss", None)
+    automation.setdefault("restore_cursor_after_click", True)
+    migrated = dict(raw)
+    migrated["automation"] = automation
+    return migrated
+
+
+_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4, 4: _migrate_v4_to_v5}
 
 
 def migrate(raw: object) -> object:
@@ -200,10 +211,6 @@ def validate(raw: object) -> list[str]:
         value = _get(raw, path)
         if not isinstance(value, str) or not value or len(value) > max_len:
             errors.append(f"{path} 必须是非空字符串（最长 {max_len}）")
-    if "automation" not in missing:
-        mode = _get(raw, "automation.input_mode")
-        if isinstance(mode, str) and mode not in INPUT_MODES:
-            errors.append(f"automation.input_mode 必须是 {'/'.join(INPUT_MODES)} 之一")
     if "logging" not in missing:
         level = _get(raw, "logging.level")
         if not isinstance(level, str) or level not in _LOG_LEVELS:
