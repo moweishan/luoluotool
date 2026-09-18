@@ -61,7 +61,7 @@
 - Conventional Commits，中文说明，范围前缀必带：
   - `feat(config): 新增 schema v2 迁移`
   - `fix(core): 修复停止事件未传递到子任务`
-  - `test(automation): 补充窗口消息调用序列断言`
+  - `test(automation): 补充真实键鼠调用序列断言`
 - 一次提交只做一件事（一个阶段内可以多次提交，禁止“一锅端”大提交）。
 - 提交前自检：全量测试通过；无未使用的 import；无调试 `print`；变更文件列表与阶段「本次只做什么」一致。
 

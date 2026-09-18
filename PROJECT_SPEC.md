@@ -161,10 +161,9 @@
 
 **替代方案（已可用或可继续推进，均不触碰反作弊）**：
 
-- 对齐窗口点击通道（Phase 5.2，已实测达标）；
 - 最大化窗口支持（`ShowWindow(SW_RESTORE)` → 对齐 → 点击 → 恢复最大化）——待用户指定后实施；
 - 截图 + 图像识别读懂界面状态（§4.2 已承诺的替代方案，零注入、零内存操作）；
-- 键盘类交互继续走窗口消息（`WM_KEYDOWN`/`WM_KEYUP`）。
+- 键盘类交互由真实键鼠通道的 `key_tap`（SendInput 扫描码）承担；如需零侵入只能人工操作。
 
 **边界**：用户在自己机器上以"理解原理"为目的的独立研究属其自由；工程负责人**不提供绕过步骤、不编写相关代码**，也不将该能力并入本项目。
 
@@ -180,7 +179,7 @@
 | 不在最顶层则置顶 | `SetWindowPos(HWND_TOPMOST)`（`SWP_NOSIZE|SWP_NOMOVE|SWP_SHOWWINDOW|SWP_NOACTIVATE`） |
 | 键盘必须落在游戏窗口 | 置顶之外再 `SetForegroundWindow`（前台锁定失败时用 `AttachThreadInput` 兜底），并**回读 `GetForegroundWindow` 复核** |
 | 无法确保在最前 | **绝不输入**：返回 `FrontResult.ok=False` → 抛可读错误拒绝本次输入 |
-| 最小化窗口 | 先 `ShowWindow(SW_RESTORE)` 再置顶/置前 |
+| 最小化窗口 | 上层直接**拒绝输入**（`is_window_ready` 判定最小化/不可见即抛错）；`ensure_window_front` 内部的 `ShowWindow(SW_RESTORE)` 仅作为兜底路径 |
 | 输入后收拾现场 | 取消**本次由我们设置的**置顶（避免游戏窗口长期浮在最上层）；按 `restore_cursor_after_click` 把真实光标移回原位 |
 | 注入面收敛 | `SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`（有跨模块守卫测试） |
 
@@ -203,13 +202,13 @@
 ## 5. 风险与安全边界（必须写进 GUI 和文档）
 
 - **封号风险**：自动化操作可能违反游戏用户协议。程序「关于」页与 README 必须声明「个人学习自用，风险自负」。
-- **误操作风险**：真实模式下程序会向游戏窗口发送模拟输入（窗口消息或用户态合成输入）；虽然**不抢占键盘焦点**，合成输入会短暂移动真实光标（点击后立即还原），仍可能在游戏内或误定位时产生非预期操作，必须有急停热键 + 状态栏醒目标识（如「运行中 · 真实模式」红色提示）。
-- **输入实现方式（2026-09-15 更新）**：允许 ① 窗口消息（默认，零侵入）② **用户态合成输入**（`ctypes` 调 `SendInput`/`SetCursorPos`，会移动真实光标，须还原）③ 驱动级注入（如 Interception，须逐项授权）。三者都必须遵守 §4.1 的"安全兜底"与"逐项授权"。
-- **输入方式限制（已知风险）**：后台窗口消息对**以物理光标位置或 Raw Input/DirectInput 独占输入**决定点击位置的游戏无效（现象为"日志正常但点击落在真实光标处"）。遇到时按顺序排查：① 子窗口定位与同步投递是否生效；② 游戏是否需要前台焦点；③ 是否改用用户态合成输入（需用户授权，见 §4.1）。
-- **合成指针会隐藏真实光标（2026-09-15 实测）**：触摸/笔注入会被系统判定为触摸输入并抑制真实光标，无法用 API 关闭或可靠恢复（详见 §4.2.1）；选用该通道时"指针消失"必须计入体验代价。改用 `SendInput` 鼠标点击则光标不消失、但会被移动（点击后须还原）。
+- **误操作风险**：真实模式下程序用系统级输入注入（真实移动鼠标 + 模拟真实按键）操作游戏窗口，并在**每次输入前把游戏窗口置顶/置前**（会抢前台）；误定位或游戏状态变化时可能产生非预期操作，必须有急停热键 + 状态栏醒目标识（如「运行中 · 真实模式」红色提示）。
+- **输入实现方式（2026-09-16 定案）**：**只有一种**——真实鼠标键盘（`SendInput`，见 §4.2.3）。窗口消息、合成指针、对齐窗口三种实现已按用户指示删除；驱动级注入等其他方案须逐项授权（见 §4.1）并遵守"安全兜底"。
+- **输入方式限制（已知风险，历史记录）**：本作忽略窗口消息坐标（后台消息/同步投递/`WM_POINTER`/抢前台均实测无反应），只认真实光标位置——这正是改用真实键鼠的原因；相关排查结论见本要点与 §4.2.1。
+- **合成指针会隐藏真实光标（2026-09-15 实测）**：触摸/笔注入会被系统判定为触摸输入并抑制真实光标，无法用 API 关闭或可靠恢复（详见 §4.2.1）；该通道已删除。真实键鼠通道不会隐藏指针，但会移动真实光标（点击后按配置还原）。
 - **本作按真实光标位置取点（2026-09-15 实测，2026-09-16 定案）**：目标游戏（Unity 播放器）**忽略窗口消息里的坐标**（含 `WM_POINTER`），只按真实光标位置决定落点（`实测：客户区坐标消息/同步投递/WM_POINTER/抢前台全部无反应`）。因此用户选定「**真实移动鼠标 + 模拟真实键盘**」为唯一实现方式（见 §4.2.3）：点击时真实光标会移动到目标点、点击后按 `restore_cursor_after_click` 还原；**每次点击/按键前**校验并置顶/置前游戏窗口，无法确保时绝不输入。代价：输入期间抢前台、且会短暂占用真实鼠标。
-- **本机安全兜底（不得删除）**：无游戏窗口或窗口最小化/不可见时**不得注入**；合成输入前必须校验目标窗口在前台（避免点到错误窗口）；全部注入写日志；F8 急停随时可中断。
-- **政策变更带来的风险（2026-09-15）**：原禁止「DLL 注入 / 驱动级操作 / 过检测技巧 / 用户态合成输入 / 联网」的条款已按用户要求取消（见 §4.1）；未执行的三项见 §4.2。采用此类方案前必须完成逐项授权与风险声明，并优先评估风险更低的手段（窗口消息 → 用户态合成输入 → 驱动级注入）。
+- **本机安全兜底（不得删除）**：无游戏窗口或窗口最小化/不可见时**不得注入**；每次注入前必须校验并确保目标窗口在最顶层/前台，**无法确保时绝不输入**（避免点到/敲到别的窗口）；全部输入写日志；急停热键随时可中断；点击后按配置还原真实光标。
+- **政策变更带来的风险（2026-09-15）**：原禁止「DLL 注入 / 驱动级操作 / 过检测技巧 / 用户态合成输入 / 联网」的条款已按用户要求取消（见 §4.1）；未执行的三项见 §4.2。采用此类方案前必须完成逐项授权与风险声明；当前实现的真实键鼠通道是风险最低的可行手段，驱动级方案风险更高，须逐项授权。
 - **数据保护（用户明确保留）**：不得收集或存储账号、密码、token、设备指纹；联网功能不得上传日志、配置、截图等本地数据。
 - **合规**：本工具不针对未成年人防沉迷机制做任何规避；不得商业化分发。
 
@@ -222,7 +221,7 @@
 | 配置 | 标准库 JSON + dataclass + 手写 schema 校验 | 无数据库需求；避免 pydantic 增大 exe 体积 |
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
 | 输入模拟 | **真实鼠标键盘（`SendInput`，唯一实现方式，Phase 5.3）**：`automation/real_input.py` 负责注入原语与「输入前置顶校验」，`RealInputSender` 负责流程；干跑仍为 `DryRunSender`（零输入）。其它通道（窗口消息、合成指针、对齐窗口）已按用户指示删除 | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
-| 窗口查找/截图 | pywin32（win32gui / win32ui） | 成熟；后续可用截图做锚点匹配 |
+| 窗口查找/截图 | pywin32（win32gui / win32ui）；`automation/real_input.py` 负责置顶/置前与注入原语 | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
 | 打包 | PyInstaller（先 one-dir，稳定后可选 one-file） | 生态成熟；注意杀软误报，需在文档说明加白 |
@@ -280,19 +279,19 @@ LuoLuoTool/
 |---|---|---|
 | config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]` |
 | core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
-| automation | 找窗口、截图、向窗口发送鼠标/键盘消息（不接管真实键鼠）、急停热键 | `find_game_window(keyword)`, `screenshot_to(path)`, `click(x, y)`, `press_key(vk)`, `register_failsafe_hotkey(cb)` |
+| automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实键鼠；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入 | `RealInputSender.click_at(x, y)` / `key_tap(vk)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click()`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v4）
+## 9. 数据结构（配置文件 schema v5）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 5,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -365,7 +364,7 @@ LuoLuoTool/
 - [ ] GUI 启动时间（冷启动到窗口可见）≤ 3 秒（PyInstaller 打包后 ≤ 5 秒）。
 - [ ] 勾选→启动→执行→日志全链路可用；执行期间 UI 可拖动、可点「停止」。
 - [ ] 默认干跑模式不产生任何真实键鼠输入；真实模式有确认提示 + F8 急停。
-- [ ] 真实模式**不接管真实键鼠**：执行期间真实光标不移动、键盘输入不受影响（可同时打字/操作其他窗口）。
+- [ ] 真实模式的副作用已如实告知并可配置：确认弹窗写明「真实移动鼠标 + 抢前台 + 封号风险 + 急停键」；点击后按 `restore_cursor_after_click` 还原真实光标；干跑模式仍零输入。
 - [ ] 配置损坏时程序可启动并提示恢复为默认值，而不是崩溃。
 - [ ] `pytest` 全绿；`python -m luoluotool --validate-config` 可用。
 - [ ] PyInstaller 产物在**干净 Windows 10/11**（无 Python）上可启动。
@@ -381,7 +380,7 @@ LuoLuoTool/
 | Phase 2 | GUI 与配置双向同步，修改有脏标记与保存 |
 | Phase 3 | 干跑任务可启停，F8 急停生效，无真实输入 |
 | Phase 4 | 能定位游戏窗口并截图到 `user_data/debug/` |
-| Phase 5 | 输入通道可启停、日志完整、失焦暂停生效（默认窗口消息；用户态合成输入经授权后可用） |
+| Phase 5 | 输入通道可启停、日志完整（当时的窗口消息通道与失焦暂停已于 2026-09-16 随 Phase 5.3 收敛删除） |
 | Phase 6 | 卡订单与预留页逻辑闭环，配置全项可持久化 |
 | Phase 7 | exe 在干净 Windows 上冒烟通过 |
 

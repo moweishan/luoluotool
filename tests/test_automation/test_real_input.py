@@ -390,6 +390,20 @@ def test_real_sender_restores_cursor_and_releases_topmost_even_on_error(recordin
     assert ("release_topmost", 555) in recording.events
 
 
+def test_real_sender_releases_topmost_when_cursor_read_raises(recording, monkeypatch) -> None:
+    """回归（复核发现）：读取光标位置抛异常时，也必须取消我们设置的置顶（否则窗口长期浮在最上层）。"""
+
+    def boom():
+        raise RuntimeError("GetCursorPos 调用失败（模拟）")
+
+    monkeypatch.setattr(real_input, "get_cursor_pos", boom)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    with pytest.raises(RuntimeError):
+        sender.click_at(10, 10)
+    assert ("release_topmost", 555) in recording.events
+    assert ("restore_cursor", 800, 600) not in recording.events  # 没读到位置就不该瞎还原
+
+
 def test_real_sender_key_tap_checks_front_and_releases(recording) -> None:
     """按键：校验/置顶 → 发扫描码 → 取消置顶。"""
     sender = RealInputSender(555, sleep=lambda _s: None)

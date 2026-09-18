@@ -118,6 +118,30 @@ def test_real_mode_requires_confirmation(window_factory, tmp_path, monkeypatch) 
     assert "取消" in window.statusBar().currentMessage()
 
 
+def test_real_mode_warning_text_discloses_real_side_effects(window_factory, tmp_path) -> None:
+    """真实模式确认文案必须如实告知副作用（曾经的文案是反向失实的）。
+
+    历史缺陷：旧文案写「发送模拟点击/按键消息」「不接管你的真实鼠标键盘（执行期间键鼠仍可正常使用）」
+    「游戏窗口失焦时按配置暂停」——三项都与真实键鼠通道的实际行为相反，属于低估风险的安全门问题。
+    """
+    config = AppConfig.default()
+    config.automation.dry_run = False
+    config.automation.failsafe_hotkey = "F8"
+    window = window_factory(tmp_path / "config.json", config)
+    text = window._real_mode_warning_text()
+
+    # 必须如实说明：真实移动鼠标、抢前台、急停键、封号风险
+    assert "真实移动鼠标" in text
+    assert "抢前台" in text
+    assert "F8" in text
+    assert "封号风险自负" in text
+    # 不得再出现与实现相反的旧声明
+    assert "不接管你的真实鼠标键盘" not in text
+    assert "键鼠仍可正常使用" not in text
+    assert "失焦时按配置暂停" not in text
+    assert "发送模拟点击/按键消息" not in text
+
+
 def test_real_mode_confirmed_uses_sender_and_red_status(window_factory, tmp_path, monkeypatch) -> None:
     """真实模式：确认后经注入的 sender 发送序列，状态栏红色提示，结束后复位。"""
     from luoluotool.automation.input_sender import InputChannel

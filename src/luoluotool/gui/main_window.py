@@ -306,18 +306,25 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(STATUS_RUNNING_REAL)
         self._thread.start()
 
+    def _real_mode_warning_text(self) -> str:
+        """真实模式的告知文案（单独抽出，便于测试断言关键风险点已如实告知）。"""
+        return (
+            "即将以真实模式执行：程序会用系统级输入注入"
+            "（真实移动鼠标 + 模拟真实按键）操作游戏窗口。\n\n"
+            "· 每次点击/按键前都会把游戏窗口置于最顶层并置前，"
+            "因此执行期间会抢前台，不宜同时操作其它软件\n"
+            "· 真实鼠标会被移动到点击坐标；默认在点击后移回原位置"
+            "（可在设置页关闭）\n"
+            "· 会在游戏内产生真实操作，可能违反游戏用户协议，封号风险自负\n"
+            f"· 运行中按 {self._hotkey_name} 可立即急停"
+        )
+
     def _confirm_real_mode(self) -> bool:
-        """真实模式启动前的确认：说明不接管真实键鼠、急停方式与封号风险。"""
+        """真实模式启动前的确认：如实告知真实键鼠的副作用、急停方式与封号风险。"""
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("确认真实模式")
-        box.setText(
-            "即将以真实模式执行：程序会向游戏窗口发送模拟点击/按键消息，"
-            "不接管你的真实鼠标键盘（执行期间键鼠仍可正常使用）。\n\n"
-            "· 会在游戏内产生真实操作，可能违反游戏用户协议，封号风险自负\n"
-            f"· 运行中按 {self._hotkey_name} 可立即急停\n"
-            "· 游戏窗口失焦时按配置暂停\n\n是否继续？"
-        )
+        box.setText(self._real_mode_warning_text() + "\n\n是否继续？")
         box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
         box.setDefaultButton(QMessageBox.StandardButton.No)
         return box.exec() == QMessageBox.StandardButton.Yes

@@ -91,8 +91,10 @@ class RealInputSender:
 
     def click_at(self, x: int, y: int) -> None:
         front = self._ensure_front_or_raise("点击")
-        saved = real_input.get_cursor_pos()
+        saved: tuple[int, int] | None = None
         try:
+            # 光标位置必须在 try 内读取：万一这里抛异常，finally 仍要取消我们设置的置顶
+            saved = real_input.get_cursor_pos()
             screen = real_input.client_to_screen(self.hwnd, (x, y))
             real_input.move_cursor_absolute(*screen)
             self._sleep(real_input.INPUT_SETTLE_SECONDS)
@@ -102,7 +104,7 @@ class RealInputSender:
                 "真实点击完成：客户区 (%d, %d) → 屏幕 %s（已确保窗口在最顶层）", x, y, screen
             )
         finally:
-            if self.restore_cursor:
+            if self.restore_cursor and saved is not None:
                 real_input.set_cursor_pos(*saved)
             self._release_topmost_if_needed(front)
 

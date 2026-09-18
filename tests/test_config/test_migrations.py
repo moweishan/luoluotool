@@ -119,6 +119,18 @@ def test_migrate_v4_drops_input_mode_and_focus_pause() -> None:
     assert automation["restore_cursor_after_click"] is False
 
 
+def test_migrate_v4_also_drops_stale_align_flag() -> None:
+    """即使配置标成 v4 却残留了 v3 时代的 align_window_before_click，也要被清掉。
+
+    （回归：v4→v5 迁移原先只 pop input_mode / pause_on_window_focus_loss，
+    残留的 align_window_before_click 会被写回并长期留在配置里。）
+    """
+    raw = v4_raw()
+    raw["automation"]["align_window_before_click"] = True
+    migrated = migrate(raw)
+    assert "align_window_before_click" not in migrated["automation"]
+
+
 def test_migrate_v4_keeps_other_user_values() -> None:
     raw = v4_raw()
     raw["automation"]["click_interval_ms"] = 1500

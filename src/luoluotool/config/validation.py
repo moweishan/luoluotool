@@ -152,6 +152,8 @@ def _migrate_v4_to_v5(raw: dict) -> dict:
     automation = dict(raw.get("automation") or {})
     automation.pop("input_mode", None)
     automation.pop("pause_on_window_focus_loss", None)
+    # 对齐窗口通道已删除：旧配置里可能残留该布尔，一并清除（不依赖迁移链是否从 v3 起跳）
+    automation.pop("align_window_before_click", None)
     automation.setdefault("restore_cursor_after_click", True)
     migrated = dict(raw)
     migrated["automation"] = automation
