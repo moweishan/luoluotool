@@ -1,8 +1,6 @@
 """主窗口：五页签配置 + 保存/重载/恢复默认 + 启动/停止 + 日志面板 + F8 急停。"""
 
-import ctypes
 import logging
-import time
 from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path

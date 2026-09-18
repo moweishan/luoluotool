@@ -443,9 +443,9 @@ def test_sendinput_is_confined_to_real_input_module() -> None:
     """架构约束：输入注入 API 只能出现在 real_input 模块里（便于审计与回归）。"""
     import pathlib
 
-    root = pathlib.Path(real_input.__file__).parent
+    src_root = pathlib.Path(real_input.__file__).resolve().parents[1]  # src/luoluotool
     offenders = []
-    for path in root.glob("*.py"):
+    for path in src_root.rglob("*.py"):
         if path.name == "real_input.py":
             continue
         text = path.read_text(encoding="utf-8")

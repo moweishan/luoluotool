@@ -1,7 +1,5 @@
 """automation.elevation 测试：权限检测与 UAC 提权重启（注入假 API）。"""
 
-import pytest
-
 from luoluotool.automation import elevation
 
 
