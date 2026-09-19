@@ -68,7 +68,18 @@ if ($SkipTests) {
 Write-Step "4/6 清理旧产物并打包（PyInstaller one-dir）"
 foreach ($dir in @("build", "dist")) {
     $target = Join-Path $root $dir
-    if (Test-Path $target) { Remove-Item -Recurse -Force $target }
+    if (-not (Test-Path $target)) { continue }
+    try {
+        Remove-Item -Recurse -Force $target -ErrorAction Stop
+    } catch {
+        # 最常见原因：产物里的 exe 正在运行（它会占用 dist\LuoLuoTool\logs\luoluotool.log）
+        $running = @(Get-Process -Name "LuoLuoTool" -ErrorAction SilentlyContinue)
+        if ($running.Count -gt 0) {
+            $ids = ($running | ForEach-Object { $_.Id }) -join ", "
+            Fail "无法清理 $dir：检测到正在运行的 LuoLuoTool 进程（PID $ids）。请先关闭该程序的窗口（或结束这些进程）再重新构建。"
+        }
+        Fail "无法清理 ${dir}：$($_.Exception.Message)`n若是杀软或资源管理器占用，稍后重试；若产物里的程序正在运行，请先关闭它。"
+    }
 }
 & $python -m PyInstaller --clean --noconfirm $specPath
 if ($LASTEXITCODE -ne 0) { Fail "PyInstaller 打包失败" }
