@@ -26,13 +26,14 @@ PW_RENDERFULLCONTENT = 2
 PW_CLIENTONLY = 1
 
 # 多尺度（缩放）匹配：游戏画面放大/缩小时模板的像素尺寸会变，必须按比例搜索
-DEFAULT_SCALE_RANGE = (0.40, 2.00)
+DEFAULT_SCALE_RANGE = (0.40, 4.00)
 DEFAULT_SCALE_STEP = 0.10        # 粗搜步长
 SCALE_REFINE_STEP = 0.02         # 在最佳比例附近精修的步长
 SCALE_REFINE_SPAN = 0.06
 SCALE_TIE_TOLERANCE = 0.01       # 分数接近时优先接近 1.0x 的缩放（减少误报）
-SCALE_STRONG_MARGIN = 0.05       # 粗搜中已比阈值高出这么多 → 认定找对了，停止粗搜（省时间）
-SCALE_STRONG_AREA_RATIO = 0.30   # 提前结束的条件之一：候选模板面积 ≥ 原模板面积的该比例
+SCALE_STRONG_MARGIN = 0.05       # 分数比阈值高出这么多 → 视为"比较像了"，允许在越过峰值后结束粗搜
+SCALE_PEAK_DROP = 0.02           # 越过峰值后分数回落这么多 → 认定已经过了峰值，可以结束粗搜
+SCALE_STRONG_AREA_RATIO = 0.30   # 终止粗搜的条件之一：候选模板面积 ≥ 原模板面积的该比例
                                  # （过小的缩放会给出虚高分数——实测 9x4 像素能"匹配"到 0.96）
 SCALE_REFINE_MARGIN = 0.20       # 粗搜分数低于「阈值 - 该值」时不再精修（明显没有目标，省时间）
 BLANK_MIN_PIXELS = 64            # 少于该像素数不做"纯色帧"判断（1x1 之类无法判断）
@@ -250,17 +251,27 @@ def locate_all_scaled(
     target = _prepare(template, grayscale)
 
     best: tuple[float, float] | None = None
+    best_substantial = False                          # best 对应的模板是否"足够大"（见 _is_substantial）
     strong_score = float(threshold) + SCALE_STRONG_MARGIN
     for scale in scale_candidates(scale_range, scale_step):
         resized = _resize_template(target, scale)
         if resized is None:
             continue
         score = _best_score(source, resized)
-        if score >= strong_score and _is_substantial(resized, target):
-            best = (scale, score)                    # 强候选：停止粗搜，交给精修
+        # 结束粗搜的条件：已经有了"够强且足够大"的最佳候选，且当前分数明显从峰值回落
+        # —— 后面只会更差。**不能**改成"第一个够强的候选就停"：分数是在真实缩放附近缓慢爬升
+        # 的，3.50x 的真值在 3.30x 就有 0.9018（高于阈值+0.05），一旦就此停住，±0.06 的
+        # 精修窗口够不到真值，实测会报成 3.36x（框比目标小一圈）。见 test_..._after_peak。
+        if (
+            best is not None
+            and best_substantial
+            and best[1] >= strong_score
+            and score < best[1] - SCALE_PEAK_DROP
+        ):
             break
         if _better_scale(best, scale, score):
             best = (scale, score)
+            best_substantial = _is_substantial(resized, target)
 
     if best is None or best[1] < float(threshold) - SCALE_REFINE_MARGIN:
         return []                                     # 粗搜都没个像样的候选，精修也没意义

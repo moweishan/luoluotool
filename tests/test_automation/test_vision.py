@@ -375,6 +375,46 @@ def test_locate_scaled_respects_scale_range() -> None:
     ) is not None
 
 
+def test_default_scale_range_covers_four_times_zoom() -> None:
+    """默认缩放范围必须覆盖 4 倍放大（用户要求 0.4x–4.0x）。"""
+    assert vision.DEFAULT_SCALE_RANGE == (0.40, 4.00)
+
+
+def test_locate_scaled_finds_two_and_a_half_times_zoom() -> None:
+    """画面放大到 2.5 倍也要能识别（放宽范围前 2.0x 是上界，超出就一律认不出）。"""
+    canvas = _haystack(600, 800)
+    pattern = _scaled(_rich_pattern(), 2.5)
+    _paste(canvas, pattern, 300, 180)
+
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 2.5) <= 0.03
+    assert abs(match.left - 300) <= 4 and abs(match.top - 180) <= 4
+
+
+def test_locate_scaled_stops_coarse_search_only_after_peak() -> None:
+    """回归：粗搜不能"第一个够强的候选就停"，必须等分数越过峰值回落才停。
+
+    实测踩到（真值 3.50x）：粗搜走到 3.30x 时分数 0.9018 已高于「阈值+0.05」，
+    旧逻辑立刻结束粗搜，而精修窗口只有 ±0.06，够不到真值 3.50x（那里分数是 1.000）
+    —— 结果报成 3.36x（0.933），框比目标小一圈。
+    """
+    canvas = _haystack(600, 800)
+    pattern = _scaled(_rich_pattern(), 3.5)
+    _paste(canvas, pattern, 400, 250)
+
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 3.5) <= 0.03
+    assert abs(match.left - 400) <= 4 and abs(match.top - 250) <= 4
+
+
+def test_locate_scaled_handles_candidates_larger_than_canvas() -> None:
+    """范围上界放到 4.0x 后，很多档位的模板会大于画面 —— 必须安全跳过，不是抛异常。"""
+    canvas = _haystack(120, 200)
+    assert vision.locate_all_scaled(canvas, _rich_pattern(), threshold=0.9) == []
+
+
 def test_scale_candidates_are_sorted_and_deduplicated() -> None:
     """缩放候选列表：从小到大、去重、往返包含端点。"""
     scales = vision.scale_candidates((0.8, 1.2), 0.2)

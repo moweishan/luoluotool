@@ -46,7 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-scale",
         action="store_true",
-        help="图像识别只按原始尺寸匹配（默认做多尺度匹配，容忍画面放大/缩小 0.4x–2.0x）",
+        help="图像识别只按原始尺寸匹配（默认做多尺度匹配，容忍画面放大/缩小 0.4x–4.0x）",
     )
     return parser
 
@@ -154,7 +154,7 @@ def _recognize(
 
     退出码：0 命中；1 未命中或识别失败（便于脚本判断）；2 参数非法。
     带框截图：传 `--no-annotate` 强制关闭；否则跟随配置 `automation.save_vision_annotations`。
-    匹配方式：默认多尺度（容忍画面缩放 0.4x–2.0x）；`--no-scale` 只按原始尺寸匹配。
+    匹配方式：默认多尺度（容忍画面缩放 0.4x–4.0x）；`--no-scale` 只按原始尺寸匹配。
     """
     if not 0.0 < threshold <= 1.0:
         _print_safe(f"阈值必须大于 0 且不超过 1：{threshold}")
