@@ -64,6 +64,9 @@ DRAG_MIN_STEPS = 4
 DRAG_TAIL_HOLD_STEPS = 4    # 松手前在终点保持静止的帧数（消除"甩动惯性"导致的画面继续飘）
 DRAG_PRESS_SETTLE_SECONDS = 0.05
 DRAG_RELEASE_SETTLE_SECONDS = 0.06
+DRAG_RESTORE_DELAY_SECONDS = 0.25   # 松手后到"还原光标"之间的延迟（等引擎处理完抬起）
+DRAG_RESTORE_STEP_SECONDS = 0.02    # 还原光标的分帧间隔
+DRAG_RESTORE_MAX_STEPS = 8          # 还原光标最多分几步
 VK_LBUTTON = 0x01
 KEY_COMBO_GAP_SECONDS = 0.02
 KEY_HOLD_SLICE_SECONDS = 0.1
@@ -371,6 +374,36 @@ def build_drag_path(
     hold = max(int(tail_hold_steps), 0)
     path.extend([(ex, ey)] * hold)      # 末尾静止保持（松手前的"停住"）
     return path
+
+
+def restore_cursor_smooth(
+    target: tuple[int, int],
+    sleep: Callable[[float], None] = time.sleep,
+    step_seconds: float = DRAG_RESTORE_STEP_SECONDS,
+    max_steps: int = DRAG_RESTORE_MAX_STEPS,
+) -> bool:
+    """把光标**分帧小步**送回 `target`（滑动结束后还原光标用），返回是否移到位。
+
+    为什么不直接 `SetCursorPos` 一次跳回：拖动刚结束的那一瞬间引擎可能仍在处理
+    "抬起"，一次大跳跃会被残留的拖拽状态算成巨大位移，表现为画面乱飘；
+    分帧小步移动即使引擎仍以为在拖动，速度也低到不像甩动。
+    """
+    tx, ty = int(target[0]), int(target[1])
+    try:
+        current = get_cursor_pos()
+    except Exception as exc:        # 读不到当前位置：退回一次性复位，别什么都不做
+        logger.warning("读取光标位置失败，改用直接复位 (%d, %d)：%s", tx, ty, exc)
+        return set_cursor_pos(tx, ty)
+    if current == (tx, ty):
+        return True
+    status = True
+    for point in interpolate_points(current, (tx, ty), max(int(max_steps), 1)):
+        status = move_cursor_absolute(*point) and status
+        try:
+            sleep(max(float(step_seconds), 0.0))
+        except Exception as exc:    # 等待被中断也不能阻止光标送回去
+            logger.warning("还原光标时等待被中断（继续还原）：%s", exc)
+    return status
 
 
 def is_left_button_down() -> bool:

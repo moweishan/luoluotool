@@ -143,12 +143,15 @@ class RealInputSender:
 
         与点击同样：**每次滑动前**校验并确保游戏窗口在最顶层，无法确保时绝不输入；
         滑动可被急停打断，且任何情况下都会校验并释放左键（松开后复查，未松开则补发）。
-
-        **故意不还原光标**：拖动是"镜头/画面"手势，松手后把光标跳回原位很可能被游戏
-        当成"继续拖动"，表现为画面乱飘；`restore_cursor_after_click` 只作用于点击。
+        结束后按 `restore_cursor_after_click` 把真实光标移回原位，但**先延迟再分帧
+        小步移回**（`_restore_cursor_after_drag`）：一次跳回会被残留的拖拽状态算成
+        巨大位移，表现为画面乱飘。
         """
         front = self._ensure_front_or_raise("滑动")
+        saved: tuple[int, int] | None = None
         try:
+            # 必须在 try 内读取：万一这里抛异常，finally 仍要取消我们设置的置顶
+            saved = real_input.get_cursor_pos()
             start = real_input.client_to_screen(self.hwnd, from_xy)
             end = real_input.client_to_screen(self.hwnd, to_xy)
             ok, interrupted = real_input.send_left_drag(
@@ -170,7 +173,20 @@ class RealInputSender:
                     from_xy[0], from_xy[1], to_xy[0], to_xy[1], duration_seconds,
                 )
         finally:
+            if self.restore_cursor and saved is not None:
+                self._restore_cursor_after_drag(saved)
             self._release_topmost_if_needed(front)
+
+    def _restore_cursor_after_drag(self, saved: tuple[int, int]) -> None:
+        """滑动结束后把真实光标移回 `saved`：先延迟（等引擎处理完"抬起"）再分帧移回。"""
+        try:
+            self._sleep(real_input.DRAG_RESTORE_DELAY_SECONDS)
+        except Exception as exc:        # 等待被中断（例如急停）也必须继续还原光标
+            self._logger.warning("还原光标前的等待被中断（继续还原）：%s", exc)
+        if real_input.restore_cursor_smooth(saved, self._sleep):
+            self._logger.info("真实光标已移回滑动前的位置 (%d, %d)", saved[0], saved[1])
+        else:
+            self._logger.warning("真实光标可能未完全移回滑动前的位置 (%d, %d)", saved[0], saved[1])
 
     def key_combo(self, combo: str) -> None:
         """发送组合键（如 `ctrl+s`）：每次按键前同样会校验并确保窗口在最顶层。"""

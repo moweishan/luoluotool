@@ -295,6 +295,53 @@ def test_set_cursor_pos_clamps_into_virtual_desktop(user32) -> None:
     assert ("SetCursorPos", 321, 654) in user32.calls
 
 
+def test_restore_cursor_smooth_moves_in_small_steps(user32, monkeypatch) -> None:
+    """平滑还原光标：分帧小步移回（不是一次跳跃），末点精确落在目标位置。"""
+    moves: list[tuple[int, int]] = []
+    monkeypatch.setattr(real_input, "get_cursor_pos", lambda: (800, 600))
+    monkeypatch.setattr(real_input, "move_cursor_absolute",
+                        lambda x, y: (moves.append((x, y)), True)[1])
+    assert real_input.restore_cursor_smooth((100, 300), sleep=lambda _s: None) is True
+    assert len(moves) == real_input.DRAG_RESTORE_MAX_STEPS >= 4   # 多步，不是一次跳跃
+    assert moves[0] != (100, 300)                                 # 第一步不跳到位
+    assert moves[-1] == (100, 300)                                # 末点精确
+    assert all(call[0] != "SetCursorPos" for call in user32.calls)  # 不用跳跃式复位
+
+
+def test_restore_cursor_smooth_skips_when_already_at_target(user32, monkeypatch) -> None:
+    """光标已经在目标位置：不产生任何移动。"""
+    moves: list[tuple[int, int]] = []
+    monkeypatch.setattr(real_input, "get_cursor_pos", lambda: (100, 300))
+    monkeypatch.setattr(real_input, "move_cursor_absolute",
+                        lambda x, y: moves.append((x, y)) or True)
+    assert real_input.restore_cursor_smooth((100, 300), sleep=lambda _s: None) is True
+    assert moves == []
+
+
+def test_restore_cursor_smooth_survives_sleep_interruption(user32, monkeypatch) -> None:
+    """还原过程中的等待抛异常（例如急停）：仍要把光标送回去。"""
+    moves: list[tuple[int, int]] = []
+    monkeypatch.setattr(real_input, "get_cursor_pos", lambda: (800, 600))
+    monkeypatch.setattr(real_input, "move_cursor_absolute",
+                        lambda x, y: moves.append((x, y)) or True)
+
+    def boom(_seconds: float) -> None:
+        raise RuntimeError("停止请求")
+
+    assert real_input.restore_cursor_smooth((100, 300), sleep=boom) is True
+    assert moves[-1] == (100, 300)
+
+
+def test_restore_cursor_smooth_falls_back_when_read_fails(user32, monkeypatch) -> None:
+    """读光标位置失败：退回 `SetCursorPos` 直接复位（不静默什么都不做）。"""
+    def boom() -> tuple[int, int]:
+        raise RuntimeError("读不到光标")
+
+    monkeypatch.setattr(real_input, "get_cursor_pos", boom)
+    assert real_input.restore_cursor_smooth((444, 555), sleep=lambda _s: None) is True
+    assert ("SetCursorPos", 444, 555) in user32.calls
+
+
 # ------------------------------------------------------------------- 发送器
 
 
@@ -335,6 +382,9 @@ class _RecordingRealInput:
                             or self.hold_result)
         monkeypatch.setattr(real_input, "set_cursor_pos",
                             lambda x, y: self.events.append(("restore_cursor", x, y)))
+        monkeypatch.setattr(real_input, "restore_cursor_smooth",
+                            lambda target, sleep=None, **kwargs:
+                            self.events.append(("restore_cursor_smooth", target[0], target[1])) or True)
         monkeypatch.setattr(real_input, "release_topmost",
                             lambda hwnd: self.events.append(("release_topmost", hwnd)) or True)
         monkeypatch.setattr(real_input, "client_to_screen",
@@ -682,19 +732,52 @@ def test_send_left_drag_releases_button_on_exception(user32) -> None:
     assert user32.sent[-1]["flags"] & real_input.MOUSEEVENTF_LEFTUP
 
 
-def test_real_sender_drag_checks_front_and_does_not_restore_cursor(recording) -> None:
-    """发送器层滑动：校验/置顶 → 滑动 → 取消置顶；**故意不还原光标**。
+def test_real_sender_drag_restores_cursor_after_drag(recording) -> None:
+    """发送器层滑动：校验/置顶 → 记录光标 → 滑动 → **平滑还原光标** → 取消置顶。
 
-    回归：松手后把光标跳回原位会被游戏当成"继续拖动"，用户实测表现为画面乱飘。
+    用户实测反馈：勾选「把真实鼠标移回原位置」后滑动结束却停在终点，因此滑动必须
+    同样遵守该设置；但还原方式是"延迟 + 分帧小步"（一次跳回会被残留拖拽状态算成
+    巨大位移而让画面乱飘，见 `restore_cursor_smooth`）。
     """
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.drag((10, 20), (30, 40), 0.5)
     assert recording.events == [
         ("ensure_front", 555),
+        ("get_cursor_pos",),
         ("drag", (20, 40), (40, 60), 0.5),      # 客户区 + (10,20) 偏移
+        ("restore_cursor_smooth", 800, 600),
         ("release_topmost", 555),
     ]
+    # 必须是分帧还原，不能是一次 SetCursorPos 跳跃
     assert not any(event[0] == "restore_cursor" for event in recording.events)
+
+
+def test_real_sender_drag_waits_before_restoring_cursor(recording) -> None:
+    """还原光标前先等一小段：给引擎时间处理完"抬起"，避免被当成继续拖动。"""
+    waits: list[float] = []
+    sender = RealInputSender(555, sleep=waits.append)
+    sender.drag((0, 0), (10, 10), 0.3)
+    assert waits == [real_input.DRAG_RESTORE_DELAY_SECONDS]
+    assert real_input.DRAG_RESTORE_DELAY_SECONDS > 0
+    assert recording.events[-2][0] == "restore_cursor_smooth"
+
+
+def test_real_sender_drag_restores_cursor_even_if_wait_raises(recording) -> None:
+    """还原前的等待抛异常（例如急停打断）：仍必须把光标送回去。"""
+    def boom(_seconds: float) -> None:
+        raise RuntimeError("停止请求")
+
+    sender = RealInputSender(555, sleep=boom)
+    sender.drag((0, 0), (10, 10), 0.3)
+    assert any(event[0] == "restore_cursor_smooth" for event in recording.events)
+    assert recording.events[-1] == ("release_topmost", 555)
+
+
+def test_real_sender_drag_keeps_cursor_when_restore_disabled(recording) -> None:
+    """关闭「还原光标」时，滑动结束光标就停在终点（不做任何还原）。"""
+    sender = RealInputSender(555, restore_cursor=False, sleep=lambda _s: None)
+    sender.drag((0, 0), (10, 10), 0.3)
+    assert not any(event[0].startswith("restore_cursor") for event in recording.events)
 
 
 def test_real_sender_drag_refuses_when_window_cannot_be_focused(monkeypatch) -> None:

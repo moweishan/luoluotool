@@ -54,7 +54,7 @@ class SettingsPage(QWidget):
         self.ask_elevation_box = QCheckBox(
             "启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）"
         )
-        self.restore_cursor_box = QCheckBox("每次点击后把真实鼠标移回原位置（滑动不还原，避免被游戏当成继续拖动）")
+        self.restore_cursor_box = QCheckBox("每次点击/滑动后把真实鼠标移回原位置（滑动会松手后延迟再分帧移回）")
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
