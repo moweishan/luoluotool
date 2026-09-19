@@ -538,8 +538,10 @@ class MainWindow(QMainWindow):
             return
         self.debug_page.add_vision_template(dialog.saved_path)
         logger.info("框选模板已保存：%s", dialog.saved_path)
+        selection = dialog.selection()
+        area = "" if selection is None else f"（选区 {selection[2]}x{selection[3]}，客户区左上 ({selection[0]}, {selection[1]})）"
         self.debug_page.set_status(
-            f"模板已保存：{dialog.saved_path.name}\n"
+            f"模板已保存：{dialog.saved_path.name}{area}\n"
             f"已加入模板列表（共 {self.debug_page.vision_list.count()} 张），"
             "点「图片识别匹配测试」即可验证。"
         )

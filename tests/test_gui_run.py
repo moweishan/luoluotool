@@ -742,6 +742,9 @@ def test_crop_flow_saves_template_and_fills_path(window_factory, tmp_path, monke
             opened.append((image.shape, window_size, save_dir))
             self.saved_path = saved
 
+        def selection(self):          # 与真实对话框接口一致（保存后主窗口会用它拼提示）
+            return 10, 20, 30, 40
+
         def exec(self):
             from PySide6.QtWidgets import QDialog
 
@@ -755,6 +758,47 @@ def test_crop_flow_saves_template_and_fills_path(window_factory, tmp_path, monke
 
     assert opened and opened[0][0] == (50, 100, 3) and opened[0][1] == (100, 50)
     assert window.debug_page.vision_templates() == [str(saved)]
+    assert "模板已保存" in window.debug_page.status_label.text()
+    assert "选区 30x40" in window.debug_page.status_label.text()
+
+
+def test_crop_flow_writes_only_selected_region(window_factory, tmp_path, monkeypatch) -> None:
+    """全链路（真实对话框）：框选 → 「保存为模板」→ 只写选区尺寸的模板 → 加入模板列表。
+
+    回归：这个按钮以前只连 accept()，"保存为模板"实际什么都没存（主窗口随后报未选区域）。
+    """
+    import numpy as np
+
+    from luoluotool.automation.vision import load_template
+    from luoluotool.gui import main_window as mw
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+    anchors = tmp_path / "anchors"
+    monkeypatch.setattr(mw, "get_anchors_dir", lambda: anchors)
+
+    class _AutoCrop(mw.TemplateCropDialog):
+        """替代 exec()：模拟用户拖框并点「保存为模板」，再返回真实对话框结果。"""
+
+        def exec(self):
+            self.view.resize(400, 400)
+            self.set_selection_in_image(30, 20, 50, 40)
+            self.save_button.click()
+            return self.result()
+
+    monkeypatch.setattr(mw, "TemplateCropDialog", _AutoCrop)
+    # 画布要有纹理：纯色块会被纯色模板守卫拦下（那是另一条规则），这里测的是"只存选区"
+    image = np.zeros((300, 400, 3), dtype=np.uint8)
+    image[:, :, 0] = np.arange(400, dtype=np.uint8)
+    image[:, :, 1] = np.arange(300, dtype=np.uint8).reshape(-1, 1)
+    window._on_capture_ready(image, (400, 300))
+
+    files = list(anchors.glob("anchor_*.png"))
+    assert len(files) == 1, "「保存为模板」必须写出一个模板文件"
+    saved = load_template(files[0])
+    assert saved.shape == (40, 50, 3)              # 只存框选的那块，不是整屏 300x400
+    assert window.debug_page.vision_templates() == [str(files[0])]
     assert "模板已保存" in window.debug_page.status_label.text()
 
 

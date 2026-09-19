@@ -30,6 +30,7 @@ from luoluotool.automation.vision import save_image
 logger = logging.getLogger(__name__)
 
 MIN_SELECTION_SIZE = 8          # 选区小于该像素数视为无效（点一下、手抖）
+NEAR_FULL_RATIO = 0.95          # 选区面积 ≥ 整屏的该比例时提示"几乎等于整屏"
 BACKGROUND_COLOR = QColor(32, 32, 32)
 SELECTION_COLOR = QColor(0, 220, 255)
 
@@ -197,7 +198,10 @@ class TemplateCropDialog(QDialog):
         self.cancel_button = QPushButton("取消")
         buttons.addButton(self.save_button, QDialogButtonBox.ButtonRole.AcceptRole)
         buttons.addButton(self.cancel_button, QDialogButtonBox.ButtonRole.RejectRole)
-        self.save_button.clicked.connect(self.accept)
+        # 保存按钮必须走"裁剪 + 落盘"，不能直接 accept()：否则对话框一关就什么都没存
+        # （历史缺陷：这里原是 connect(self.accept)，导致「保存为模板」实际只关窗口，
+        #   主窗口随后报"未选择有效区域"—— 见 tests/test_gui_crop.py 的按钮回归测试）
+        self.save_button.clicked.connect(self._on_save_clicked)
         self.cancel_button.clicked.connect(self.reject)
         layout.addWidget(buttons)
 
@@ -211,17 +215,37 @@ class TemplateCropDialog(QDialog):
         self.view.set_selection_in_image(x, y, width, height)
 
     def selection_text(self) -> str:
-        """人读描述：尺寸 + 客户区左下角坐标（未选区时给出提示）。"""
+        """人读描述：尺寸 + 客户区左上角坐标（未选区时给出提示）。"""
         selection = self.selection()
         if selection is None:
             return "尚未选择区域（按住左键拖拽框选）"
         x, y, width, height = selection
-        return f"选区 {width}x{height}，客户区左上 ({x}, {y})，中心 ({x + width // 2}, {y + height // 2})"
+        text = f"选区 {width}x{height}，客户区左上 ({x}, {y})，中心 ({x + width // 2}, {y + height // 2})"
+        image_w, image_h = self.view.image_size
+        if width * height >= image_w * image_h * NEAR_FULL_RATIO:
+            text += "　⚠ 选区几乎等于整屏，这样的模板基本没有辨识度（可能框错了）"
+        return text
 
     def _refresh_info(self) -> None:
         self.info_label.setText(self.selection_text())
 
     # ------------------------------------------------------------- 保存
+    def _on_save_clicked(self) -> None:
+        """「保存为模板」：只把**手动框选的那块区域**裁剪存盘，成功后才关闭对话框。
+
+        没有有效选区（没拖、或框得太小）时不写文件、也不关闭，只在提示行说明原因，
+        让用户继续框 —— 避免"点了保存却什么都没存"这种静默失败。
+        """
+        if self.selection() is None:
+            self.info_label.setText(
+                f"请先按住左键拖拽框选要保存的区域（至少 {MIN_SELECTION_SIZE}x{MIN_SELECTION_SIZE} 像素）"
+            )
+            return
+        if self.save_selection() is None:
+            self.info_label.setText("保存失败：请检查模板目录是否可写（详情见日志）")
+            return
+        self.accept()
+
     def save_selection(self) -> Path | None:
         """把选区裁剪成模板 PNG；无有效选区时返回 None（不写文件）。"""
         selection = self.selection()
@@ -237,6 +261,10 @@ class TemplateCropDialog(QDialog):
         path = self._save_dir / f"anchor_{datetime.now():%Y%m%d_%H%M%S}.png"
         try:
             self.saved_path = save_image(path, crop)
+            logger.info(
+                "模板已保存：%s（只保存框选区域 %dx%d，客户区左上 (%d, %d)）",
+                path, width, height, x, y,
+            )
         except Exception as exc:                 # 磁盘/编码异常 → 记录并返回 None
             logger.exception("保存模板失败：%s", exc)
             self.saved_path = None
