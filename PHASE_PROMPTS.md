@@ -411,7 +411,7 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 **本次只做什么**：
 1. `automation/real_input.py`：`interpolate_points(start, end, steps)`（纯函数，线性插值、含终点）+ `send_left_drag(from_screen, to_screen, duration_seconds, sleep, stop_event)`：移动起点 → 按下左键 → **分帧插值移动**（≈60Hz、最少 4 步）→ 松开左键；期间切片检查急停；**任何退出路径都在 `finally` 释放左键**。
-2. `automation/input_sender.py`：协议新增 `drag(from_xy, to_xy, duration_seconds)`；`RealInputSender.drag` 滑动前同样校验并置顶窗口（失败即拒绝）、结束后**不还原真实光标**（2026-09-19 修复：松手瞬间把光标跳回原位会被游戏当成继续拖动）、被急停中断时写 WARNING；`DryRunSender.drag` 只写日志。
+2. `automation/input_sender.py`：协议新增 `drag(from_xy, to_xy, duration_seconds)`；`RealInputSender.drag` 滑动前同样校验并置顶窗口（失败即拒绝）、结束后按 `restore_cursor_after_click` **延迟 + 分帧小步**还原真实光标（2026-09-19 二次修正：既不能停在终点，也不能一次跳回）、被急停中断时写 WARNING；`DryRunSender.drag` 只写日志。
 3. `config/models.py`：`SwipeStepParams{from_point, to_point, duration_ms, wait_after_ms}` + `parse_swipes_text` / `format_swipes_text`（文本语法 `100,200 > 400,600`、`...*800`；解析时校验坐标与时长范围）；`PlaceholderTaskParams.swipes`。
 4. `config/validation.py`：`swipes` 结构校验（数组、≤20 步、`from`/`to` 为非负整数坐标、`duration_ms` 50–10000、`wait_after_ms` 0–60000）→ **schema v7 + `_migrate_v6_to_v7`**（默认 `[]`）；`config.example.json` 同步。
 5. `core/registry.py`：执行顺序明确为 **点击 → 滑动 → 按键**，日志给出每步序号与滑动时长，步骤间响应停止请求，结果文案分别统计三类步骤。
@@ -438,9 +438,10 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 > **修复记录（2026-09-19，用户实测「滑动结束后游戏画面乱飘」）**：三处成因一并修复——
 > ① 轨迹由**匀速**改为**缓出曲线 + 末尾在终点静止保持数帧**（`build_drag_path` = `interpolate_points(..., easing=ease_out_quad)` 缓出采样 + `DRAG_TAIL_HOLD_STEPS` 帧静止后才松手）。原因：匀速"甩到底立刻松手"会被引擎判成 flick（快速甩动），松手后画面带惯性继续飘。
 > ② 松手后**回读 `GetAsyncKeyState(VK_LBUTTON)` 复查左键确实抬起**；未抬起则补发抬起并记 ERROR，仍失败则抛可读错误提示手动点击左键。同时滑动**前**先清理可能残留的按下状态。
-> ③ **滑动后不再还原光标**：松手瞬间把光标跳回原位会被游戏当成继续拖动而继续转画面；`restore_cursor_after_click` 现在**只作用于点击**（设置页文案已同步）。
+> ③ **滑动结束后还原光标：先延迟 `DRAG_RESTORE_DELAY_SECONDS`（0.25 s，等引擎处理完"抬起"）再用 `restore_cursor_smooth` 分 8 步小步移回**，禁止一次 `SetCursorPos` 跳回（跳跃会被残留拖拽状态算成巨大位移而让画面乱飘）；还原前的等待被中断时仍必须继续还原。
+> **③ 的二次修正（同日）**：首版曾把滑动**完全排除**在 `restore_cursor_after_click` 之外，用户勾选「移回原位置」后实测滑动结束仍停在终点——现已改为"照做，但延迟 + 分帧"，设置对点击与滑动都生效。
 > 附带加固：松手动作在 `finally` 中执行且**对等待函数抛异常同样生效**（"必定松手"是安全属性，已加回归测试）。
-> 验收：`tests/test_automation/test_real_input.py` 51 项全绿（含缓出/静止尾巴、残留按下清理、无法抬起即报错、滑动不还原光标四条新断言），全量 295 项通过。
+> 验收：`tests/test_automation/test_real_input.py` 101 项全绿（缓出/静止尾巴、残留按下清理、无法抬起即报错、滑动延迟 + 分帧还原、读光标失败兜底等新断言），全量 303 项通过。
 
 ---
 
