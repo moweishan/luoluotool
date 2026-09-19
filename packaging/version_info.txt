@@ -1,0 +1,37 @@
+# UTF-8
+# LuoLuoTool 版本资源（PyInstaller `version=` 使用）。
+# 版本号必须与 src/luoluotool/__init__.py 的 __version__ 保持一致（有守卫测试
+# tests/test_packaging.py::test_version_info_matches_package_version 校验）。
+VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(0, 1, 0, 0),
+    prodvers=(0, 1, 0, 0),
+    mask=0x3F,
+    flags=0x0,
+    OS=0x40004,
+    fileType=0x1,
+    subtype=0x0,
+    date=(0, 0)
+  ),
+  kids=[
+    StringFileInfo(
+      [
+        StringTable(
+          '080404B0',
+          [
+            StringStruct('CompanyName', 'LuoLuoTool'),
+            StringStruct('FileDescription', 'LuoLuoTool 桃源深处有人家 自动化工具（个人自用）'),
+            StringStruct('FileVersion', '0.1.0.0'),
+            StringStruct('InternalName', 'LuoLuoTool'),
+            StringStruct('LegalCopyright', '仅供个人学习与自用，请勿分发'),
+            StringStruct('OriginalFilename', 'LuoLuoTool.exe'),
+            StringStruct('ProductName', 'LuoLuoTool'),
+            StringStruct('ProductVersion', '0.1.0.0'),
+            StringStruct('Comments', '键盘鼠标模拟自动化：默认干跑，真实模式需确认，F8 急停')
+          ]
+        )
+      ]
+    ),
+    VarFileInfo([VarStruct('Translation', [2052, 1200])])
+  ]
+)

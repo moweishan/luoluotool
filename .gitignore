@@ -12,10 +12,15 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# 构建产物（Phase 7 起）
+# 构建产物（Phase 7 起；dist/LuoLuoTool 里还会生成 user_data/ 与 logs/，随 dist 一起忽略）
 build/
 dist/
 *.manifest
+# PyInstaller 中间产物（自定义 --workpath/--distpath 时可能落在仓库根）
+*.pyz
+*.pkg
+warn-*.txt
+xref-*.html
 
 # 运行时本地数据（个人数据，不入库）
 logs/
