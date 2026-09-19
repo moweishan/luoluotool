@@ -75,13 +75,10 @@ def test_feature_pages_bind_enabled() -> None:
 def test_settings_page_binds_and_hotkey_readonly() -> None:
     config = AppConfig.default()
     page = SettingsPage(config, lambda: None)
-    page.dry_run_box.setChecked(False)
-    assert config.automation.dry_run is False
     page.click_interval_spin.setValue(4321)
     assert config.automation.click_interval_ms == 4321
     page.failures_spin.setValue(7)
     assert config.automation.max_consecutive_failures == 7
-    assert "窗口诊断" in page.diagnose_button.text()
     assert "管理员" in page.restart_admin_button.text()
     page.close()
 
@@ -185,4 +182,81 @@ def test_daily_page_binds_swipes_text() -> None:
     }
     page.set_config(config2)
     assert page.swipes_edit.text() == "1,1 > 2,2"
+    page.close()
+
+
+def test_settings_page_binds_developer_switch() -> None:
+    """设置页「开发者调试」开关绑定 automation.developer_mode（默认关闭）。"""
+    config = AppConfig.default()
+    page = SettingsPage(config, lambda: None)
+    assert page.developer_box.isChecked() is False
+    page.developer_box.setChecked(True)
+    assert config.automation.developer_mode is True
+    config2 = AppConfig.default()
+    config2.automation.developer_mode = True
+    page.set_config(config2)
+    assert page.developer_box.isChecked() is True
+    page.close()
+
+
+def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
+    """调试页：干跑开关绑定 dry_run；四个测试按钮发出带参数的请求信号。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    page = DebugPage(config, lambda: None)
+    requests: list[tuple] = []
+    page.test_requested.connect(lambda kind, params: requests.append((kind, params)))
+
+    # 干跑开关
+    page.dry_run_box.setChecked(False)
+    assert config.automation.dry_run is False
+    page.dry_run_box.setChecked(True)
+    assert config.automation.dry_run is True
+
+    # 单点：X/Y
+    page.single_x_spin.setValue(120)
+    page.single_y_spin.setValue(80)
+    page.single_button.click()
+    # 连点：X/Y + 次数 + 间隔
+    page.repeat_x_spin.setValue(10)
+    page.repeat_y_spin.setValue(20)
+    page.repeat_count_spin.setValue(3)
+    page.repeat_interval_spin.setValue(400)
+    page.repeat_button.click()
+    # 滑动：起终点 + 用时
+    page.swipe_from_x_spin.setValue(1)
+    page.swipe_from_y_spin.setValue(2)
+    page.swipe_to_x_spin.setValue(300)
+    page.swipe_to_y_spin.setValue(400)
+    page.swipe_duration_spin.setValue(700)
+    page.swipe_button.click()
+    # 键盘：按键 + 次数 + 间隔
+    page.key_edit.setText("ctrl+s")
+    page.key_count_spin.setValue(2)
+    page.key_interval_spin.setValue(250)
+    page.key_button.click()
+
+    assert requests == [
+        ("single_click", {"x": 120, "y": 80}),
+        ("repeat_click", {"x": 10, "y": 20, "count": 3, "interval_ms": 400}),
+        ("swipe", {"from_x": 1, "from_y": 2, "to_x": 300, "to_y": 400, "duration_ms": 700}),
+        ("key", {"combo": "ctrl+s", "count": 2, "interval_ms": 250}),
+    ]
+    page.close()
+
+
+def test_debug_page_busy_disables_buttons_and_status() -> None:
+    """执行期间禁用全部测试按钮，并显示状态文案。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    page = DebugPage(AppConfig.default(), lambda: None)
+    page.set_busy(True)
+    for button in (page.single_button, page.repeat_button, page.swipe_button,
+                   page.key_button, page.diagnose_button):
+        assert button.isEnabled() is False
+    page.set_status("执行中…")
+    assert page.status_label.text() == "执行中…"
+    page.set_busy(False)
+    assert page.single_button.isEnabled() is True
     page.close()

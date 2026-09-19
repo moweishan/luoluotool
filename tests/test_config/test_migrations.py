@@ -62,7 +62,7 @@ def test_migrate_v1_to_latest_adds_fields_and_preserves_values() -> None:
     raw = v1_raw()
     raw["automation"]["click_interval_ms"] = 1234
     migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 7
+    assert migrated["schema_version"] == SCHEMA_VERSION
     assert migrated["automation"]["ask_elevation_on_start"] is True
     assert migrated["automation"]["restore_cursor_after_click"] is True
     assert migrated["automation"]["click_interval_ms"] == 1234
@@ -198,3 +198,21 @@ def test_migrate_v6_to_v7_keeps_existing_swipes() -> None:
     }
     params = migrate(raw)["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"]
     assert params["swipes"][0]["duration_ms"] == 800
+
+
+def test_migrate_v7_to_v8_adds_developer_mode() -> None:
+    """v7 → v8：新增 automation.developer_mode（默认 false = 不显示开发者调试页）。"""
+    raw = v4_raw()
+    raw["schema_version"] = 7
+    raw["automation"]["restore_cursor_after_click"] = True
+    migrated = migrate(raw)
+    assert migrated["schema_version"] == SCHEMA_VERSION
+    assert migrated["automation"]["developer_mode"] is False
+
+
+def test_migrate_v7_to_v8_keeps_existing_developer_mode() -> None:
+    """已手工开启开发者模式的配置不得被覆盖。"""
+    raw = v4_raw()
+    raw["schema_version"] = 7
+    raw["automation"]["developer_mode"] = True
+    assert migrate(raw)["automation"]["developer_mode"] is True

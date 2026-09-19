@@ -1,6 +1,7 @@
 """主窗口：五页签配置 + 保存/重载/恢复默认 + 启动/停止 + 日志面板 + F8 急停。"""
 
 import logging
+import threading
 from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
@@ -37,7 +38,9 @@ from luoluotool.automation.window import diagnose_window, find_window
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
+from luoluotool.core import debug as debug_actions
 from luoluotool.gui.pages.daily import DailyPage
+from luoluotool.gui.pages.debug import DebugPage
 from luoluotool.gui.pages.feature3 import Feature3Page
 from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
@@ -102,6 +105,57 @@ class _RunnerThread(QThread):
         self._runner.start()
 
 
+DEBUG_TAB_TITLE = "开发者调试"
+
+
+class _DebugTestThread(QThread):
+    """在后台线程执行开发者调试动作（不阻塞 GUI；可被停止请求中断）。"""
+
+    finished_message = Signal(str)
+    failed_message = Signal(str)
+
+    def __init__(self, config, kind: str, params: dict, log: logging.Logger) -> None:
+        super().__init__()
+        self._config = config
+        self._kind = kind
+        self._params = params
+        self._log = log
+        self._stop_event = threading.Event()
+
+    def request_stop(self) -> None:
+        self._stop_event.set()
+
+    def run(self) -> None:
+        try:
+            message = run_debug_action(self._config, self._kind, self._params, self._log, self._stop_event)
+        except Exception as exc:   # 记录完整堆栈并回报可读信息
+            self._log.exception("开发者调试动作失败：%s", exc)
+            self.failed_message.emit(f"{type(exc).__name__}: {exc}")
+        else:
+            self._log.info("开发者调试结果：%s", message)
+            self.finished_message.emit(message)
+
+
+def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
+    """把界面请求映射到 `core.debug` 的具体动作（便于单测直接调用）。"""
+    if kind == "single_click":
+        return debug_actions.run_single_click(config, params["x"], params["y"], log, stop_event)
+    if kind == "repeat_click":
+        return debug_actions.run_repeat_click(
+            config, params["x"], params["y"], params["count"], params["interval_ms"], log, stop_event
+        )
+    if kind == "swipe":
+        return debug_actions.run_swipe(
+            config, (params["from_x"], params["from_y"]), (params["to_x"], params["to_y"]),
+            params["duration_ms"], log, stop_event,
+        )
+    if kind == "key":
+        return debug_actions.run_key(
+            config, params["combo"], params["count"], params["interval_ms"], log, stop_event
+        )
+    raise ValueError(f"未知的调试测试类型：{kind}")
+
+
 class _DiagnoseThread(QThread):
     """在工作线程中执行窗口诊断；结果（消息, 是否需要提权）经信号回 UI 线程。"""
 
@@ -161,8 +215,13 @@ class MainWindow(QMainWindow):
         ) = pages
         for page, title in zip(pages, TAB_TITLES):
             self.tabs.addTab(page, title)
+        self.debug_page = DebugPage(self._config, self._mark_dirty)
+        self._debug_thread: _DebugTestThread | None = None
+        self._apply_developer_mode()          # 按配置决定是否挂载「开发者调试」页
         self.tabs.setCurrentIndex(0)  # 默认打开设置页
-        self.settings_page.diagnose_button.clicked.connect(self._on_diagnose)
+        self.settings_page.developer_box.toggled.connect(self._on_developer_toggled)
+        self.debug_page.diagnose_requested.connect(self._on_diagnose)
+        self.debug_page.test_requested.connect(self._on_debug_test)
         self.settings_page.restart_admin_button.clicked.connect(self._on_restart_admin_clicked)
         self.save_button = QPushButton("保存")
         self.save_button.clicked.connect(self._save)
@@ -277,8 +336,10 @@ class MainWindow(QMainWindow):
             self.feature3_page,
             self.feature4_page,
             self.settings_page,
+            self.debug_page,
         ):
             page.set_config(self._config)
+        self._apply_developer_mode()   # 配置里 developer_mode 变化时同步调试页签
         self._dirty = False
         self._refresh_title()
 
@@ -328,6 +389,9 @@ class MainWindow(QMainWindow):
         return box.exec() == QMessageBox.StandardButton.Yes
 
     def _stop(self) -> None:
+        if self._debug_thread is not None and self._debug_thread.isRunning():
+            self._debug_thread.request_stop()
+            self.debug_page.set_status("已请求停止调试测试…")
         if self._runner is not None:
             self._runner.request_stop()
         if self._thread is not None and self._thread.isRunning():
@@ -354,10 +418,49 @@ class MainWindow(QMainWindow):
         logger.info("急停触发（F8）")
         self._stop()
 
+    def _on_developer_toggled(self) -> None:
+        """设置页开关：勾选/取消后立即挂载或移除「开发者调试」标签页。"""
+        self._apply_developer_mode()
+        self._mark_dirty()
+
+    def _apply_developer_mode(self) -> None:
+        """配置决定是否显示开发者调试页；重复调用安全（幂等）。"""
+        index = self.tabs.indexOf(self.debug_page)
+        enabled = bool(self._config.automation.developer_mode)
+        if enabled and index < 0:
+            self.tabs.addTab(self.debug_page, DEBUG_TAB_TITLE)
+            logger.info("已启用开发者调试页")
+        elif not enabled and index >= 0:
+            self.tabs.removeTab(index)
+            logger.info("已关闭开发者调试页")
+
+    def _on_debug_test(self, kind: str, params: dict) -> None:
+        """开发者调试按钮：后台线程执行，避免阻塞 GUI；执行期间禁用按钮。"""
+        if self._debug_thread is not None and self._debug_thread.isRunning():
+            self.debug_page.set_status("上一个测试仍在执行，请先等待完成或点击「停止」")
+            return
+        self.debug_page.set_busy(True)
+        mode = "干跑（只写日志）" if self._config.automation.dry_run else "真实输入"
+        self.debug_page.set_status(f"执行中…（{mode}）")
+        self._debug_thread = _DebugTestThread(self._config, kind, dict(params), logger)
+        self._debug_thread.finished_message.connect(self._on_debug_finished)
+        self._debug_thread.failed_message.connect(self._on_debug_failed)
+        self._debug_thread.finished.connect(self._on_debug_thread_finished)
+        self._debug_thread.start()
+
+    def _on_debug_finished(self, message: str) -> None:
+        self.debug_page.set_status(message)
+
+    def _on_debug_failed(self, message: str) -> None:
+        self.debug_page.set_status(f"测试失败：{message}")
+
+    def _on_debug_thread_finished(self) -> None:
+        self.debug_page.set_busy(False)
+
     def _on_diagnose(self) -> None:
         if self._diagnose_thread is not None and self._diagnose_thread.isRunning():
             return  # 防重复点击
-        self.settings_page.diagnose_button.setEnabled(False)
+        self.debug_page.diagnose_button.setEnabled(False)
         self.statusBar().showMessage("窗口诊断中…")
         self._diagnose_thread = _DiagnoseThread(
             self._config.automation.window_title_keyword, get_debug_dir(), self
@@ -374,7 +477,7 @@ class MainWindow(QMainWindow):
             self._offer_elevated_restart()
 
     def _on_diagnose_thread_finished(self) -> None:
-        self.settings_page.diagnose_button.setEnabled(True)
+        self.debug_page.diagnose_button.setEnabled(True)
         self._diagnose_thread = None
 
     def _show_elevation_hint(self) -> None:

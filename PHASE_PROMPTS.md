@@ -437,6 +437,36 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+## Phase 5.6 — 开发者调试页（测试按钮）
+
+**背景**：需要在 GUI 里直接验证输入通道（点是否落在预期位置、滑动是否被识别、按键是否送达），
+并把原本散落在设置页的调试入口集中起来。
+
+**本次只做什么**：
+1. `config`：新增 `automation.developer_mode`（默认 `false`）→ **schema v8 + `_migrate_v7_to_v8`** + 布尔校验；`config.example.json` 同步。
+2. `core/debug.py`（新）：`run_single_click` / `run_repeat_click` / `run_swipe` / `run_key` —— 参数校验（坐标 0–10000、次数 1–200、间隔 50–5000、滑动用时 50–10000、键名经 `parse_combo` 校验）+ 复用 `build_channel` 执行 + 汇总可读结果；连点/连按在动作之间检查停止请求。
+3. `gui/pages/debug.py`（新）：开发者调试页 —— 干跑开关、窗口诊断按钮、四个测试组（鼠标单点 X/Y、鼠标连点 X/Y/次数/间隔、鼠标滑动 起点/终点/用时、键盘 按键/次数/间隔）+ 状态标签；`test_requested(kind, params)` / `diagnose_requested()` 信号；`set_busy` 在执行期间禁用按钮。
+4. `gui/pages/settings.py`：移除干跑开关与窗口诊断按钮，新增「开发者调试」开关（绑定 `automation.developer_mode`）。
+5. `gui/main_window.py`：按 `developer_mode` 挂载/移除「开发者调试」标签页（切换立即生效、`_apply_config` 后同步）；调试动作在 `_DebugTestThread` 后台线程执行，结果写日志面板与状态标签；`_stop()` 会请求中断调试测试。
+6. 测试：`core/debug` 四类动作（调用序列、次数、间隔、停止、参数校验、未知键名）、干跑通道零真实输入、真实模式找不到窗口报错、调试页信号参数、忙碌禁用、页签随开关出现/消失、配置 v7→v8 迁移与布尔校验；全部注入假实现。
+
+**不要做什么**：不让调试动作绕开 `build_channel`（否则会绕过干跑与置顶校验）；不在 GUI 线程里执行测试；不引入新的依赖。
+
+**验收命令**：
+```bash
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m luoluotool --validate-config
+.venv\Scripts\python -m luoluotool --smoke-gui
+```
+
+**完成标准**：
+- [ ] 全量测试通过；`core/debug.py` 覆盖率 ≥ 90%。
+- [ ] 设置页勾选「开发者调试」→ 顶部出现「开发者调试」页；取消勾选 → 页签消失；配置保存后重启保持。
+- [ ] 调试页含：干跑开关、窗口诊断、鼠标单点、鼠标连点、鼠标滑动、键盘点击四个带参数的测试按钮。
+- [ ] **手动验收**：干跑模式下点四个测试按钮 → 只有日志；关闭干跑后 → 真实模式测试生效（游戏在配置坐标处响应/滑动被识别/按键送达），执行期间按钮禁用，F8/F9 可中断长动作。
+
+---
+
 ## Phase 6 — 卡订单与预留功能页闭环
 
 **阶段目标**：功能二/三/四在主流程中形成完整闭环（开关→运行→日志），无推测性逻辑。

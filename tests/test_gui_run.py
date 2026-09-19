@@ -300,14 +300,14 @@ def test_diagnose_button_runs_and_reports(window_factory, tmp_path, monkeypatch)
         lambda keyword, debug_dir: DiagnosticResult(f"诊断结果: {keyword}", False),
     )
     window = window_factory(tmp_path / "config.json")
-    window.settings_page.diagnose_button.click()
+    window.debug_page.diagnose_button.click()
     thread = window._diagnose_thread
     assert thread is not None
     assert thread.wait(3000)
     _APP.processEvents()
     assert "诊断结果" in window.statusBar().currentMessage()
     assert "诊断结果" in window.log_panel.toPlainText()
-    assert window.settings_page.diagnose_button.isEnabled() is True
+    assert window.debug_page.diagnose_button.isEnabled() is True
 
 
 def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -> None:
@@ -319,7 +319,7 @@ def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -
 
     monkeypatch.setattr(mw, "diagnose_window", boom)
     window = window_factory(tmp_path / "config.json")
-    window.settings_page.diagnose_button.click()
+    window.debug_page.diagnose_button.click()
     assert window._diagnose_thread is not None
     assert window._diagnose_thread.wait(3000)
     _APP.processEvents()
@@ -584,3 +584,49 @@ def test_startup_dont_ask_elevation_cancelled_keeps_running(window_factory, tmp_
     assert len(calls) == 1
     assert window.isVisible() is False  # 未关闭主窗口，继续运行
     assert "取消" in window.statusBar().currentMessage() or "失败" in window.statusBar().currentMessage()
+
+
+def test_developer_tab_appears_and_disappears(window_factory, tmp_path) -> None:
+    """勾选「开发者调试」→ 顶部出现第 6 个页签；取消勾选 → 页签移除。"""
+    from luoluotool.gui.main_window import DEBUG_TAB_TITLE
+
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    assert window.tabs.count() == 5
+    window.settings_page.developer_box.setChecked(True)
+    assert window.tabs.count() == 6
+    assert window.tabs.tabText(window.tabs.count() - 1) == DEBUG_TAB_TITLE
+    window.settings_page.developer_box.setChecked(False)
+    assert window.tabs.count() == 5
+    assert window.tabs.indexOf(window.debug_page) < 0
+
+
+def test_developer_mode_from_config_mounts_tab_at_startup(window_factory, tmp_path) -> None:
+    """配置里 developer_mode=true 时启动即挂载调试页。"""
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+    assert window.tabs.indexOf(window.debug_page) >= 0
+
+
+def test_run_debug_action_dispatches_all_kinds(monkeypatch) -> None:
+    """主窗口的调试动作分发：四种类型分别调用 core.debug 的对应函数。"""
+    from luoluotool.gui import main_window as mw
+
+    calls: list[tuple] = []
+    for name in ("run_single_click", "run_repeat_click", "run_swipe", "run_key"):
+        monkeypatch.setattr(mw.debug_actions, name, (lambda n: lambda *args, **kwargs: calls.append((n, args[1:])) or n)(name))
+
+    config = AppConfig.default()
+    log = logging.getLogger("t")
+    mw.run_debug_action(config, "single_click", {"x": 1, "y": 2}, log, None)
+    mw.run_debug_action(config, "repeat_click", {"x": 1, "y": 2, "count": 3, "interval_ms": 100}, log, None)
+    mw.run_debug_action(config, "swipe", {"from_x": 1, "from_y": 2, "to_x": 3, "to_y": 4, "duration_ms": 500}, log, None)
+    mw.run_debug_action(config, "key", {"combo": "a", "count": 1, "interval_ms": 100}, log, None)
+    assert [name for name, _args in calls] == [
+        "run_single_click", "run_repeat_click", "run_swipe", "run_key",
+    ]
+    assert calls[2][1][0] == (1, 2) and calls[2][1][1] == (3, 4)   # 滑动起终点
+
+    with pytest.raises(ValueError, match="未知的调试测试类型"):
+        mw.run_debug_action(config, "nope", {}, log, None)

@@ -30,6 +30,7 @@ _BOOL_PATHS = (
     "automation.dry_run",
     "automation.ask_elevation_on_start",
     "automation.restore_cursor_after_click",
+    "automation.developer_mode",
 )
 _INT_BOUNDS = (
     ("automation.click_interval_ms", 100, 5000),
@@ -266,6 +267,15 @@ def _migrate_v6_to_v7(raw: dict) -> dict:
     return migrated
 
 
+def _migrate_v7_to_v8(raw: dict) -> dict:
+    """v7 → v8：新增 `automation.developer_mode`（默认 false = 不显示开发者调试页）。"""
+    automation = dict(raw.get("automation") or {})
+    automation.setdefault("developer_mode", False)
+    migrated = dict(raw)
+    migrated["automation"] = automation
+    return migrated
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -273,6 +283,7 @@ _MIGRATIONS = {
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
     6: _migrate_v6_to_v7,
+    7: _migrate_v7_to_v8,
 }
 
 

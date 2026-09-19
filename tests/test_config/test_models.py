@@ -6,9 +6,9 @@ from luoluotool.config import models
 
 
 def test_defaults_are_safe() -> None:
-    """出厂默认：开关全关，dry_run 开启，schema_version=7。"""
+    """出厂默认：开关全关，dry_run 开启，schema_version=8。"""
     config = models.AppConfig.default()
-    assert config.schema_version == models.SCHEMA_VERSION == 7
+    assert config.schema_version == models.SCHEMA_VERSION
     assert config.automation.dry_run is True
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.loop.enabled is False
@@ -97,6 +97,7 @@ def test_to_dict_keys_match_schema_v1() -> None:
         "failsafe_hotkey",
         "ask_elevation_on_start",
         "restore_cursor_after_click",
+        "developer_mode",
     }
     assert set(data["logging"]) == {"level", "max_file_mb", "backup_count"}
     task = data["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]

@@ -243,6 +243,7 @@ LuoLuoTool/
 │   │   ├── task.py          # BaseTask 协议
 │   │   ├── registry.py      # 任务注册表
 │   │   ├── runner.py        # 执行调度器（配合 QThread 使用）
+│   │   ├── debug.py         # 开发者调试动作（单点/连点/滑动/键盘测试，复用输入通道）
 │   │   └── state.py         # 运行状态枚举与状态机
 │   ├── automation/          # Windows 交互层
 │   │   ├── window.py        # 窗口查找/置前/截屏、窗口诊断
@@ -253,7 +254,7 @@ LuoLuoTool/
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
 │   │   ├── main_window.py   # 主窗口（页签 + 启动/停止 + 状态栏）
-│   │   ├── pages/           # daily.py / order_hold.py / feature3.py / feature4.py / settings.py
+│   │   ├── pages/           # daily.py / order_hold.py / feature3.py / feature4.py / settings.py / debug.py（开发者调试）
 │   │   └── widgets.py       # 通用小组件
 │   └── utils/
 │       ├── keys.py          # 键名表与组合键解析（config/automation 共用）
@@ -279,20 +280,20 @@ LuoLuoTool/
 | 模块 | 职责 | 关键接口（示意） |
 |---|---|---|
 | config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]` |
-| core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
+| core | 任务协议、注册表、执行调度、运行状态、开发者调试动作 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()`; `debug.run_single_click/repeat_click/swipe/key(...)` |
 | automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（点击、**滑动拖拽**、单键/组合键/长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入 | `RealInputSender.click_at(x, y)` / `drag(from_xy, to_xy, seconds)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click()`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
-| gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
+| gui | 五页签（设置/日常任务/卡订单/功能三/功能四）+ 可选「开发者调试」页 + 日志面板 + 状态栏 | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v7）
+## 9. 数据结构（配置文件 schema v8）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 7,
+  "schema_version": 8,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -326,7 +327,8 @@ LuoLuoTool/
     "max_consecutive_failures": 3,
     "failsafe_hotkey": "F8",
     "ask_elevation_on_start": true,
-    "restore_cursor_after_click": true
+    "restore_cursor_after_click": true,
+    "developer_mode": false
   },
   "logging": { "level": "INFO", "max_file_mb": 2, "backup_count": 3 }
 }
@@ -353,6 +355,7 @@ LuoLuoTool/
 | v4 → v5 | 输入实现方式固定为「真实鼠标键盘」：移除 `automation.input_mode` 与 `automation.pause_on_window_focus_loss`（后者与该通道冲突，永不生效），保留 `restore_cursor_after_click` | `validation.migrate()` → `_migrate_v4_to_v5` |
 | v5 → v6 | 任务参数新增**按键序列** `params.keys`（默认 `[]` = 不发送按键）：元素为 `{combo, hold_ms, wait_after_ms}`，支持组合键与长按 | `validation.migrate()` → `_migrate_v5_to_v6` |
 | v6 → v7 | 任务参数新增**鼠标滑动序列** `params.swipes`（默认 `[]` = 不滑动）：元素为 `{from, to, duration_ms, wait_after_ms}`，按住左键分帧拖拽 | `validation.migrate()` → `_migrate_v6_to_v7` |
+| v7 → v8 | 新增 `automation.developer_mode`（默认 `false` = 不显示「开发者调试」标签页） | `validation.migrate()` → `_migrate_v7_to_v8` |
 
 > 字段沿革：合成指针通道曾在 v3 引入 `automation.input_mode`（`window_message`/`synthetic_pointer`）与 `pointer_type`，**随该通道撤回**（见 §4.2.1）；v4 又把 `input_mode` 重新定义为三档实现方式选择，**2026-09-16 用户确定只保留真实鼠标键盘后随 v5 删除**。若某份旧配置仍残留这些字段，迁移链会把它们逐一移除（已有单测覆盖）。
 

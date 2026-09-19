@@ -1,4 +1,4 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v7（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v8（dataclass 实现）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from luoluotool.utils.keys import parse_combo
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 @dataclass
@@ -286,6 +286,8 @@ class AutomationConfig:
     # 该通道每次输入前会自行把游戏窗口置顶/置前，因此也没有"失焦暂停"开关。
     # 每次点击后是否把真实光标移回原位（用户要求"动作后还原光标"可配置）
     restore_cursor_after_click: bool = True
+    # 开发者调试：在顶部显示「开发者调试」标签页（含窗口诊断、干跑开关与 4 个输入测试）
+    developer_mode: bool = False
 
     def to_dict(self) -> dict:
         return {
@@ -297,6 +299,7 @@ class AutomationConfig:
             "failsafe_hotkey": self.failsafe_hotkey,
             "ask_elevation_on_start": self.ask_elevation_on_start,
             "restore_cursor_after_click": self.restore_cursor_after_click,
+            "developer_mode": self.developer_mode,
         }
 
     @classmethod
@@ -310,6 +313,7 @@ class AutomationConfig:
             data.get("failsafe_hotkey", "F8"),
             data.get("ask_elevation_on_start", True),
             data.get("restore_cursor_after_click", True),
+            data.get("developer_mode", False),
         )
 
 
