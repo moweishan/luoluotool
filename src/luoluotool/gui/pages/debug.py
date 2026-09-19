@@ -9,21 +9,20 @@ from collections.abc import Callable
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
-    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QScrollArea,
     QSpinBox,
     QVBoxLayout,
-    QWidget,
 )
 
 from luoluotool.config.models import AppConfig
+from luoluotool.gui.widgets import ScrollablePage
 
+PAGE_TITLE = "开发者调试"
 COORDINATE_MAX = 10000
 COUNT_RANGE = (1, 200)
 INTERVAL_RANGE_MS = (50, 5000)
@@ -39,43 +38,41 @@ def _spin(maximum: int, minimum: int = 0, suffix: str = "") -> QSpinBox:
     return box
 
 
-class DebugPage(QWidget):
+class DebugPage(ScrollablePage):
     """开发者调试页：显示由设置页的「开发者调试」开关控制。
 
     信号 `test_requested(kind, params)`：请求主窗口在后台线程执行测试动作；
-    `diagnose_requested()`：请求执行窗口诊断（复用主窗口既有线程）。
+    `diagnose_requested()`：请求执行窗口诊断（复用主窗口既有线程）；
+    `layout_measure_requested()`：请求测量各页签布局占用（纯几何，无副作用）。
     """
 
     test_requested = Signal(str, dict)
     diagnose_requested = Signal()
+    layout_measure_requested = Signal()
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
         self._config = config
         self._on_changed = on_changed
-        # 内容必须放进 QScrollArea：本页控件较多（最小高度近 500px），若直接铺在页面上，
-        # 它会成为 QTabWidget 的最小高度，勾选「开发者调试」时把整个页签区顶高
-        # （窗口最小高度 381 → 658），表现为所有页签高度都变了、日志面板被压扁。
-        # 放进滚动区后本页最小高度不随内容增长，页签区高度与是否挂载调试页无关。
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        self.scroll_area.setWidget(content)
-        outer.addWidget(self.scroll_area)
+        # 内容自动进入 QScrollArea（见 ScrollablePage）：本页控件最多，若直接铺在页面上
+        # 会成为 QTabWidget 的最小高度并顶高所有页签。
+        layout = QVBoxLayout(self.content)
 
         # ---- 干跑模式（从设置页移入） ----
         self.dry_run_box = QCheckBox("干跑模式（仅模拟输出日志，不产生真实键鼠操作）")
         self.dry_run_box.toggled.connect(self._on_dry_run_toggled)
         layout.addWidget(self.dry_run_box)
 
-        # ---- 窗口诊断（从设置页移入） ----
+        # ---- 窗口诊断 + 布局测量（从设置页移入 / 布局回归工具） ----
+        diagnose_row = QHBoxLayout()
         self.diagnose_button = QPushButton("窗口诊断（查找游戏窗口并截图）")
-        layout.addWidget(self.diagnose_button)
+        diagnose_row.addWidget(self.diagnose_button)
+        self.layout_measure_button = QPushButton("布局测量（检查页签高度是否互相影响）")
+        diagnose_row.addWidget(self.layout_measure_button)
+        diagnose_row.addStretch(1)
+        layout.addLayout(diagnose_row)
         self.diagnose_button.clicked.connect(self.diagnose_requested.emit)
+        self.layout_measure_button.clicked.connect(self.layout_measure_requested.emit)
 
         layout.addWidget(QLabel("提示：真实模式下测试按钮会真的操作鼠标键盘；"
                                 "勾选「干跑模式」则只写日志、零真实输入。"))
@@ -179,7 +176,7 @@ class DebugPage(QWidget):
     def set_busy(self, busy: bool) -> None:
         """执行期间禁用所有测试按钮，避免重复触发。"""
         for button in (self.single_button, self.repeat_button, self.swipe_button,
-                       self.key_button, self.diagnose_button):
+                       self.key_button, self.diagnose_button, self.layout_measure_button):
             button.setEnabled(not busy)
 
     def set_status(self, message: str) -> None:

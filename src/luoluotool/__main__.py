@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--validate-config", action="store_true", help="校验配置并打印结果")
     parser.add_argument("--smoke-gui", action="store_true", help="离屏创建主窗口后立即退出")
+    parser.add_argument(
+        "--measure-layout",
+        action="store_true",
+        help="离屏测量各页签的布局占用并打印报告（页签高度稳定规则的回归检查）",
+    )
     return parser
 
 
@@ -32,6 +37,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.validate_config:
         path = Path(args.config) if args.config else get_user_data_dir() / "config.json"
         return _validate_config(path)
+    if args.measure_layout:
+        return _measure_layout(Path(args.config) if args.config else None)
     config_path = Path(args.config) if args.config else None
     return run_gui([sys.argv[0]], smoke=args.smoke_gui, config_path=config_path)
 
@@ -53,6 +60,36 @@ def _validate_config(path: Path) -> int:
         return 1
     print("OK")
     return 0
+
+
+def _measure_layout(config_path: Path | None) -> int:
+    """离屏测量各页签的布局占用并打印报告；退出码 0 通过 / 1 发现问题。
+
+    只读几何测量：不写配置（配置文件不存在时用默认配置），不产生任何输入。
+    """
+    import os
+
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+
+    from PySide6.QtWidgets import QApplication
+
+    from luoluotool.config.models import AppConfig
+    from luoluotool.config import store
+    from luoluotool.gui.layout_measure import format_measure_report, measure_layout
+    from luoluotool.gui.main_window import MainWindow
+
+    path = config_path or get_user_data_dir() / "config.json"
+    config = store.load(path) if path.exists() else AppConfig.default()
+    app = QApplication.instance() or QApplication(["luoluotool"])
+    window = MainWindow(config, path, auto_elevate=False)
+    window.show()
+    app.processEvents()
+    measure = measure_layout(window)
+    print(format_measure_report(measure))
+    window.close()
+    window.deleteLater()
+    app.processEvents()
+    return 0 if measure.ok else 1
 
 
 if __name__ == "__main__":

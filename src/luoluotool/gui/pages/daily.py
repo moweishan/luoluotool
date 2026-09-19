@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QSpinBox,
     QVBoxLayout,
-    QWidget,
 )
 
 from luoluotool.config.models import (
@@ -21,12 +20,13 @@ from luoluotool.config.models import (
     parse_keys_text,
     parse_swipes_text,
 )
+from luoluotool.gui.widgets import ScrollablePage
 
 LOOP_MIN_SECONDS = 1
 LOOP_MAX_SECONDS = 86400
 
 
-class DailyPage(QWidget):
+class DailyPage(ScrollablePage):
     """绑定 features.daily_tasks.*；控件改动写回内存配置并回调脏标记。
 
     按键序列只做「文本 ↔ 配置」的转换与展示，解析规则在 `config.models.parse_keys_text`。
@@ -36,7 +36,7 @@ class DailyPage(QWidget):
         super().__init__()
         self._config = config
         self._on_changed = on_changed
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout(self.content)
         self.enabled_box = QCheckBox("启用日常任务")
         self.task_a_box = QCheckBox("占位任务 A")
         self.loop_box = QCheckBox("循环执行")

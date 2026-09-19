@@ -2,19 +2,20 @@
 
 from collections.abc import Callable
 
-from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout
 
 from luoluotool.config.models import AppConfig
+from luoluotool.gui.widgets import ScrollablePage
 
 
-class Feature4Page(QWidget):
+class Feature4Page(ScrollablePage):
     """绑定 features.feature_4.enabled。"""
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
         self._config = config
         self._on_changed = on_changed
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout(self.content)
         self.enabled_box = QCheckBox("启用功能四")
         layout.addWidget(self.enabled_box)
         layout.addWidget(QLabel("功能规划中"))

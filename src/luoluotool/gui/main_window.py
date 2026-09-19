@@ -39,8 +39,9 @@ from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
 from luoluotool.core import debug as debug_actions
+from luoluotool.gui.layout_measure import format_measure_report, measure_layout
 from luoluotool.gui.pages.daily import DailyPage
-from luoluotool.gui.pages.debug import DebugPage
+from luoluotool.gui.pages.debug import PAGE_TITLE, DebugPage
 from luoluotool.gui.pages.feature3 import Feature3Page
 from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
@@ -60,6 +61,7 @@ STATUS_RUNNING_REAL = "运行中 · 真实模式"
 STATUS_REAL_STYLE = "color: #c62828; font-weight: bold;"
 THREAD_WAIT_TIMEOUT_MS = 2000
 LOG_PANEL_MAX_BLOCKS = 1000
+LOG_PANEL_MIN_HEIGHT = 240   # 固定下限，避免日志面板高度随页签集合变化（配合 tabs 的 stretch=1）
 
 
 def _is_valid_icon_file(path: Path) -> bool:
@@ -105,7 +107,7 @@ class _RunnerThread(QThread):
         self._runner.start()
 
 
-DEBUG_TAB_TITLE = "开发者调试"
+DEBUG_TAB_TITLE = PAGE_TITLE   # 页签标题由页面模块提供，布局测量工具复用同一常量
 
 
 class _DebugTestThread(QThread):
@@ -221,6 +223,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentIndex(0)  # 默认打开设置页
         self.settings_page.developer_box.toggled.connect(self._on_developer_toggled)
         self.debug_page.diagnose_requested.connect(self._on_diagnose)
+        self.debug_page.layout_measure_requested.connect(self._on_measure_layout)
         self.debug_page.test_requested.connect(self._on_debug_test)
         self.settings_page.restart_admin_button.clicked.connect(self._on_restart_admin_clicked)
         self.save_button = QPushButton("保存")
@@ -237,6 +240,7 @@ class MainWindow(QMainWindow):
         self.log_panel = QPlainTextEdit()
         self.log_panel.setReadOnly(True)
         self.log_panel.setMaximumBlockCount(LOG_PANEL_MAX_BLOCKS)
+        self.log_panel.setMinimumHeight(LOG_PANEL_MIN_HEIGHT)
         buttons = QHBoxLayout()
         buttons.addWidget(self.save_button)
         buttons.addWidget(self.reload_button)
@@ -246,7 +250,7 @@ class MainWindow(QMainWindow):
         buttons.addStretch(1)
         central = QWidget(self)
         layout = QVBoxLayout(central)
-        layout.addWidget(self.tabs)
+        layout.addWidget(self.tabs, 1)   # 多余高度全部给页签区，日志面板保持稳定高度
         layout.addLayout(buttons)
         layout.addWidget(self.log_panel)
         self.setCentralWidget(central)
@@ -456,6 +460,13 @@ class MainWindow(QMainWindow):
 
     def _on_debug_thread_finished(self) -> None:
         self.debug_page.set_busy(False)
+
+    def _on_measure_layout(self) -> None:
+        """布局测量（开发者调试页入口）：纯几何计算，同步执行、无输入、不改配置。"""
+        report = format_measure_report(measure_layout(self))
+        self.debug_page.set_status(report)
+        for line in report.splitlines():
+            logger.info("%s", line)
 
     def _on_diagnose(self) -> None:
         if self._diagnose_thread is not None and self._diagnose_thread.isRunning():

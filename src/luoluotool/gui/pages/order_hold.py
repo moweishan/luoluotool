@@ -2,19 +2,20 @@
 
 from collections.abc import Callable
 
-from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout
 
 from luoluotool.config.models import AppConfig
+from luoluotool.gui.widgets import ScrollablePage
 
 
-class OrderHoldPage(QWidget):
+class OrderHoldPage(ScrollablePage):
     """绑定 features.order_hold.*；预留开关无任何行为。"""
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
         self._config = config
         self._on_changed = on_changed
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout(self.content)
         self.enabled_box = QCheckBox("启用卡订单")
         self.reserved_box_1 = QCheckBox("预留开关 1")
         self.reserved_box_2 = QCheckBox("预留开关 2")

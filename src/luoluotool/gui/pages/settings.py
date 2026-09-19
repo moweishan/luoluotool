@@ -10,11 +10,11 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSpinBox,
     QVBoxLayout,
-    QWidget,
 )
 
 from luoluotool.automation.hotkey import DEFAULT_HOTKEY_NAME, supported_hotkeys
 from luoluotool.config.models import AppConfig
+from luoluotool.gui.widgets import ScrollablePage
 
 CLICK_INTERVAL_MIN_MS = 100
 CLICK_INTERVAL_MAX_MS = 5000
@@ -22,7 +22,7 @@ FAILURES_MIN = 1
 FAILURES_MAX = 100
 
 
-class SettingsPage(QWidget):
+class SettingsPage(ScrollablePage):
     """绑定 automation.click_interval_ms/max_consecutive_failures/restore_cursor_after_click/
     developer_mode；干跑开关与窗口诊断已移入「开发者调试」页。"""
 
@@ -30,7 +30,7 @@ class SettingsPage(QWidget):
         super().__init__()
         self._config = config
         self._on_changed = on_changed
-        layout = QVBoxLayout(self)
+        layout = QVBoxLayout(self.content)
         self.click_interval_spin = QSpinBox()
         self.click_interval_spin.setRange(CLICK_INTERVAL_MIN_MS, CLICK_INTERVAL_MAX_MS)
         self.click_interval_spin.setSuffix(" ms")
