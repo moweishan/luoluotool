@@ -35,6 +35,7 @@
 - 新增或更换**任何依赖**都必须改 `requirements.txt` 并在提交信息里写明理由与体积代价（当前：`numpy` + `opencv-python-headless`，使打包体积 +60–70 MB）。
 - 占位任务（`order_hold`/`feature_3`/`feature_4`）：**只允许**「进入日志（含"该功能尚未实现真实逻辑（规划中）"原文）+ 每轮一条心跳日志 + 响应停止」；禁止产生任何输入、禁止读 params、禁止写推测性业务逻辑（有测试守卫）。
 - 文件长度控制：单个文件超过 400 行必须先考虑拆分；超过 600 行必须拆分（模板生成的 UI 文件除外）。
+- **禁止用 PowerShell 文本命令改写仓库文件**（2026-09-19 实测事故）：`Get-Content -Raw | Set-Content` 在 Windows PowerShell 5.1 下会**按 ANSI(GBK) 读取无 BOM 的 UTF-8 文件**，中文被写成乱码（当时把 `PROJECT_SPEC.md` 679 行改坏、`config.example.json` 的中文关键字损坏，靠 `git checkout --` 恢复）。批量改写请用 Python 显式 `encoding="utf-8"`（写回不加 BOM），或用 `edit`/`write` 工具。
 
 ## 3. 禁止事项（红线）
 

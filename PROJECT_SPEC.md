@@ -246,7 +246,7 @@
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
 | 输入模拟 | **真实鼠标键盘（`SendInput`，唯一实现方式，Phase 5.3）**：`automation/real_input.py` 负责注入原语与「输入前置顶校验」（鼠标：移动、点击、**分帧滑动的拖拽**；键盘：单键、组合键、长按），`RealInputSender` 负责流程，`utils/keys.py` 提供键名表与组合键解析（config 与 GUI 共用）；干跑仍为 `DryRunSender`（零输入）。其它通道（窗口消息、合成指针、对齐窗口）已按用户指示删除 | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
 | 窗口查找/截图 | pywin32（win32gui / win32ui）；`automation/real_input.py` 负责置顶/置前与注入原语 | 成熟；后续可用截图做锚点匹配 |
-| 图像识别 | **OpenCV 模板匹配（`opencv-python-headless` + `numpy`，2026-09-19 启用）**：`automation/vision.py` 负责「截图→匹配→客户区坐标」，`core/vision.py` 负责「找窗口→就绪校验→截图→匹配→结果」；入口＝调试页「图片识别匹配测试」（可选「框选截图生成模板」直接框选生成模板）与命令行 `--recognize <图片> [--threshold 0.85]`；模板存 `assets/anchors/`（`*.png` 不入库） | 坐标式自动化换分辨率/换界面就失效，需要"按图找点"；headless 版本不带 GUI 组件（比 opencv-python 小）。代价：打包体积 +60–70 MB |
+| 图像识别 | **OpenCV 模板匹配（`opencv-python-headless` + `numpy`，2026-09-19 启用）**：`automation/vision.py` 负责「截图→匹配→客户区坐标」，`core/vision.py` 负责「找窗口→就绪校验→截图→匹配→结果」；入口＝调试页「图片识别匹配测试」（可选「框选截图生成模板」直接框选生成模板；「识别成功时保存带框截图」为该页开关，受 `automation.save_vision_annotations` 控制）与命令行 `--recognize <图片> [--threshold 0.85] [--no-annotate]`；模板存 `assets/anchors/`（`*.png` 不入库） | 坐标式自动化换分辨率/换界面就失效，需要"按图找点"；headless 版本不带 GUI 组件（比 opencv-python 小）。代价：打包体积 +60–70 MB |
 | 测试 | pytest | 事实标准 |
 | 打包 | PyInstaller one-dir（`packaging/build.ps1` + `LuoLuoTool.spec`，构建前强制全量测试；**GUI 子系统 console=False：双击无 cmd 窗口**，CLI 输出需重定向读取；不做 one-file 与安装包） | 生态成熟；注意杀软误报，需在文档说明加白 |
 
@@ -322,7 +322,7 @@ LuoLuoTool/
 
 ```json
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -357,7 +357,8 @@ LuoLuoTool/
     "failsafe_hotkey": "F8",
     "ask_elevation_on_start": true,
     "restore_cursor_after_click": true,
-    "developer_mode": false
+    "developer_mode": false,
+    "save_vision_annotations": true
   },
   "logging": { "level": "INFO", "max_file_mb": 2, "backup_count": 3 }
 }
@@ -385,6 +386,7 @@ LuoLuoTool/
 | v5 → v6 | 任务参数新增**按键序列** `params.keys`（默认 `[]` = 不发送按键）：元素为 `{combo, hold_ms, wait_after_ms}`，支持组合键与长按 | `validation.migrate()` → `_migrate_v5_to_v6` |
 | v6 → v7 | 任务参数新增**鼠标滑动序列** `params.swipes`（默认 `[]` = 不滑动）：元素为 `{from, to, duration_ms, wait_after_ms}`，按住左键分帧拖拽 | `validation.migrate()` → `_migrate_v6_to_v7` |
 | v7 → v8 | 新增 `automation.developer_mode`（默认 `false` = 不显示「开发者调试」标签页） | `validation.migrate()` → `_migrate_v7_to_v8` |
+| v8 → v9 | 新增 `automation.save_vision_annotations`（默认 `true` = 图像识别成功后仍存带框截图到 `user_data/debug/`；开发者调试页可关） | `validation.migrate()` → `_migrate_v8_to_v9` |
 
 > 字段沿革：合成指针通道曾在 v3 引入 `automation.input_mode`（`window_message`/`synthetic_pointer`）与 `pointer_type`，**随该通道撤回**（见 §4.2.1）；v4 又把 `input_mode` 重新定义为三档实现方式选择，**2026-09-16 用户确定只保留真实鼠标键盘后随 v5 删除**。若某份旧配置仍残留这些字段，迁移链会把它们逐一移除（已有单测覆盖）。
 
@@ -414,6 +416,7 @@ LuoLuoTool/
 - [ ] 点击越界校验：坐标必须落在游戏窗口客户区 `[0,width)×[0,height)` 内，越界或读不到客户区时**不点击**并写 WARNING 日志（真实与干跑通道都要校验）；滑动（拖拽）的起点与终点同样校验。
 - [ ] 图像识别：给定模板图能在当前游戏窗口客户区里返回命中坐标（客户区中心/左上/尺寸/匹配度）；窗口未找到或最小化时给出可读提示；模板比截图大或文件不可读时报可读错误；调试页与 `--recognize` 两个入口都可用；识别本身**不产生任何输入**。
 - [ ] 框选生成模板：调试页「框选截图生成模板」→ 后台截图 → 弹窗拖拽框选 → 保存 `assets/anchors/anchor_<时间戳>.png` 并**自动回填图片路径**；框选坐标即客户区坐标，用生成的模板识别必须命中同一坐标（有离线全流程验证）。
+- [ ] 带框截图为可选项：关闭开发者调试页的「识别成功时保存带框截图」后，识别只给坐标、不写 `user_data/debug/vision_*.png`（配置 `automation.save_vision_annotations=false`，CLI 亦跟随该配置）。
 - [ ] 真实模式的副作用已如实告知并可配置：确认弹窗写明「真实移动鼠标 + 抢前台 + 封号风险 + 急停键」；点击后按 `restore_cursor_after_click` 还原真实光标；干跑模式仍零输入。
 - [ ] 配置损坏时程序可启动并提示恢复为默认值，而不是崩溃。
 - [ ] `pytest` 全绿；`python -m luoluotool --validate-config` 可用。
