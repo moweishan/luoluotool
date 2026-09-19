@@ -25,7 +25,7 @@
 - 所有文件/窗口/进程操作都要处理失败路径：找不到窗口、无权限、配置缺失、磁盘满等，给出可读错误并保持程序可用。
 - 时间间隔类配置必须有上下限校验（例如 `click_interval_ms` 限 100–5000）。
 - GUI：长任务一律放工作线程（QThread），禁止在主线程 sleep 或忙等；按钮防重复点击（启动后禁用启动钮）。
-- GUI 布局：**单个页签内容较多时必须放进 `QScrollArea`**（`setWidgetResizable(True)`）——页签内容是 `QTabWidget` 最小高度的来源，某个页面最小高度过高会把整个页签区顶高、改变所有页签高度并压扁日志面板（2026-09-19 实测：调试页曾把窗口最小高度 381 顶到 658）。新增/改动页签后必须回归「挂载该页时页签区与窗口最小高度不变」。
+- GUI 布局：**所有页签必须继承 `gui.widgets.ScrollablePage`**（内容自动进 `QScrollArea` + 建议尺寸统一为 `PAGE_SIZE_HINT`；派生类用 `QVBoxLayout(self.content)`，布局不能建在 `self` 上）。原因（2026-09-19 实测）：`QTabWidget` 的高度同时取「所有页签的最大最小高度」与「最大建议高度」——其一是调试页把窗口最小高度 381 顶到 658，其二是它把页签区实际高度 284 顶到 316、日志面板压到 252、所有页签高度随之变化。主窗口里日志面板设最小高度、页签区 `stretch=1`，确保多余高度只影响页签区。改动页签后必须跑 `--measure-layout`（报告须为「挂载/卸载开发者调试页不改变任何高度」，或跑 `tests/test_gui_layout.py`）。
 - 每次真实输入注入前检查 stop 事件；停止请求发出后 500ms 内必须停止动作序列。
 - 输入注入实现方式（**只有一种**：真实鼠标键盘 `SendInput`；窗口消息/合成指针/对齐窗口三种实现已按用户要求删除）：`automation/real_input.py`（Phase 5.3）必须：**每次点击/按键前**校验游戏窗口是否在最顶层，不在则先 `HWND_TOPMOST` 置顶再 `SetForegroundWindow` 置前（失败用 `AttachThreadInput` 兜底）并回读复核；无法确保窗口在最前时**绝不输入**（抛可读错误）；最小化先 `SW_RESTORE`；输入结束取消本次由我们设置的置顶；点击后按 `restore_cursor_after_click` 还原真实光标；键盘支持单键/组合键（`key_combo("ctrl+s")`）/长按（`key_hold`），**长按必须切片检查急停并在任何退出路径释放按键（绝不卡键）**，组合键必须逆序释放修饰键；鼠标**滑动**（`drag`）必须：客户区起终点各经 `ClientToScreen` 换算、沿**缓出曲线**分帧移动（`build_drag_path` = `interpolate_points(..., easing=ease_out_quad)` 缓出采样 + 末尾静止帧，≈60Hz、最少 4 步、避免被识别为瞬移，**末尾在终点保持静止 `DRAG_TAIL_HOLD_STEPS` 帧后再松手**，防"甩动惯性"导致画面继续飘）、滑动前清理残留左键按下状态并校验置顶窗口、期间切片检查急停、松手后**复查 `VK_LBUTTON` 已抬起**（未抬起则补发，仍失败即报错）、**任何退出路径（含等待抛异常）都在 finally 释放左键**、滑动结束后**同样按 `restore_cursor_after_click` 还原光标**，但必须**先延迟 `DRAG_RESTORE_DELAY_SECONDS` 让引擎处理完抬起、再用 `restore_cursor_smooth` 分帧小步移回**（禁止一次 `SetCursorPos` 跳回：跳跃会被残留拖拽状态算成巨大位移而让画面乱飘；等待被中断时仍必须还原）；键名表与解析放 `utils/keys.py`（config 与 GUI 复用，配置校验与 GUI 会即时拒绝未知键名）；`SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`；
 - 开发者调试页（`gui/pages/debug.py` + `core/debug.py`）只允许复用正式输入通道（`build_channel`）做测试：干跑模式下测试只写日志、零真实输入；真实模式下每次输入前同样校验并置顶窗口；测试动作必须放后台线程、执行期间禁用按钮、可被停止请求中断（长按/滑动仍须释放按键）。
@@ -57,6 +57,7 @@
   - `python -m pytest -q`
   - `python -m luoluotool --validate-config`
   - `python -m luoluotool --smoke-gui`
+  - `python -m luoluotool --measure-layout`（改动过页签/布局时必须跑，报告须为「不改变任何高度」）
 
 ## 5. 提交要求
 
@@ -103,4 +104,5 @@ python -m venv .venv
 .venv\Scripts\python -m luoluotool --version
 .venv\Scripts\python -m luoluotool --validate-config
 .venv\Scripts\python -m luoluotool --smoke-gui
+.venv\Scripts\python -m luoluotool --measure-layout
 ```

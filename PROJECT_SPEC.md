@@ -256,8 +256,9 @@ LuoLuoTool/
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
 │   │   ├── main_window.py   # 主窗口（页签 + 启动/停止 + 状态栏）
+│   │   ├── layout_measure.py# 布局测量：页签高度稳定规则的度量与报告（CLI 与调试页共用）
 │   │   ├── pages/           # daily.py / order_hold.py / feature3.py / feature4.py / settings.py / debug.py（开发者调试）
-│   │   └── widgets.py       # 通用小组件
+│   │   └── widgets.py       # 通用小组件：LogPanelHandler + ScrollablePage（所有页签的基类）
 │   └── utils/
 │       ├── keys.py          # 键名表与组合键解析（config/automation 共用）
 │       ├── logging_setup.py # 日志初始化
@@ -286,7 +287,7 @@ LuoLuoTool/
 | automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（点击、**滑动拖拽**、单键/组合键/长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入 | `RealInputSender.click_at(x, y)` / `drag(from_xy, to_xy, seconds)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click()`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
-| gui | 五页签（设置/日常任务/卡订单/功能三/功能四）+ 可选「开发者调试」页 + 日志面板 + 状态栏 | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` |
+| gui | 五页签（设置/日常任务/卡订单/功能三/功能四）+ 可选「开发者调试」页 + 日志面板 + 状态栏；**所有页签继承 `widgets.ScrollablePage`**（内容进 `QScrollArea` + 建议尺寸 `PAGE_SIZE_HINT`），页签高度不随挂载/卸载变化 | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` / `layout_measure_requested()`; `layout_measure.measure_layout(window)` / `format_measure_report(measure)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
 ## 9. 数据结构（配置文件 schema v8）
@@ -374,6 +375,7 @@ LuoLuoTool/
 | `python -m luoluotool --config <path>` | 指定配置路径启动（默认 `user_data/config.json`） |
 | `python -m luoluotool --validate-config` | 只校验配置并打印结果，退出码 0/1 |
 | `python -m luoluotool --smoke-gui` | 离屏创建主窗口后立即退出（供 CI/冒烟测试） |
+| `python -m luoluotool --measure-layout` | 离屏测量各页签的布局占用并打印报告（页签高度稳定规则的回归检查；退出码 0/1） |
 
 约定：所有 CLI 参数解析放在 `__main__.py`，解析后交给 `gui.app.run(argv)`；退出码：0 成功，1 配置错误，2 运行环境错误。
 
