@@ -611,6 +611,14 @@ Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--smoke-gui' -Wait
 
 **验收（本轮）**：全量 **366 项测试通过**；`--validate-config` = OK；`--smoke-gui` 退出码 0；`--measure-layout` = 不改变任何高度；重建 exe 后 `--measure-layout` 退出码 0。
 
+### 工作方式约定（2026-09-19 用户指示，长期有效）
+
+1. **干跑开关不搬到设置页**：保持"只有开启「开发者调试」才能切换干跑"的现状（用户明确表示不需要常驻入口）。
+2. **不要每次改动都重新构建 exe**：只有用户明确要求打包时才跑 `packaging\build.ps1`；日常改动只跑
+   `pytest -q`、`--validate-config`、`--smoke-gui`、`--measure-layout` 四条廉价验收命令（体积/耗时只在构建任务里测一次）。
+3. **构建产物一律不入库**：`.gitignore` 覆盖 `dist/`、`build/`、`*.exe`、`*.pyd`、`*.dll`、`*.zip` 与
+   PyInstaller 中间产物；新增守卫测试 `test_no_build_artifacts_are_tracked` 扫描 git 索引，确保没人把 exe 提交进去。
+
 ---
 
 ## 后续阶段（先不执行，仅占位）

@@ -69,6 +69,7 @@
 - [ ] exe 在**无 Python** 的干净 Windows 10/11 上验证过。
 - [ ] 打包后 `--version`、`--smoke-gui`、`--measure-layout`、GUI 主界面均正常（GUI 子系统下 CLI 输出需重定向读取：`Start-Process … -Wait -PassThru -RedirectStandardOutput`）。
 - [ ] ⚠️ 打包配置（Phase 7）：`packaging/LuoLuoTool.spec` one-dir + 排除 tests；`version_info.txt` 版本号与 `__version__` 一致；`build.ps1` **先跑全量测试再打包**，且 `.ps1` 必须带 UTF-8 BOM（否则 PowerShell 5.1 按 ANSI 读中文导致语法错误）；资源必须与 exe 同级（`_internal` 会被 `paths.py` 的 `parents[3]` 推导排除在外）。
+- [ ] ⚠️ 按需构建与产物不入库（2026-09-19 用户要求）：**只有用户明确要求时才重新打包**（日常改动只跑测试与 `--validate-config`/`--smoke-gui`/`--measure-layout`）；`dist/`、`build/`、`*.exe`、`*.pyd`、`*.dll`、`*.zip` 一律不提交（守卫测试扫描 git 索引）。
 - [ ] ⚠️ 已知问题（Phase 7 发现，待修复）：冻结 exe 的 `--measure-layout` 在 GBK 控制台 `UnicodeEncodeError`（报告含 `✓ ✗`）；影响仅该子命令，详见 `PROJECT_SPEC.md` 已知问题 1。
 - [ ] 打包产物目录完整（缺 DLL 时能提示，而不是无声崩溃）。
 - [ ] 杀软误报有应对说明（README 加白名单步骤）。
