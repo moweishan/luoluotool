@@ -180,10 +180,12 @@
 | 键盘必须落在游戏窗口 | 置顶之外再 `SetForegroundWindow`（前台锁定失败时用 `AttachThreadInput` 兜底），并**回读 `GetForegroundWindow` 复核** |
 | 无法确保在最前 | **绝不输入**：返回 `FrontResult.ok=False` → 抛可读错误拒绝本次输入 |
 | 最小化窗口 | 上层直接**拒绝输入**（`is_window_ready` 判定最小化/不可见即抛错）；`ensure_window_front` 内部的 `ShowWindow(SW_RESTORE)` 仅作为兜底路径 |
-| 输入后收拾现场 | 取消**本次由我们设置的**置顶（避免游戏窗口长期浮在最上层）；按 `restore_cursor_after_click` 把真实光标移回原位 |
+| 输入后收拾现场 | 取消**本次由我们设置的**置顶（避免游戏窗口长期浮在最上层）；点击后按 `restore_cursor_after_click` 把真实光标移回原位（**滑动不还原光标**，见下方修复记录） |
 | 注入面收敛 | `SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`（有跨模块守卫测试） |
 
 **规格收敛（2026-09-16）**：用户确定**只保留这一种输入实现方式**，因此其它通道（窗口消息、合成指针、对齐窗口）与选择它们的 `automation.input_mode` 枚举、以及与本通道冲突的 `pause_on_window_focus_loss` 开关**已全部删除**（schema v5）。**代价（用户已知情并选择）**：输入期间会**抢前台**，因此运行时不宜同时操作其它软件。
+
+**滑动（拖拽）修复记录（2026-09-19，用户实测「滑动结束后游戏画面乱飘」）**：三处成因一并修复——① 轨迹由匀速改为**缓出曲线 + 末尾在终点保持静止数帧**（`build_drag_path`：`interpolate_points(..., easing=ease_out_quad)` 缓出采样 + `DRAG_TAIL_HOLD_STEPS` 帧静止），因为"匀速甩到底立刻松手"会被引擎判定为 flick（快速甩动），松手后画面带惯性继续飘；② 松手后**回读 `GetAsyncKeyState(VK_LBUTTON)` 复查左键是否真的抬起**，未抬起则补发抬起（并记 ERROR），仍失败则抛可读错误提示用户手动点击左键；③ **滑动后不再还原光标**（松手瞬间把光标跳回原位会被游戏当成继续拖动而继续转画面），`restore_cursor_after_click` 现在**只作用于点击**。附带加固：滑动前先清理可能残留的左键按下状态；松手动作放在 `finally` 且**对等待函数抛异常也生效**（"必定松手"是安全属性，有回归测试）。
 
 ### 4.3 已确认的风险（用户已知悉，后果自负）
 
@@ -341,7 +343,7 @@ LuoLuoTool/
   - `placeholder_task_a`：`{"click_points": [[x, y], ...], "wait_after_ms": 500}`
     - `click_points`：客户区坐标序列（`[[x, y], ...]`，允许为空列表，此时任务只写提示日志不动作）；
     - `keys`：按键步骤序列（`[{combo, hold_ms, wait_after_ms}, ...]`，最多 20 步）：`combo` 为组合键文本（如 `ctrl+s`，键名表见 `utils/keys.py`），`hold_ms` > 0 表示长按该毫秒数（0 = 单击）；长按期间可被急停打断并保证释放按键；每次按键前同样会校验并置顶游戏窗口。
-    - `swipes`：鼠标滑动步骤序列（`[{from, to, duration_ms, wait_after_ms}, ...]`，最多 20 步）：从 `from` 按住左键**分帧插值**移动到 `to` 后松开（`duration_ms` 50–10000，默认 400）；滑动前同样校验并置顶游戏窗口；滑动期间可按急停立即中断，**任何退出路径都释放左键**（绝不卡住鼠标）。
+    - `swipes`：鼠标滑动步骤序列（`[{from, to, duration_ms, wait_after_ms}, ...]`，最多 20 步）：从 `from` 按住左键沿**缓出曲线**（`build_drag_path`）分帧移动到 `to`，**末尾在终点保持静止数帧**（`DRAG_TAIL_HOLD_STEPS`）后再松开——匀速"甩到底即松手"会被引擎识别为 flick，松手后画面带惯性继续飘；`duration_ms` 50–10000（默认 400）；滑动前同样校验并置顶游戏窗口，并**先清理可能残留的左键按下状态**；滑动期间可按急停立即中断；松手后**复查 `VK_LBUTTON` 是否真的抬起**（未抬起则补发，仍失败即报可读错误并提示手动点击左键）；**任何退出路径（含等待异常）都释放左键**（绝不卡住鼠标）；**滑动后不还原光标**——`restore_cursor_after_click` 只作用于点击，松手后把光标跳回原位会被游戏当成继续拖动（详见 §4.2.3 修复记录）。
     - `wait_after_ms`：每个步骤后的等待毫秒数（0–60000）。
 - 配置文件为 UTF-8；读写使用临时文件 + `os.replace` 原子替换。
 
