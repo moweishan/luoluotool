@@ -10,9 +10,16 @@
 #   并显式排除 tests / pytest / 开发期工具链，避免把测试与无关依赖塞进产物。
 # - `assets/icons` 作为数据文件放进产物：运行时 `utils.paths.get_icons_dir()` 基于
 #   `PROJECT_ROOT`（冻结后 = 产物目录）解析，图标缺失时会降级为空图标（不崩溃）。
-# - 控制台子系统（console=True）：`--version` / `--validate-config` / `--smoke-gui`
-#   的输出与退出码在命令行可直接看到（Phase 7 验收要求）。若不想要黑窗口，
-#   把 console 改成 False 重新打包即可（代价：命令行输出需重定向才能看到）。
+# - GUI 子系统（console=False，2026-09-19 用户要求"不显示 cmd 窗口"）：双击 exe 不再弹黑窗口。
+#   代价：`--version` / `--validate-config` / `--smoke-gui` 的输出不会显示在命令行，
+#   必须重定向才能看到，例如：
+#       Start-Process .\LuoLuoTool.exe -ArgumentList '--version' -Wait -PassThru `
+#           -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+#   `build.ps1` 的 exe 冒烟已按此方式改写（GUI 程序在 PowerShell 里 `&` 不会等待、也读不到退出码）。
+# - 窗口化进程没有控制台，PyInstaller 会把 sys.stdout/sys.stderr 置为 None；而项目的
+#   `utils/logging_setup` 注册了 StreamHandler（写 stderr），因此挂一个运行时钩子把这两个流
+#   接到空设备（`packaging/rthook_windowed_stdio.py`），避免日志处理器每次 emit 都抛 AttributeError。
+#   日志文件（logs/luoluotool.log）与 GUI 日志面板不受影响，仍是权威记录。
 # - 不做 one-file 压缩（Phase 7 明确不做）：one-dir 启动更快、杀软误报更少。
 
 from pathlib import Path
@@ -22,6 +29,7 @@ SRC_DIR = PROJECT_ROOT / "src"
 ICONS_DIR = PROJECT_ROOT / "assets" / "icons"
 ICON_FILE = ICONS_DIR / "luoluoTool.ico"            # 多尺寸真 ICO；缺失时用 PyInstaller 默认图标
 VERSION_FILE = PROJECT_ROOT / "packaging" / "version_info.txt"
+RUNTIME_HOOK = PROJECT_ROOT / "packaging" / "rthook_windowed_stdio.py"
 
 # 数据文件：窗口图标（运行时按 PROJECT_ROOT/assets/icons 查找）
 datas = []
@@ -91,7 +99,7 @@ analysis = Analysis(
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=[str(RUNTIME_HOOK)] if RUNTIME_HOOK.is_file() else [],
     excludes=excludes,
     noarchive=False,
     optimize=0,
@@ -109,7 +117,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,
-    console=True,
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

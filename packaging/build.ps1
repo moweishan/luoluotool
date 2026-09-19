@@ -87,29 +87,43 @@ $fileCount = (Get-ChildItem (Split-Path $exePath) -Recurse -File).Count
 Write-Host ("exe：{0}  |  目录合计：{1}（{2} 个文件）" -f (Format-MB $exeBytes), (Format-MB $dirBytes), $fileCount)
 
 # ---------------------------------------------------------------- 6/6 exe 冒烟
-Write-Step "6/6 exe 冒烟与启动耗时（控制台子系统，输出与退出码可见）"
+Write-Step "6/6 exe 冒烟与启动耗时（GUI 子系统：无 cmd 窗口，输出经重定向读取）"
 $results = @()
 
-$watch = [System.Diagnostics.Stopwatch]::StartNew()
-& $exePath --version
-$code = $LASTEXITCODE
-$watch.Stop()
-$results += [pscustomobject]@{ 命令 = "--version"; 退出码 = $code; 耗时秒 = [math]::Round($watch.Elapsed.TotalSeconds, 2) }
-if ($code -ne 0) { Fail "exe --version 失败（退出码 $code）" }
+function Invoke-FrozenExe {
+    param([string]$Exe, [string[]]$Arguments, [string]$Tag)
+    $outFile = Join-Path $env:TEMP "luoluotool_smoke_$Tag.out.txt"
+    $errFile = Join-Path $env:TEMP "luoluotool_smoke_$Tag.err.txt"
+    Remove-Item $outFile, $errFile -ErrorAction SilentlyContinue
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    # GUI 子系统的 exe 在 PowerShell 里用 & 调用既不会等待也读不到退出码，必须 Start-Process + 重定向
+    $proc = Start-Process -FilePath $Exe -ArgumentList $Arguments -Wait -PassThru `
+        -RedirectStandardOutput $outFile -RedirectStandardError $errFile
+    $watch.Stop()
+    return [pscustomobject]@{
+        ExitCode = $proc.ExitCode
+        Seconds  = [math]::Round($watch.Elapsed.TotalSeconds, 2)
+        StdOut   = (Get-Content $outFile -Raw -ErrorAction SilentlyContinue)
+        StdErr   = (Get-Content $errFile -Raw -ErrorAction SilentlyContinue)
+    }
+}
 
-$watch = [System.Diagnostics.Stopwatch]::StartNew()
-& $exePath --validate-config
-$code = $LASTEXITCODE
-$watch.Stop()
-$results += [pscustomobject]@{ 命令 = "--validate-config"; 退出码 = $code; 耗时秒 = [math]::Round($watch.Elapsed.TotalSeconds, 2) }
-if ($code -ne 0) { Fail "exe --validate-config 失败（退出码 $code）" }
+$version = Invoke-FrozenExe -Exe $exePath -Arguments @("--version") -Tag "version"
+$results += [pscustomobject]@{ 命令 = "--version"; 退出码 = $version.ExitCode; 耗时秒 = $version.Seconds }
+if ($version.ExitCode -ne 0) { Fail "exe --version 失败（退出码 $($version.ExitCode)）" }
+if ($version.StdOut -notmatch "luoluotool") { Fail "exe --version 输出异常：$($version.StdOut)" }
+Write-Host ("  --version 输出：{0}" -f $version.StdOut.Trim())
 
-$watch = [System.Diagnostics.Stopwatch]::StartNew()
-& $exePath --smoke-gui
-$code = $LASTEXITCODE
-$watch.Stop()
-$results += [pscustomobject]@{ 命令 = "--smoke-gui"; 退出码 = $code; 耗时秒 = [math]::Round($watch.Elapsed.TotalSeconds, 2) }
-if ($code -ne 0) { Fail "exe --smoke-gui 失败（退出码 $code）" }
+$validate = Invoke-FrozenExe -Exe $exePath -Arguments @("--validate-config") -Tag "validate"
+$results += [pscustomobject]@{ 命令 = "--validate-config"; 退出码 = $validate.ExitCode; 耗时秒 = $validate.Seconds }
+if ($validate.ExitCode -ne 0) { Fail "exe --validate-config 失败（退出码 $($validate.ExitCode)）" }
+if ($validate.StdOut -notmatch "OK") { Fail "exe --validate-config 输出异常：$($validate.StdOut)" }
+Write-Host ("  --validate-config 输出：{0}" -f $validate.StdOut.Trim())
+
+$smoke = Invoke-FrozenExe -Exe $exePath -Arguments @("--smoke-gui") -Tag "smoke"
+$results += [pscustomobject]@{ 命令 = "--smoke-gui"; 退出码 = $smoke.ExitCode; 耗时秒 = $smoke.Seconds }
+if ($smoke.ExitCode -ne 0) { Fail "exe --smoke-gui 失败（退出码 $($smoke.ExitCode)）" }
+if ($smoke.StdErr -notmatch "离屏冒烟完成") { Fail "exe --smoke-gui 未打出冒烟成功日志：$($smoke.StdErr)" }
 
 Write-Host ""
 $results | Format-Table -AutoSize

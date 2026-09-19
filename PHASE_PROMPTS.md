@@ -537,23 +537,33 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 **不要做什么**：不改任何业务代码（发现 bug 先记录，回退到对应阶段修复）；不做 one-file 压缩优化；不做自动更新；不做安装包（MSI/NSIS）。
 
-**验收命令**：
+**验收命令**（**2026-09-19 起 exe 改为 GUI 子系统，CLI 输出需重定向读取**）：
 ```powershell
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1
-.\dist\LuoLuoTool\LuoLuoTool.exe --version
-.\dist\LuoLuoTool\LuoLuoTool.exe --smoke-gui
+# 旧写法（GUI 子系统下不等待、读不到输出与退出码，已弃用）：
+#   .\dist\LuoLuoTool\LuoLuoTool.exe --version
+Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--version' -Wait -PassThru `
+    -RedirectStandardOutput v.txt | Select-Object ExitCode; Get-Content v.txt   # → luoluotool 0.1.0
+Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--smoke-gui' -Wait -PassThru | Select-Object ExitCode   # → 0
 ```
 
 **完成标准**：
 - [ ] exe 在本机可启动 GUI，`--version` 输出正确。
 - [ ] 拷贝整个 `dist\LuoLuoTool\` 目录到干净 Windows（无 Python）后，GUI 正常打开、配置可保存。
 - [ ] 杀软误报已按 README 说明处理（加白名单）。
+- [ ] **（2026-09-19 追加）双击 exe 不出现 cmd 窗口**（GUI 子系统）；CLI 输出改由重定向读取。
 
 > **完成记录（2026-09-19）**：新增 `packaging/LuoLuoTool.spec`（one-dir、从 `__main__.py` 静态分析、排除 tests/pytest 与 20+ 个未用 Qt 模块、`console=True` 便于 CLI 验收、`icon=`/`version=` 指向既有资源）、`packaging/version_info.txt`（0.1.0.0，与 `__version__` 一致）、`packaging/build.ps1`（虚拟环境 → 依赖 → **全量测试门禁** → 清理 → PyInstaller → 体积报告 → exe 三项冒烟 + 耗时）；`.gitignore` 补齐中间产物；`README.md` 新增「7. 构建与发布」（命令、产物、杀软加白、干净机器验证步骤、已知限制）；新增 `tests/test_packaging.py`（6 项守卫：文件齐全、版本号一致、one-dir/排除 tests/资源布局、构建脚本先测试后打包、**.ps1 必须带 UTF-8 BOM**、.gitignore 覆盖产物）。
 > **打包踩坑（均已定位并修好）**：
 > ① `build.ps1` 一开始没有 BOM，`powershell -File`（Windows PowerShell 5.1）按 ANSI 读中文 → 语法错误；已加 UTF-8 BOM 并写成守卫测试（编辑脚本时 BOM 会被去掉，测试能立即拦住）。
 > ② 资源路径：运行期 `utils/paths.py` 用 `Path(__file__).parents[3]` 推导 `PROJECT_ROOT`，开发期 = 仓库根、冻结后 = **exe 所在目录**（= 默认 `_internal` 的上一级）。因此不能改 `contents_directory`（改成 `.` 会多退一级到 `dist\`，实测 user_data/logs/assets 全落错地方）；而 datas 又会被收进 `_internal` 且 dest 不允许 `..`，最终在 spec 里于 `COLLECT` 之后**复制一份 `assets/icons` 到 exe 同级**（实测不复制时日志报「未找到可用的窗口图标」）。
-> **验收结果**：`powershell -ExecutionPolicy Bypass -File packaging\build.ps1` 退出码 0（构建前 337 项测试全绿）；`dist\LuoLuoTool\LuoLuoTool.exe --version` → `luoluotool 0.1.0`（退出码 0）；`--smoke-gui` → 退出码 0。产物 **exe 2.18 MB / 目录 114.4 MB（221 文件）**；启动耗时（本机热启动 3 次平均）：`--version` **0.73 s**、`--smoke-gui`（建窗+布局）**0.82 s**、`--measure-layout`（完整窗口+布局测量，开发期命令）0.91 s。无 Python 依赖验证：把 `dist\LuoLuoTool` 拷贝到新目录，用最小 PATH（仅 `C:\Windows\system32;C:\Windows`）并清空 `PYTHONHOME/PYTHONPATH` 运行，`--version`/`--validate-config`/`--smoke-gui` 全部退出码 0，且自动生成 `user_data\config.json` 与 `logs\`。
+> **验收结果**：`powershell -ExecutionPolicy Bypass -File packaging\build.ps1` 退出码 0（构建前 337 项测试全绿）；`dist\LuoLuoTool\LuoLuoTool.exe --version` → `luoluotool 0.1.0`（退出码 0）；`--smoke-gui` → 退出码 0。产物 **exe 2.18 MB / 目录 114.4 MB（221 文件）**；启动耗时（本机热启动 3 次平均）：`--version` **0.73 s**、`--smoke-gui`（建窗+布局）**0.82 s**、`--measure-layout`（完整窗口+布局测量，开发期命令）0.91 s。无 Python 依赖验证：把 `dist\LuoLuoTool` 拷贝到新目录，用最小 PATH（仅 `C:\Windows\system32;C:\Windows`）清空 `PYTHONHOME/PYTHONPATH` 运行，`--version`/`--validate-config`/`--smoke-gui` 全部退出码 0，且自动生成 `user_data\config.json` 与 `logs\`。
+> **改版（2026-09-19 用户要求"修改打包机制，改为不显示 cmd 窗口"）**：
+> - spec 的 `console=True` → **`console=False`**（GUI 子系统）；实测 PE `Subsystem = 2 (IMAGE_SUBSYSTEM_WINDOWS_GUI)`，双击不再出现黑窗口。
+> - 窗口化进程没有控制台、`sys.stdout/sys.stderr` 为 `None`，因此新增运行时钩子 `packaging/rthook_windowed_stdio.py`（挂到 `Analysis(runtime_hooks=...)`），把缺失的流接到 `os.devnull`：日志处理器不再因 `None` 流报错，同时**保留**"重定向后 CLI 仍可见"的能力（有句柄时钩子不做任何事）。
+> - `build.ps1` 的 exe 冒烟改写为 `Start-Process -Wait -PassThru -RedirectStandardOutput/-RedirectStandardError`（GUI 程序用 `&` 调用不会等待、读不到 `$LASTEXITCODE`），并断言 `--version` 输出含 `luoluotool`、`--validate-config` 输出含 `OK`、`--smoke-gui` 的 stderr 含「离屏冒烟完成」。
+> - 复测：构建退出码 0；`--version` 重定向输出 `luoluotool 0.1.0`、`--validate-config` → `OK`、`--smoke-gui` → 退出码 0；**无重定向**（模拟双击，stdio 为 None）运行 `--smoke-gui` 退出码 0 且 `logs\luoluotool.log` 正常写入、无 "Logging error"；体积不变（exe 2.18 MB / 目录 114.4 MB）；耗时 `--version` 3.28 s（冷）/ 1.03 s（`--validate-config`）/ 2.04 s（`--smoke-gui`，冷）。
+> - 守卫测试更新为断言 `console=False` + 运行时钩子接 `os.devnull` + `build.ps1` 用 `Start-Process` 重定向（`tests/test_packaging.py` 共 8 项）。
 > **发现的问题（未改业务代码，按 Phase 7 要求仅记录，见 `PROJECT_SPEC.md` 已知问题 1）**：冻结 exe 的 `--measure-layout` 在 GBK 控制台下 `UnicodeEncodeError` 崩溃（报告含 `✓ ✗ ·`）；开发期因 `sys.flags.utf8_mode == 1` 才正常，冻结后 stdout 按 cp936 初始化且忽略 `PYTHONIOENCODING`/`PYTHONUTF8`/`chcp 65001`。影响仅限该子命令，三项验收命令与 GUI 不受影响。
 
 **复制给 AI 的提示词**：

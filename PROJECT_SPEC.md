@@ -248,7 +248,7 @@
 | 窗口查找/截图 | pywin32（win32gui / win32ui）；`automation/real_input.py` 负责置顶/置前与注入原语 | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
-| 打包 | PyInstaller one-dir（`packaging/build.ps1` + `LuoLuoTool.spec`，构建前强制全量测试；不做 one-file 与安装包） | 生态成熟；注意杀软误报，需在文档说明加白 |
+| 打包 | PyInstaller one-dir（`packaging/build.ps1` + `LuoLuoTool.spec`，构建前强制全量测试；**GUI 子系统 console=False：双击无 cmd 窗口**，CLI 输出需重定向读取；不做 one-file 与安装包） | 生态成熟；注意杀软误报，需在文档说明加白 |
 
 **依赖纪律**：`requirements.txt` 之外的包一律不得直接 `pip install` 使用；确需新增依赖，必须先改 `requirements.txt` 并在提交信息里说明理由。
 

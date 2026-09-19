@@ -47,7 +47,10 @@ def test_spec_is_one_dir_with_tests_excluded_and_icons_bundled() -> None:
     assert re.search(r'"tests"', text), "spec 必须排除 tests"
     assert re.search(r'"pytest"', text), "spec 必须排除 pytest"
     assert '"assets/icons"' in text, "spec 必须把 assets/icons 作为数据文件打包"
-    assert "console=True" in text, "验收需要命令行输出与退出码，必须使用控制台子系统"
+    assert "console=False" in text, "打包为 GUI 子系统（用户要求不显示 cmd 窗口），必须 console=False"
+    assert "runtime_hooks=[" in text and "rthook_windowed_stdio.py" in text, (
+        "窗口化进程没有控制台，必须挂运行时钩子处理 sys.stdout/stderr 为 None 的情况"
+    )
     assert "upx=False" in text and "onefile" not in text.lower()
     # 资源必须最终位于 exe 同级目录：运行期 `utils/paths.py` 用 parents[3] 推导 PROJECT_ROOT，
     # 冻结后 = 默认内容目录 `_internal` 的上一级 = exe 所在目录。
@@ -69,6 +72,24 @@ def test_build_script_runs_tests_before_pyinstaller() -> None:
     assert "全量测试未通过，已中止打包" in text
     assert "--clean" in text and "--noconfirm" in text
     assert "LuoLuoTool.spec" in text
+
+
+def test_build_script_smokes_frozen_exe_via_redirect() -> None:
+    """GUI 子系统的 exe 不能用 `&` 调用（不等待、无退出码）：必须 Start-Process + 重定向。"""
+    text = BUILD_SCRIPT.read_text(encoding="utf-8")
+    assert "Start-Process" in text and "RedirectStandardOutput" in text
+    assert "-Wait" in text and "ExitCode" in text
+    for flag in ("--version", "--validate-config", "--smoke-gui"):
+        assert flag in text
+
+
+def test_runtime_hook_makes_stdio_safe() -> None:
+    """运行时钩子必须把缺失的 stdout/stderr 接到空设备（否则 StreamHandler 每次 emit 都报错）。"""
+    hook = PACKAGING / "rthook_windowed_stdio.py"
+    assert hook.is_file(), "缺少窗口化 stdio 运行时钩子"
+    text = hook.read_text(encoding="utf-8")
+    assert "os.devnull" in text
+    assert "sys.stdout is None" in text and "sys.stderr is None" in text
 
 
 def test_build_script_is_utf8_with_bom() -> None:
