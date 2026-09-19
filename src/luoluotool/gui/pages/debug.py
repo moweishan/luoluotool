@@ -8,9 +8,10 @@
 """
 
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QItemSelectionModel, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
@@ -20,11 +21,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
 
+from luoluotool.automation.vision import DEFAULT_MAX_RESULTS as DEFAULT_VISION_MAX_RESULTS
 from luoluotool.automation.vision import DEFAULT_THRESHOLD as DEFAULT_VISION_THRESHOLD
 from luoluotool.config.models import AppConfig
 from luoluotool.gui.widgets import ScrollablePage
@@ -37,6 +40,8 @@ COUNT_RANGE = (1, 200)
 INTERVAL_RANGE_MS = (50, 5000)
 DURATION_RANGE_MS = (50, 10000)
 VISION_THRESHOLD_MIN = 0.30
+VISION_MAX_RESULTS_LIMIT = 500
+VISION_LIST_MIN_HEIGHT = 72
 
 
 def _spin(maximum: int, minimum: int = 0, suffix: str = "") -> QSpinBox:
@@ -86,43 +91,64 @@ class DebugPage(ScrollablePage):
         self.layout_measure_button.clicked.connect(self.layout_measure_requested.emit)
 
         # ---- 图片识别匹配测试（放在最前面：它是常用入口，避免被挤到需要滚动的位置） ----
-        vision_group = QGroupBox("图片识别匹配测试（在游戏窗口里查找图片并给出坐标）")
+        vision_group = QGroupBox("图片识别匹配测试（在游戏窗口里查找图片并给出客户区坐标）")
         vision_grid = QGridLayout(vision_group)
-        self.vision_path_edit = QLineEdit()
-        self.vision_path_edit.setPlaceholderText("模板图片路径（PNG/JPG，支持中文路径）")
-        self.vision_path_edit.setToolTip(
-            "要查找的图片：从游戏里裁下来的按钮/图标/面板都可以；\n"
+        self.vision_list = QListWidget()
+        self.vision_list.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.vision_list.setMinimumHeight(VISION_LIST_MIN_HEIGHT)
+        self.vision_list.setToolTip(
+            "可放多张模板图片：按顺序逐张尝试，**第一张达到阈值的就直接采用它的结果**；\n"
+            "同一张图在屏幕上出现多处时会全部列出（第 1 处匹配度最高，作为默认使用值）。\n"
             "建议截取画面中**不会变化**的局部（数字、倒计时等变动区域会让匹配变得不稳定）。"
         )
-        self.vision_browse_button = QPushButton("选择图片…")
+        self.vision_add_button = QPushButton("添加图片…")
+        self.vision_add_button.setToolTip("可一次多选；也可以先用下面的「框选截图生成模板」直接生成")
+        self.vision_remove_button = QPushButton("移除选中")
+        self.vision_clear_button = QPushButton("清空")
+        button_column = QVBoxLayout()
+        button_column.addWidget(self.vision_add_button)
+        button_column.addWidget(self.vision_remove_button)
+        button_column.addWidget(self.vision_clear_button)
+        button_column.addStretch(1)
         self.vision_threshold_spin = QDoubleSpinBox()
         self.vision_threshold_spin.setRange(VISION_THRESHOLD_MIN, 1.0)
         self.vision_threshold_spin.setSingleStep(0.01)
         self.vision_threshold_spin.setDecimals(2)
         self.vision_threshold_spin.setValue(DEFAULT_VISION_THRESHOLD)
         self.vision_threshold_spin.setToolTip("相似度阈值：越高越严格（默认 0.85）")
+        self.vision_max_spin = QSpinBox()
+        self.vision_max_spin.setRange(1, VISION_MAX_RESULTS_LIMIT)
+        self.vision_max_spin.setValue(DEFAULT_VISION_MAX_RESULTS)
+        self.vision_max_spin.setToolTip(
+            "一张模板最多列出多少处命中：\n"
+            "同一张图在屏幕多个区域出现时，按匹配度从高到低列出这么多处（默认 20）。"
+        )
         self.vision_button = QPushButton("图片识别匹配测试")
         self.crop_button = QPushButton("框选截图生成模板")
         self.crop_button.setToolTip(
-            "截取游戏窗口后拖拽框选 → 保存成模板并自动填入上面的图片路径，\n"
+            "截取游戏窗口后拖拽框选 → 保存成模板并自动加入上面的模板列表，\n"
             "省去手工裁剪：框的就是识别要找的那部分像素。"
         )
-        vision_grid.addWidget(QLabel("图片"), 0, 0)
-        vision_grid.addWidget(self.vision_path_edit, 0, 1, 1, 2)
-        vision_grid.addWidget(self.vision_browse_button, 0, 3)
-        vision_grid.addWidget(QLabel("阈值"), 1, 0)
-        vision_grid.addWidget(self.vision_threshold_spin, 1, 1)
-        vision_grid.addWidget(self.vision_button, 1, 2)
-        vision_grid.addWidget(self.crop_button, 1, 3)
+        vision_grid.addWidget(QLabel("模板图片（可多张）"), 0, 0)
+        vision_grid.addWidget(self.vision_list, 0, 1, 2, 2)
+        vision_grid.addLayout(button_column, 0, 3, 2, 1)
+        vision_grid.addWidget(QLabel("阈值"), 2, 0)
+        vision_grid.addWidget(self.vision_threshold_spin, 2, 1)
+        vision_grid.addWidget(QLabel("最多列出"), 2, 2)
+        vision_grid.addWidget(self.vision_max_spin, 2, 3)
+        vision_grid.addWidget(self.vision_button, 3, 0, 1, 2)
+        vision_grid.addWidget(self.crop_button, 3, 2, 1, 2)
         self.vision_annotate_box = QCheckBox("识别成功时保存带框截图到 user_data\\debug（便于人工核对）")
         self.vision_annotate_box.setToolTip(
             "关闭后识别只给坐标、不写截图文件；\n"
             "该选项同样需要开启设置页的「开发者调试」才生效。"
         )
         self.vision_annotate_box.toggled.connect(self._on_vision_annotate_toggled)
-        vision_grid.addWidget(self.vision_annotate_box, 2, 0, 1, 4)
+        vision_grid.addWidget(self.vision_annotate_box, 4, 0, 1, 4)
         self.vision_button.clicked.connect(self._on_vision_clicked)
-        self.vision_browse_button.clicked.connect(self._on_vision_browse_clicked)
+        self.vision_add_button.clicked.connect(self._on_vision_add_clicked)
+        self.vision_remove_button.clicked.connect(self._on_vision_remove_clicked)
+        self.vision_clear_button.clicked.connect(self.vision_list.clear)
         self.crop_button.clicked.connect(self.crop_requested.emit)
         layout.addWidget(vision_group)
 
@@ -234,11 +260,44 @@ class DebugPage(ScrollablePage):
         """执行期间禁用所有测试按钮，避免重复触发。"""
         for button in (self.single_button, self.repeat_button, self.swipe_button,
                        self.key_button, self.diagnose_button, self.layout_measure_button,
-                       self.vision_button, self.vision_browse_button, self.crop_button):
+                       self.vision_button, self.vision_add_button, self.vision_remove_button,
+                       self.vision_clear_button, self.crop_button):
             button.setEnabled(not busy)
 
     def set_status(self, message: str) -> None:
         self.status_label.setText(message)
+
+    # ------------------------------------------------------------ 模板列表
+
+    def vision_templates(self) -> list[str]:
+        """当前模板图片列表（按用户添加的顺序；多张时按顺序逐张尝试）。"""
+        return [self.vision_list.item(index).text() for index in range(self.vision_list.count())]
+
+    def add_vision_template(self, path: str | Path) -> bool:
+        """加入一张模板图片（已存在则只选中它，不重复添加）；返回是否新加入。
+
+        用 `ClearAndSelect` 而不是 `setCurrentRow`：后者在多选模式下会把新行**叠加**进选区，
+        加完几张后"移除选中"会一次删掉全部（实测踩到）。
+        """
+        text = str(path)
+        for index in range(self.vision_list.count()):
+            if self.vision_list.item(index).text() == text:
+                self.vision_list.setCurrentItem(
+                    self.vision_list.item(index), QItemSelectionModel.SelectionFlag.ClearAndSelect
+                )
+                return False
+        self.vision_list.addItem(text)
+        self.vision_list.setCurrentItem(
+            self.vision_list.item(self.vision_list.count() - 1),
+            QItemSelectionModel.SelectionFlag.ClearAndSelect,
+        )
+        return True
+
+    def set_vision_templates(self, paths: Sequence[str | Path]) -> None:
+        """整体替换模板列表（保留用户给的顺序）。"""
+        self.vision_list.clear()
+        for path in paths:
+            self.add_vision_template(path)
 
     # ------------------------------------------------------------------ 槽
 
@@ -293,14 +352,29 @@ class DebugPage(ScrollablePage):
         })
 
     def _on_vision_clicked(self) -> None:
+        images = self.vision_templates()
+        if not images:
+            self.set_status("请先添加至少一张模板图片（「添加图片…」或「框选截图生成模板」）")
+            return
         self.test_requested.emit("vision", {
-            "image": self.vision_path_edit.text().strip(),
+            "images": images,
             "threshold": self.vision_threshold_spin.value(),
+            "max_results": self.vision_max_spin.value(),
         })
 
-    def _on_vision_browse_clicked(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "选择模板图片", "", "图片 (*.png *.jpg *.jpeg *.bmp)"
+    def _on_vision_add_clicked(self) -> None:
+        """添加模板图片（可多选）；多张之间按列表顺序逐张尝试。"""
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "选择模板图片（可多选）", "", "图片 (*.png *.jpg *.jpeg *.bmp)"
         )
-        if path:
-            self.vision_path_edit.setText(path)
+        added = sum(1 for path in paths if path and self.add_vision_template(path))
+        if paths:
+            self.set_status(f"已加入 {added} 张模板（列表里共 {self.vision_list.count()} 张）")
+
+    def _on_vision_remove_clicked(self) -> None:
+        """移除选中的模板图片（从后往前删，避免下标错位）。"""
+        rows = sorted((index.row() for index in self.vision_list.selectedIndexes()), reverse=True)
+        for row in rows:
+            self.vision_list.takeItem(row)
+        if rows:
+            self.set_status(f"已移除 {len(rows)} 张模板（列表里共 {self.vision_list.count()} 张）")

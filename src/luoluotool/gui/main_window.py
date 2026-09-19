@@ -159,9 +159,11 @@ def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
             config, params["combo"], params["count"], params["interval_ms"], log, stop_event
         )
     if kind == "vision":
-        # 图像识别：找窗口 → 截图 → 模板匹配 → 返回命中位置（客户区坐标）
+        # 图像识别：找窗口 → 截图（只截一次）→ 逐张模板匹配 → 返回命中位置（客户区坐标）
+        # 多张模板：第一张达到阈值的直接用它的结果；一张模板命中多处则全部列出。
         return vision_actions.recognize_in_window(
-            config, params["image"], threshold=params["threshold"]
+            config, params["images"], threshold=params["threshold"],
+            max_results=params["max_results"],
         ).message
     raise ValueError(f"未知的调试测试类型：{kind}")
 
@@ -534,11 +536,12 @@ class MainWindow(QMainWindow):
         if dialog.saved_path is None:
             self.debug_page.set_status("未选择有效区域，模板未生成（请拖出一个至少 8x8 的框）")
             return
-        self.debug_page.vision_path_edit.setText(str(dialog.saved_path))
+        self.debug_page.add_vision_template(dialog.saved_path)
         logger.info("框选模板已保存：%s", dialog.saved_path)
         self.debug_page.set_status(
             f"模板已保存：{dialog.saved_path.name}\n"
-            "路径已填入上方输入框，点「图片识别匹配测试」即可验证。"
+            f"已加入模板列表（共 {self.debug_page.vision_list.count()} 张），"
+            "点「图片识别匹配测试」即可验证。"
         )
 
     def _on_capture_failed(self, message: str) -> None:

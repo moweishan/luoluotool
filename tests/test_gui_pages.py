@@ -276,8 +276,8 @@ def test_debug_page_options_are_active_when_developer_mode_on() -> None:
     page.close()
 
 
-def test_debug_page_vision_group_emits_image_and_threshold() -> None:
-    """调试页「图片识别匹配测试」：图片路径 + 阈值随请求发出（开发者调试开启时生效）。"""
+def test_debug_page_vision_group_emits_templates_and_threshold() -> None:
+    """调试页「图片识别匹配测试」：模板列表（可多张）+ 阈值 + 最多列出条数随请求发出。"""
     from luoluotool.gui.pages.debug import DebugPage
 
     config = AppConfig.default()
@@ -286,14 +286,57 @@ def test_debug_page_vision_group_emits_image_and_threshold() -> None:
     requests: list[tuple] = []
     page.test_requested.connect(lambda kind, params: requests.append((kind, params)))
 
-    page.vision_path_edit.setText(r"D:\shots\按钮.png")
+    assert page.add_vision_template(r"D:\shots\按钮A.png") is True
+    assert page.add_vision_template(r"D:\shots\按钮B.png") is True
+    assert page.add_vision_template(r"D:\shots\按钮A.png") is False    # 重复的不再添加
     page.vision_threshold_spin.setValue(0.91)
+    page.vision_max_spin.setValue(5)
     page.vision_button.click()
 
-    assert requests == [("vision", {"image": r"D:\shots\按钮.png", "threshold": 0.91})]
+    assert requests == [("vision", {
+        "images": [r"D:\shots\按钮A.png", r"D:\shots\按钮B.png"],
+        "threshold": 0.91,
+        "max_results": 5,
+    })]
+    assert page.vision_templates() == [r"D:\shots\按钮A.png", r"D:\shots\按钮B.png"]
     assert round(page.vision_threshold_spin.minimum(), 2) == 0.30
     assert round(page.vision_threshold_spin.maximum(), 2) == 1.00
     assert "识别" in page.vision_button.text()          # 按钮文案即"图片识别匹配测试"
+    page.close()
+
+
+def test_debug_page_vision_requires_at_least_one_template() -> None:
+    """模板列表为空时不发请求，只给可读提示（避免白跑一次截图）。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    requests: list[tuple] = []
+    page.test_requested.connect(lambda kind, params: requests.append((kind, params)))
+
+    page.vision_button.click()
+
+    assert requests == []
+    assert "至少一张模板" in page.status_label.text()
+    page.close()
+
+
+def test_debug_page_vision_remove_and_clear_templates() -> None:
+    """移除选中 / 清空：模板列表按用户操作变化。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    page.set_vision_templates(["a.png", "b.png", "c.png"])
+
+    page.vision_list.setCurrentRow(1)                  # 选中 b.png
+    page.vision_remove_button.click()
+    assert page.vision_templates() == ["a.png", "c.png"]
+
+    page.vision_clear_button.click()
+    assert page.vision_templates() == []
     page.close()
 
 
@@ -349,15 +392,16 @@ def test_debug_page_vision_annotate_switch_inert_without_developer_mode() -> Non
 
 
 def test_debug_page_vision_button_respects_busy_state() -> None:
-    """执行期间「识别图片 / 选择图片」按钮同样被禁用。"""
+    """执行期间「识别图片 / 模板列表按钮」同样被禁用。"""
     from luoluotool.gui.pages.debug import DebugPage
 
     config = AppConfig.default()
     config.automation.developer_mode = True
     page = DebugPage(config, lambda: None)
     page.set_busy(True)
-    assert page.vision_button.isEnabled() is False
-    assert page.vision_browse_button.isEnabled() is False
+    for button in (page.vision_button, page.vision_add_button,
+                   page.vision_remove_button, page.vision_clear_button):
+        assert button.isEnabled() is False
     page.set_busy(False)
     assert page.vision_button.isEnabled() is True
     page.close()

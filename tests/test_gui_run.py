@@ -683,29 +683,40 @@ def test_run_debug_action_dispatches_vision(monkeypatch) -> None:
     class _Result:
         message = "识别成功：命中 1 处\n  1) 客户区 中心 (60, 35) 匹配度 1.000"
 
-    def fake_recognize(config, image, threshold):
-        calls.append((image, threshold))
+    def fake_recognize(config, images, threshold, max_results):
+        calls.append((list(images), threshold, max_results))
         return _Result()
 
     monkeypatch.setattr(vision_actions, "recognize_in_window", fake_recognize)
     message = mw.run_debug_action(
-        AppConfig.default(), "vision", {"image": "a.png", "threshold": 0.8},
+        AppConfig.default(), "vision",
+        {"images": ["a.png", "b.png"], "threshold": 0.8, "max_results": 7},
         logging.getLogger("t"), None,
     )
-    assert calls == [("a.png", 0.8)]
+    assert calls == [(["a.png", "b.png"], 0.8, 7)]
     assert "识别成功" in message and "(60, 35)" in message
 
 
 def test_vision_debug_action_reports_missing_template(monkeypatch, tmp_path) -> None:
-    """端到端（不经真实截图）：模板文件不存在时，调试线程回传可读消息而不抛异常。"""
+    """端到端（不经真实截图）：模板文件不存在时，调试线程回传可读消息而不抛异常。
+
+    多张模板共用同一张截图，所以截图排在模板读取之前 —— 这里把截图换成假画面。
+    """
+    import numpy as np
+
     from luoluotool.core import vision as vision_actions
     from luoluotool.gui import main_window as mw
 
     monkeypatch.setattr(vision_actions, "find_window", lambda keyword: 555)
     monkeypatch.setattr(vision_actions, "is_window_ready", lambda hwnd: True)
+    monkeypatch.setattr(
+        vision_actions, "capture_client_bgr",
+        lambda hwnd: np.full((40, 60, 3), 30, dtype=np.uint8),
+    )
     messages: list[str] = []
     thread = mw._DebugTestThread(
-        AppConfig.default(), "vision", {"image": str(tmp_path / "缺失.png"), "threshold": 0.85},
+        AppConfig.default(), "vision",
+        {"images": [str(tmp_path / "缺失.png")], "threshold": 0.85, "max_results": 20},
         logging.getLogger("t"),
     )
     thread.finished_message.connect(messages.append)
@@ -743,7 +754,7 @@ def test_crop_flow_saves_template_and_fills_path(window_factory, tmp_path, monke
     window._on_capture_ready(np.zeros((50, 100, 3), dtype=np.uint8), (100, 50))
 
     assert opened and opened[0][0] == (50, 100, 3) and opened[0][1] == (100, 50)
-    assert window.debug_page.vision_path_edit.text() == str(saved)
+    assert window.debug_page.vision_templates() == [str(saved)]
     assert "模板已保存" in window.debug_page.status_label.text()
 
 
