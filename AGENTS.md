@@ -29,6 +29,8 @@
 - 每次真实输入注入前检查 stop 事件；停止请求发出后 500ms 内必须停止动作序列。
 - 输入注入实现方式（**只有一种**：真实鼠标键盘 `SendInput`；窗口消息/合成指针/对齐窗口三种实现已按用户要求删除）：`automation/real_input.py`（Phase 5.3）必须：**每次点击/按键前**校验游戏窗口是否在最顶层，不在则先 `HWND_TOPMOST` 置顶再 `SetForegroundWindow` 置前（失败用 `AttachThreadInput` 兜底）并回读复核；无法确保窗口在最前时**绝不输入**（抛可读错误）；最小化先 `SW_RESTORE`；输入结束取消本次由我们设置的置顶；点击后按 `restore_cursor_after_click` 还原真实光标；键盘支持单键/组合键（`key_combo("ctrl+s")`）/长按（`key_hold`），**长按必须切片检查急停并在任何退出路径释放按键（绝不卡键）**，组合键必须逆序释放修饰键；鼠标**滑动**（`drag`）必须：客户区起终点各经 `ClientToScreen` 换算、沿**缓出曲线**分帧移动（`build_drag_path` = `interpolate_points(..., easing=ease_out_quad)` 缓出采样 + 末尾静止帧，≈60Hz、最少 4 步、避免被识别为瞬移，**末尾在终点保持静止 `DRAG_TAIL_HOLD_STEPS` 帧后再松手**，防"甩动惯性"导致画面继续飘）、滑动前清理残留左键按下状态并校验置顶窗口、期间切片检查急停、松手后**复查 `VK_LBUTTON` 已抬起**（未抬起则补发，仍失败即报错）、**任何退出路径（含等待抛异常）都在 finally 释放左键**、滑动结束后**同样按 `restore_cursor_after_click` 还原光标**，但必须**先延迟 `DRAG_RESTORE_DELAY_SECONDS` 让引擎处理完抬起、再用 `restore_cursor_smooth` 分帧小步移回**（禁止一次 `SetCursorPos` 跳回：跳跃会被残留拖拽状态算成巨大位移而让画面乱飘；等待被中断时仍必须还原）；键名表与解析放 `utils/keys.py`（config 与 GUI 复用，配置校验与 GUI 会即时拒绝未知键名）；`SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`；
 - 开发者调试页（`gui/pages/debug.py` + `core/debug.py`）只允许复用正式输入通道（`build_channel`）做测试：干跑模式下测试只写日志、零真实输入；真实模式下每次输入前同样校验并置顶窗口；测试动作必须放后台线程、执行期间禁用按钮、可被停止请求中断（长按/滑动仍须释放按键）。
+- 任务编排（Phase 6 定案）：队列 = **日常任务组**（`daily_tasks.tasks[id].enabled`，按 `order`、同 `order` 按 ID 字典序）→ **单功能组**（功能主开关，固定 `order_hold` → `feature_3` → `feature_4`）；启动时打印 `任务队列（N 个）：a → b → c`；失败计数与循环对整队列统一生效。`daily_tasks.enabled` 与卡订单两个预留开关**不参与编排**（只存/读/显示）。
+- 占位任务（`order_hold`/`feature_3`/`feature_4`）：**只允许**「进入日志（含"该功能尚未实现真实逻辑（规划中）"原文）+ 每轮一条心跳日志 + 响应停止」；禁止产生任何输入、禁止读 params、禁止写推测性业务逻辑（有测试守卫）。
 - 文件长度控制：单个文件超过 400 行必须先考虑拆分；超过 600 行必须拆分（模板生成的 UI 文件除外）。
 
 ## 3. 禁止事项（红线）

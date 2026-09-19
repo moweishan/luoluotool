@@ -504,6 +504,14 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 - [ ] 两个预留开关任意组合保存/重启后保持不变，且对运行行为零影响（有测试证明）。
 - [ ] 日常任务组与单功能组同时勾选时，执行顺序符合编排规则（有测试证明）。
 
+> **完成记录（2026-09-19）**：`core/registry.py` 新增 `order_hold` / `feature_3` / `feature_4` 三个占位任务（共用 `PlaceholderFeatureTask`：仅「进入日志 + 心跳日志 + 响应停止」，零输入、不读 params；守卫测试断言只有这两条日志且输入调用为空），并抽出 ID 常量；`core/runner.py` 支持多来源编排并新增公开查询 `queued_tasks()`。
+> **编排规则（已写入 `PROJECT_SPEC.md` §3 与 `AGENTS.md` §2）**：
+> 1. 队列 = **日常任务组**（`daily_tasks.tasks[id].enabled == true`，按 `order` 升序、同 `order` 按任务 ID 字典序）→ **单功能组**（功能主开关开启即入队，固定顺序 `order_hold` → `feature_3` → `feature_4`）；
+> 2. 失败计数对整队列统一（失败累加、成功清零、达到 `max_consecutive_failures` 自动停止），循环开关与间隔对整队列生效；空队列不执行并立即结束；
+> 3. 启动时打印 `任务队列（N 个）：a → b → c`，便于人工核对顺序；
+> 4. **不参与编排**（仅存/读/显示）：`daily_tasks.enabled` 与 `order_hold.reserved_switch_1/2`（有测试逐项断言零影响）。
+> 测试：`tests/test_core/test_registry.py`（+5 项守卫）、`tests/test_core/test_runner.py`（+7 项编排）、`tests/test_gui_run.py`（+2 项「开关 → 入队 → 日志」闭环）；全量 **329 项通过**，`registry.py` 覆盖率 100%、`runner.py` 98%。未新增任何配置字段（schema 保持 v8）。
+
 **复制给 AI 的提示词**：
 
 ```text
