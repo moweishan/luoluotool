@@ -9,12 +9,14 @@ from collections.abc import Callable
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QFrame,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -51,7 +53,19 @@ class DebugPage(QWidget):
         super().__init__()
         self._config = config
         self._on_changed = on_changed
-        layout = QVBoxLayout(self)
+        # 内容必须放进 QScrollArea：本页控件较多（最小高度近 500px），若直接铺在页面上，
+        # 它会成为 QTabWidget 的最小高度，勾选「开发者调试」时把整个页签区顶高
+        # （窗口最小高度 381 → 658），表现为所有页签高度都变了、日志面板被压扁。
+        # 放进滚动区后本页最小高度不随内容增长，页签区高度与是否挂载调试页无关。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        self.scroll_area = QScrollArea()
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        self.scroll_area.setWidget(content)
+        outer.addWidget(self.scroll_area)
 
         # ---- 干跑模式（从设置页移入） ----
         self.dry_run_box = QCheckBox("干跑模式（仅模拟输出日志，不产生真实键鼠操作）")

@@ -601,6 +601,38 @@ def test_developer_tab_appears_and_disappears(window_factory, tmp_path) -> None:
     assert window.tabs.indexOf(window.debug_page) < 0
 
 
+def test_developer_tab_does_not_change_page_heights(window_factory, tmp_path) -> None:
+    """回归：挂载「开发者调试」页不得改变页签区与其它页的高度（调试页内容必须可滚动）。
+
+    用户实测：勾选开发者调试后所有 tab 页高度都会变——调试页原来是一整列不滚动控件，
+    其最小高度（488）成为 `QTabWidget` 的最小高度，把窗口最小高度从 381 顶到 658，
+    于是窗口被撑高、日志面板被压扁、所有页签跟着变高。
+    """
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    window.show()
+    _APP.processEvents()
+    assert window.debug_page.minimumSizeHint().height() < 200   # 内容可滚动，不撑高页面
+    before_tabs = window.tabs.minimumSizeHint().height()
+    before_window = window.minimumSizeHint().height()
+    before_pages = [page.height() for page in (window.settings_page, window.daily_page)]
+    before_log = window.log_panel.height()
+
+    window.settings_page.developer_box.setChecked(True)
+    _APP.processEvents()
+    assert window.tabs.indexOf(window.debug_page) >= 0
+    assert window.tabs.minimumSizeHint().height() == before_tabs
+    assert window.minimumSizeHint().height() == before_window
+    assert window.minimumSizeHint().height() <= 640            # 默认 960×640 放得下，无需撑高
+    assert [page.height() for page in (window.settings_page, window.daily_page)] == before_pages
+    assert window.log_panel.height() == before_log
+
+    window.settings_page.developer_box.setChecked(False)
+    _APP.processEvents()
+    assert window.tabs.minimumSizeHint().height() == before_tabs
+    assert [page.height() for page in (window.settings_page, window.daily_page)] == before_pages
+
+
 def test_developer_mode_from_config_mounts_tab_at_startup(window_factory, tmp_path) -> None:
     """配置里 developer_mode=true 时启动即挂载调试页。"""
     config = AppConfig.default()
