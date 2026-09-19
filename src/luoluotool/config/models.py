@@ -1,4 +1,4 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v6（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v7（dataclass 实现）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from luoluotool.utils.keys import parse_combo
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 @dataclass
@@ -103,17 +103,100 @@ def format_keys_text(steps: list[KeyStepParams]) -> str:
 
 
 @dataclass
+class SwipeStepParams:
+    """一个鼠标滑动步骤：从 from 按住左键分帧移动到 to，再松开。
+
+    文本语法（GUI 单行输入也用它）：`100,200 > 400,600`（默认 400ms）、
+    `100,200 > 400,600*800`（用时 800ms）。
+    """
+
+    from_point: list[int] = field(default_factory=lambda: [0, 0])
+    to_point: list[int] = field(default_factory=lambda: [0, 0])
+    duration_ms: int = 400
+    wait_after_ms: int = 500
+
+    def to_dict(self) -> dict:
+        return {
+            "from": [int(self.from_point[0]), int(self.from_point[1])],
+            "to": [int(self.to_point[0]), int(self.to_point[1])],
+            "duration_ms": self.duration_ms,
+            "wait_after_ms": self.wait_after_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> SwipeStepParams:
+        raw = data or {}
+        return cls(
+            [int(value) for value in (raw.get("from") or [0, 0])],
+            [int(value) for value in (raw.get("to") or [0, 0])],
+            int(raw.get("duration_ms", 400) or 400),
+            int(raw.get("wait_after_ms", 500)),
+        )
+
+    def to_text(self) -> str:
+        base = f"{self.from_point[0]},{self.from_point[1]} > {self.to_point[0]},{self.to_point[1]}"
+        return f"{base}*{self.duration_ms}" if self.duration_ms != 400 else base
+
+    @classmethod
+    def from_text(cls, text: str, wait_after_ms: int = 500) -> SwipeStepParams:
+        """解析单个滑动步骤文本；非法时抛可读 `ValueError`。"""
+        raw = (text or "").strip()
+        if not raw:
+            raise ValueError("滑动步骤不能为空")
+        duration = 400
+        if "*" in raw:
+            raw, _, duration_text = raw.rpartition("*")
+            duration_text = duration_text.strip()
+            if not duration_text.isdigit():
+                raise ValueError(f"滑动时长格式非法（应为 *毫秒）：{text!r}")
+            duration = int(duration_text)
+        if ">" not in raw:
+            raise ValueError(f"滑动步骤缺少 '>'（应形如 100,200 > 400,600）：{text!r}")
+        left, _, right = raw.partition(">")
+        if not 50 <= duration <= 10000:
+            raise ValueError(f"滑动时长必须在 50–10000 毫秒之间：{text!r}")
+        return cls(_parse_point(left, text), _parse_point(right, text), duration, wait_after_ms)
+
+
+def _parse_point(text: str, origin: str) -> list[int]:
+    """解析 `x,y` 形式的客户区坐标点。"""
+    parts = [part.strip() for part in (text or "").split(",")]
+    if len(parts) != 2 or not all(part.lstrip("-").isdigit() for part in parts):
+        raise ValueError(f"滑动坐标格式非法（应为 x,y，且为非负整数）：{origin!r}")
+    x, y = int(parts[0]), int(parts[1])
+    if x < 0 or y < 0:
+        raise ValueError(f"滑动坐标必须为非负整数：{origin!r}")
+    return [x, y]
+
+
+def parse_swipes_text(text: str, wait_after_ms: int = 500) -> list[SwipeStepParams]:
+    """把 `"100,200 > 400,600, 10,10 > 20,20*800"` 解析为滑动步骤列表。"""
+    steps: list[SwipeStepParams] = []
+    for chunk in (text or "").replace("，", ",").replace("\n", ";").replace(", ", ";").split(";"):
+        if chunk.strip():
+            steps.append(SwipeStepParams.from_text(chunk, wait_after_ms))
+    return steps
+
+
+def format_swipes_text(steps: list[SwipeStepParams]) -> str:
+    """把滑动步骤列表格式化回单行文本（与 `parse_swipes_text` 互逆）。"""
+    return "; ".join(step.to_text() for step in steps)
+
+
+@dataclass
 class PlaceholderTaskParams:
     """placeholder_task_a 的私有参数（params 内容，缺省键回落默认值）。"""
 
     click_points: list[list[int]] = field(default_factory=list)
     keys: list[KeyStepParams] = field(default_factory=list)
+    swipes: list[SwipeStepParams] = field(default_factory=list)
     wait_after_ms: int = 500
 
     def to_dict(self) -> dict:
         return {
             "click_points": [list(point) for point in self.click_points],
             "keys": [step.to_dict() for step in self.keys],
+            "swipes": [step.to_dict() for step in self.swipes],
             "wait_after_ms": self.wait_after_ms,
         }
 
@@ -122,7 +205,8 @@ class PlaceholderTaskParams:
         raw = data or {}
         points = [list(point) for point in (raw.get("click_points") or [])]
         keys = [KeyStepParams.from_dict(item) for item in (raw.get("keys") or [])]
-        return cls(points, keys, raw.get("wait_after_ms", 500))
+        swipes = [SwipeStepParams.from_dict(item) for item in (raw.get("swipes") or [])]
+        return cls(points, keys, swipes, raw.get("wait_after_ms", 500))
 
 
 @dataclass

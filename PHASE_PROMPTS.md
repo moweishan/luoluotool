@@ -405,6 +405,38 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+## Phase 5.5 — 鼠标滑动（拖拽）功能
+
+**背景**：游戏里大量操作用的是"按住拖动"（拖地图、拖道具、拉摇杆），需要把单点点击扩展成**可配置的滑动序列**。
+
+**本次只做什么**：
+1. `automation/real_input.py`：`interpolate_points(start, end, steps)`（纯函数，线性插值、含终点）+ `send_left_drag(from_screen, to_screen, duration_seconds, sleep, stop_event)`：移动起点 → 按下左键 → **分帧插值移动**（≈60Hz、最少 4 步）→ 松开左键；期间切片检查急停；**任何退出路径都在 `finally` 释放左键**。
+2. `automation/input_sender.py`：协议新增 `drag(from_xy, to_xy, duration_seconds)`；`RealInputSender.drag` 滑动前同样校验并置顶窗口（失败即拒绝）、结束后按配置还原真实光标、被急停中断时写 WARNING；`DryRunSender.drag` 只写日志。
+3. `config/models.py`：`SwipeStepParams{from_point, to_point, duration_ms, wait_after_ms}` + `parse_swipes_text` / `format_swipes_text`（文本语法 `100,200 > 400,600`、`...*800`；解析时校验坐标与时长范围）；`PlaceholderTaskParams.swipes`。
+4. `config/validation.py`：`swipes` 结构校验（数组、≤20 步、`from`/`to` 为非负整数坐标、`duration_ms` 50–10000、`wait_after_ms` 0–60000）→ **schema v7 + `_migrate_v6_to_v7`**（默认 `[]`）；`config.example.json` 同步。
+5. `core/registry.py`：执行顺序明确为 **点击 → 滑动 → 按键**，日志给出每步序号与滑动时长，步骤间响应停止请求，结果文案分别统计三类步骤。
+6. `gui/pages/daily.py`：新增「滑动序列」输入框（占位示例 + tooltip 说明），非法输入回退显示、不写坏配置。
+7. 测试：插值纯函数（线性、含终点、退化步数）、滑动顺序（按下在移动之间、最后一个事件是左键抬起）、分帧步数、急停中断释放、异常释放、sender 层校验/还原光标/中断日志、任务顺序与停止、schema v6→v7 迁移与 swipes 校验、文本解析往返与非法输入、GUI 绑定与回退；全部注入假实现（零真实输入）。
+
+**不要做什么**：不做"按住不放直到程序结束"（无法保证释放）；不修改点击与键盘的既有行为；不绕过每次输入前的置顶校验。
+
+**验收命令**：
+```bash
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest tests/test_automation -q --cov=src/luoluotool/automation --cov-report=term-missing
+.venv\Scripts\python -m luoluotool --validate-config
+.venv\Scripts\python -m luoluotool --smoke-gui
+```
+
+**完成标准**：
+- [ ] 全量测试通过；`real_input.py` 覆盖率 ≥ 80%。
+- [ ] `config.json` 自动迁移到 v7（`params.swipes` 补齐）；`--validate-config` 输出 `OK`。
+- [ ] 日常任务页可编辑滑动序列；非法输入即回退。
+- [ ] **手动验收**：配置 `{"swipes": [{"from": [300, 300], "to": [700, 300], "duration_ms": 600}]}` → 真实模式启动 → 游戏里出现连续拖拽（不是瞬移）；滑动中按急停键立即中断且**左键已松开**（鼠标不会卡住）。
+- [ ] 干跑模式下滑动只写日志、零真实输入。
+
+---
+
 ## Phase 6 — 卡订单与预留功能页闭环
 
 **阶段目标**：功能二/三/四在主流程中形成完整闭环（开关→运行→日志），无推测性逻辑。

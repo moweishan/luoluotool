@@ -40,6 +40,8 @@ class InputSender(Protocol):
 
     def key_tap(self, vk: int) -> None: ...
 
+    def drag(self, from_xy: tuple[int, int], to_xy: tuple[int, int], duration_seconds: float) -> None: ...
+
     def key_combo(self, combo: str) -> None: ...
 
     def key_hold(self, combo: str, seconds: float) -> None: ...
@@ -62,6 +64,12 @@ class DryRunSender:
 
     def key_tap(self, vk: int) -> None:
         self._logger.info("干跑：模拟按键 (vk=%d)", vk)
+
+    def drag(self, from_xy: tuple[int, int], to_xy: tuple[int, int], duration_seconds: float) -> None:
+        self._logger.info(
+            "干跑：模拟滑动 (%d, %d) → (%d, %d) 用时 %.2fs",
+            from_xy[0], from_xy[1], to_xy[0], to_xy[1], duration_seconds,
+        )
 
     def key_combo(self, combo: str) -> None:
         self._logger.info("干跑：模拟按键组合 %s", combo)
@@ -128,6 +136,38 @@ class RealInputSender:
                 raise WindowUnavailableError("真实按键注入失败（SendInput 未被系统接受）")
             self._logger.info("真实按键完成：vk=%d（已确保窗口在最顶层）", vk)
         finally:
+            self._release_topmost_if_needed(front)
+
+    def drag(self, from_xy: tuple[int, int], to_xy: tuple[int, int], duration_seconds: float) -> None:
+        """真实鼠标滑动：按住左键从 A 分帧移动到 B 后松开。
+
+        与点击同样：**每次滑动前**校验并确保游戏窗口在最顶层，无法确保时绝不输入；
+        滑动可被急停打断，且任何情况下都会释放左键；结束后按配置还原真实光标位置。
+        """
+        front = self._ensure_front_or_raise("滑动")
+        saved: tuple[int, int] | None = None
+        try:
+            saved = real_input.get_cursor_pos()
+            start = real_input.client_to_screen(self.hwnd, from_xy)
+            end = real_input.client_to_screen(self.hwnd, to_xy)
+            ok, interrupted = real_input.send_left_drag(
+                start, end, duration_seconds, self._sleep, self._stop_event
+            )
+            if not ok:
+                raise WindowUnavailableError("真实鼠标滑动注入失败（SendInput 未被系统接受）")
+            if interrupted:
+                self._logger.warning(
+                    "滑动 (%d, %d) → (%d, %d) 被停止请求中断（已释放左键）",
+                    from_xy[0], from_xy[1], to_xy[0], to_xy[1],
+                )
+            else:
+                self._logger.info(
+                    "真实滑动完成：客户区 (%d, %d) → (%d, %d) 用时 %.2fs（已确保窗口在最顶层）",
+                    from_xy[0], from_xy[1], to_xy[0], to_xy[1], duration_seconds,
+                )
+        finally:
+            if self.restore_cursor and saved is not None:
+                real_input.set_cursor_pos(*saved)
             self._release_topmost_if_needed(front)
 
     def key_combo(self, combo: str) -> None:

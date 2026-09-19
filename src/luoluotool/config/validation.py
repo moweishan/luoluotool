@@ -114,6 +114,37 @@ def _validate_key_steps(prefix: str, steps: object, errors: list[str]) -> None:
             errors.append(f"{item_prefix}.wait_after_ms 必须是 0–60000 之间的整数")
 
 
+def _is_xy(value: object) -> bool:
+    """`[x, y]` 形式的非负整数坐标。"""
+    return (
+        isinstance(value, list)
+        and len(value) == 2
+        and all(not isinstance(item, bool) and isinstance(item, int) and item >= 0 for item in value)
+    )
+
+
+def _validate_swipes(prefix: str, swipes: object, errors: list[str]) -> None:
+    """校验滑动步骤列表：`[{"from": [x, y], "to": [x, y], "duration_ms": 400, "wait_after_ms": 500}, ...]`。"""
+    if not isinstance(swipes, list):
+        errors.append(f"{prefix}.swipes 必须是数组")
+        return
+    if len(swipes) > MAX_KEY_STEPS:
+        errors.append(f"{prefix}.swipes 最多 {MAX_KEY_STEPS} 步")
+    for index, step in enumerate(swipes):
+        item_prefix = f"{prefix}.swipes[{index}]"
+        if not isinstance(step, dict):
+            errors.append(f"{item_prefix} 必须是对象")
+            continue
+        if not _is_xy(step.get("from")) or not _is_xy(step.get("to")):
+            errors.append(f"{item_prefix}.from/.to 必须是 [x, y] 形式的非负整数坐标")
+        duration = step.get("duration_ms", 400)
+        if isinstance(duration, bool) or not isinstance(duration, int) or not (50 <= duration <= 10000):
+            errors.append(f"{item_prefix}.duration_ms 必须是 50–10000 之间的整数")
+        wait = step.get("wait_after_ms", 500)
+        if isinstance(wait, bool) or not isinstance(wait, int) or not (0 <= wait <= 60000):
+            errors.append(f"{item_prefix}.wait_after_ms 必须是 0–60000 之间的整数")
+
+
 def _validate_task_params(task_id: str, params: object, errors: list[str]) -> None:
     """校验任务私有参数结构（缺省键合法，回落默认值）。"""
     prefix = f"features.daily_tasks.tasks.{task_id}.params"
@@ -124,6 +155,7 @@ def _validate_task_params(task_id: str, params: object, errors: list[str]) -> No
     if not isinstance(points, list) or not all(_is_point(point) for point in points):
         errors.append(f"{prefix}.click_points 必须是 [[x, y], ...] 形式的非负整数坐标数组")
     _validate_key_steps(prefix, params.get("keys", []), errors)
+    _validate_swipes(prefix, params.get("swipes", []), errors)
     wait = params.get("wait_after_ms", 500)
     if isinstance(wait, bool) or not isinstance(wait, int) or not (0 <= wait <= 60000):
         errors.append(f"{prefix}.wait_after_ms 必须是 0–60000 之间的整数")
@@ -213,12 +245,34 @@ def _migrate_v5_to_v6(raw: dict) -> dict:
     return migrated
 
 
+def _migrate_v6_to_v7(raw: dict) -> dict:
+    """v6 → v7：任务参数新增鼠标滑动序列 `params.swipes`（默认空数组 = 不滑动）。"""
+    migrated = dict(raw)
+    features = dict(migrated.get("features") or {})
+    daily = dict(features.get("daily_tasks") or {})
+    tasks = {}
+    for task_id, task in (daily.get("tasks") or {}).items():
+        if isinstance(task, dict):
+            item = dict(task)
+            params = dict(item.get("params") or {})
+            params.setdefault("swipes", [])
+            item["params"] = params
+            tasks[task_id] = item
+        else:
+            tasks[task_id] = task
+    daily["tasks"] = tasks
+    features["daily_tasks"] = daily
+    migrated["features"] = features
+    return migrated
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
     3: _migrate_v3_to_v4,
     4: _migrate_v4_to_v5,
     5: _migrate_v5_to_v6,
+    6: _migrate_v6_to_v7,
 }
 
 

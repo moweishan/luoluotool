@@ -29,11 +29,11 @@ def test_root_must_be_dict() -> None:
 
 def test_schema_version_checks() -> None:
     raw = _default_raw()
-    raw["schema_version"] = 7
+    raw["schema_version"] = 8
     assert any("schema_version" in e for e in validate(raw))
     raw["schema_version"] = 0
     assert any("schema_version" in e for e in validate(raw))
-    raw["schema_version"] = "6"
+    raw["schema_version"] = "7"
     assert any("schema_version" in e for e in validate(raw))
     del raw["schema_version"]
     assert any("schema_version" in e for e in validate(raw))
@@ -171,3 +171,29 @@ def test_task_keys_validation() -> None:
         tasks["placeholder_task_a"]["params"] = {"keys": bad_keys}
         errors = validate(raw)
         assert any("keys" in error for error in errors), bad_keys
+
+
+def test_task_swipes_validation() -> None:
+    """swipes 结构校验：合法通过；非法坐标/时长越界/超量都要报错。"""
+    raw = _default_raw()
+    tasks = raw["features"]["daily_tasks"]["tasks"]
+    tasks["placeholder_task_a"]["params"] = {
+        "click_points": [],
+        "swipes": [{"from": [10, 10], "to": [400, 10], "duration_ms": 500, "wait_after_ms": 200}],
+    }
+    assert validate(raw) == []
+
+    for bad_swipes in (
+        "10,10 > 20,20",                                   # 不是数组
+        [{"from": [10, 10]}],                              # 缺 to
+        [{"from": [10], "to": [20, 20]}],                  # 坐标维度错
+        [{"from": [-1, 0], "to": [20, 20]}],               # 负坐标
+        [{"from": [0, 0], "to": [1, 1], "duration_ms": 10}],    # 时长过短
+        [{"from": [0, 0], "to": [1, 1], "duration_ms": True}],  # 布尔
+        [{"from": [0, 0], "to": [1, 1], "wait_after_ms": 60001}],  # 等待越界
+        [{"from": [0, 0], "to": [1, 1]}] * 21,                   # 超量
+        ["100,200 > 400,600"],                                   # 元素不是对象
+    ):
+        tasks["placeholder_task_a"]["params"] = {"swipes": bad_swipes}
+        errors = validate(raw)
+        assert any("swipes" in error for error in errors), bad_swipes

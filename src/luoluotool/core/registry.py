@@ -29,9 +29,10 @@ def registered_ids() -> list[str]:
 
 @register
 class PlaceholderTaskA(BaseTask):
-    """占位任务 A：按 params.click_points 依次点击，再按 params.keys 依次发送按键。
+    """占位任务 A：依次执行 params.click_points（点击）→ params.swipes（鼠标滑动）→ params.keys（按键）。
 
-    按键步骤支持组合键（`ctrl+s`）与长按（`{"combo": "w", "hold_ms": 800}`）。
+    按键步骤支持组合键（`ctrl+s`）与长按（`{"combo": "w", "hold_ms": 800}`）；
+    滑动步骤为按住左键从 from 分帧移动到 to（`{"from": [x, y], "to": [x, y], "duration_ms": 500}`）。
     真实/干跑由输入层决定：干跑模式只写日志，绝不产生真实输入。
     """
 
@@ -40,16 +41,18 @@ class PlaceholderTaskA(BaseTask):
     def run(self, ctx: TaskContext) -> TaskResult:
         params = PlaceholderTaskParams.from_dict(ctx.params)
         click_total = len(params.click_points)
+        swipe_total = len(params.swipes)
         key_total = len(params.keys)
-        total = click_total + key_total
+        total = click_total + swipe_total + key_total
         if total == 0:
             ctx.logger.warning(
-                "占位任务 A 未配置点击坐标与按键（params.click_points 与 params.keys 均为空），"
+                "占位任务 A 未配置任何步骤（params.click_points / params.swipes / params.keys 均为空），"
                 "本轮无操作；示例："
-                '"params": {"click_points": [[100, 100]], "keys": [{"combo": "ctrl+s"}], '
-                '"wait_after_ms": 500}'
+                '"params": {"click_points": [[100, 100]], '
+                '"swipes": [{"from": [300, 300], "to": [600, 300], "duration_ms": 500}], '
+                '"keys": [{"combo": "ctrl+s"}], "wait_after_ms": 500}'
             )
-            return TaskResult(self.task_id, True, "未配置点击坐标与按键，跳过")
+            return TaskResult(self.task_id, True, "未配置任何步骤，跳过")
         step = 0
         for point in params.click_points:
             if not ctx.wait_until_ready():
@@ -59,6 +62,21 @@ class PlaceholderTaskA(BaseTask):
             ctx.logger.info("步骤 %d/%d：点击 (%d, %d)", step, total, x, y)
             ctx.sender.click_at(x, y)
             ctx.interruptible_sleep(params.wait_after_ms / 1000)
+        for swipe in params.swipes:
+            if not ctx.wait_until_ready():
+                return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
+            step += 1
+            ctx.logger.info(
+                "步骤 %d/%d：滑动 (%d, %d) → (%d, %d) 用时 %d ms",
+                step, total, swipe.from_point[0], swipe.from_point[1],
+                swipe.to_point[0], swipe.to_point[1], swipe.duration_ms,
+            )
+            ctx.sender.drag(
+                (int(swipe.from_point[0]), int(swipe.from_point[1])),
+                (int(swipe.to_point[0]), int(swipe.to_point[1])),
+                swipe.duration_ms / 1000,
+            )
+            ctx.interruptible_sleep(swipe.wait_after_ms / 1000)
         for item in params.keys:
             if not ctx.wait_until_ready():
                 return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
@@ -73,5 +91,6 @@ class PlaceholderTaskA(BaseTask):
                 ctx.sender.key_combo(item.combo)
             ctx.interruptible_sleep(item.wait_after_ms / 1000)
         return TaskResult(
-            self.task_id, True, f"完成 {total} 步（点击 {click_total}，按键 {key_total}）"
+            self.task_id, True,
+            f"完成 {total} 步（点击 {click_total}，滑动 {swipe_total}，按键 {key_total}）",
         )

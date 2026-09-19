@@ -220,7 +220,7 @@
 | GUI | **PySide6**（Qt for Python） | 原生渲染快、QSS 可做出简洁大气的主题、QThread 成熟、LGPL 允许闭源分发（动态链接） |
 | 配置 | 标准库 JSON + dataclass + 手写 schema 校验 | 无数据库需求；避免 pydantic 增大 exe 体积 |
 | 日志 | 标准库 logging + RotatingFileHandler | 零依赖 |
-| 输入模拟 | **真实鼠标键盘（`SendInput`，唯一实现方式，Phase 5.3）**：`automation/real_input.py` 负责注入原语与「输入前置顶校验」（鼠标：移动/点击；键盘：单键、组合键、长按），`RealInputSender` 负责流程，`utils/keys.py` 提供键名表与组合键解析（config 与 GUI 共用）；干跑仍为 `DryRunSender`（零输入）。其它通道（窗口消息、合成指针、对齐窗口）已按用户指示删除 | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
+| 输入模拟 | **真实鼠标键盘（`SendInput`，唯一实现方式，Phase 5.3）**：`automation/real_input.py` 负责注入原语与「输入前置顶校验」（鼠标：移动、点击、**分帧滑动的拖拽**；键盘：单键、组合键、长按），`RealInputSender` 负责流程，`utils/keys.py` 提供键名表与组合键解析（config 与 GUI 共用）；干跑仍为 `DryRunSender`（零输入）。其它通道（窗口消息、合成指针、对齐窗口）已按用户指示删除 | ① 窗口消息零侵入，但本作忽略消息坐标；② **对齐窗口能在不移动真实光标、不隐藏指针的前提下点准本作**，代价是每次点击游戏窗口短暂位移（点完还原）且需窗口化；③ 合成输入需移动光标，触摸注入会隐藏指针（见 §4.2.1）；④ 驱动级风险最高（反作弊/系统改动） |
 | 窗口查找/截图 | pywin32（win32gui / win32ui）；`automation/real_input.py` 负责置顶/置前与注入原语 | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
@@ -282,17 +282,17 @@ LuoLuoTool/
 | core | 任务协议、注册表、执行调度、运行状态 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()` |
 | automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
-| automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（含组合键与长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入 | `RealInputSender.click_at(x, y)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click()`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
+| automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（点击、**滑动拖拽**、单键/组合键/长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入 | `RealInputSender.click_at(x, y)` / `drag(from_xy, to_xy, seconds)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click()`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
 | gui | 四页签 + 设置页 + 日志面板 + 状态栏；把配置变更同步回 `AppConfig` | `MainWindow(config, runner)` |
 | utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
 
-## 9. 数据结构（配置文件 schema v6）
+## 9. 数据结构（配置文件 schema v7）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 6,
+  "schema_version": 7,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -302,6 +302,7 @@ LuoLuoTool/
           "order": 1,
           "params": {
             "click_points": [],
+            "swipes": [ { "from": [300, 300], "to": [700, 300], "duration_ms": 500, "wait_after_ms": 500 } ],
             "keys": [ { "combo": "ctrl+s", "hold_ms": 0, "wait_after_ms": 300 } ],
             "wait_after_ms": 500
           }
@@ -338,6 +339,7 @@ LuoLuoTool/
   - `placeholder_task_a`：`{"click_points": [[x, y], ...], "wait_after_ms": 500}`
     - `click_points`：客户区坐标序列（`[[x, y], ...]`，允许为空列表，此时任务只写提示日志不动作）；
     - `keys`：按键步骤序列（`[{combo, hold_ms, wait_after_ms}, ...]`，最多 20 步）：`combo` 为组合键文本（如 `ctrl+s`，键名表见 `utils/keys.py`），`hold_ms` > 0 表示长按该毫秒数（0 = 单击）；长按期间可被急停打断并保证释放按键；每次按键前同样会校验并置顶游戏窗口。
+    - `swipes`：鼠标滑动步骤序列（`[{from, to, duration_ms, wait_after_ms}, ...]`，最多 20 步）：从 `from` 按住左键**分帧插值**移动到 `to` 后松开（`duration_ms` 50–10000，默认 400）；滑动前同样校验并置顶游戏窗口；滑动期间可按急停立即中断，**任何退出路径都释放左键**（绝不卡住鼠标）。
     - `wait_after_ms`：每个步骤后的等待毫秒数（0–60000）。
 - 配置文件为 UTF-8；读写使用临时文件 + `os.replace` 原子替换。
 
@@ -350,6 +352,7 @@ LuoLuoTool/
 | v3 → v4 | 移除 `align_window_before_click`，新增 `automation.restore_cursor_after_click`（默认 `true`）。<br>（v4 曾一度把该布尔升级为 `input_mode` 枚举，随 v5 一并废除） | `validation.migrate()` → `_migrate_v3_to_v4` |
 | v4 → v5 | 输入实现方式固定为「真实鼠标键盘」：移除 `automation.input_mode` 与 `automation.pause_on_window_focus_loss`（后者与该通道冲突，永不生效），保留 `restore_cursor_after_click` | `validation.migrate()` → `_migrate_v4_to_v5` |
 | v5 → v6 | 任务参数新增**按键序列** `params.keys`（默认 `[]` = 不发送按键）：元素为 `{combo, hold_ms, wait_after_ms}`，支持组合键与长按 | `validation.migrate()` → `_migrate_v5_to_v6` |
+| v6 → v7 | 任务参数新增**鼠标滑动序列** `params.swipes`（默认 `[]` = 不滑动）：元素为 `{from, to, duration_ms, wait_after_ms}`，按住左键分帧拖拽 | `validation.migrate()` → `_migrate_v6_to_v7` |
 
 > 字段沿革：合成指针通道曾在 v3 引入 `automation.input_mode`（`window_message`/`synthetic_pointer`）与 `pointer_type`，**随该通道撤回**（见 §4.2.1）；v4 又把 `input_mode` 重新定义为三档实现方式选择，**2026-09-16 用户确定只保留真实鼠标键盘后随 v5 删除**。若某份旧配置仍残留这些字段，迁移链会把它们逐一移除（已有单测覆盖）。
 

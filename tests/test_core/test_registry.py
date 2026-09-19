@@ -57,6 +57,9 @@ class _RecordingSender:
     def key_tap(self, vk: int) -> None:
         self.calls.append(("key_tap", vk))
 
+    def drag(self, from_xy: tuple[int, int], to_xy: tuple[int, int], duration_seconds: float) -> None:
+        self.calls.append(("drag", from_xy, to_xy, round(duration_seconds, 3)))
+
     def key_combo(self, combo: str) -> None:
         self.calls.append(("key_combo", combo))
 
@@ -100,7 +103,7 @@ def test_placeholder_without_points_only_logs(caplog) -> None:
     result = PlaceholderTaskA().run(ctx)
     assert result.success is True
     assert sender.calls == []
-    assert "未配置点击坐标" in caplog.text
+    assert "未配置任何步骤" in caplog.text
 
 
 def test_placeholder_respects_readiness_gate() -> None:
@@ -138,7 +141,7 @@ def test_placeholder_runs_keys_after_clicks(caplog) -> None:
     assert "步骤 1/3：点击 (5, 6)" in caplog.text
     assert "步骤 2/3：按键 ctrl+s" in caplog.text
     assert "步骤 3/3：长按 w 持续 800 ms" in caplog.text
-    assert "点击 1，按键 2" in result.message
+    assert "点击 1，滑动 0，按键 2" in result.message
 
 
 def test_placeholder_with_only_keys_does_not_warn(caplog) -> None:
@@ -161,7 +164,7 @@ def test_placeholder_without_any_steps_only_logs(caplog) -> None:
     result = PlaceholderTaskA().run(ctx)
     assert result.success is True
     assert sender.calls == []
-    assert "未配置点击坐标与按键" in caplog.text
+    assert "未配置任何步骤" in caplog.text
 
 
 def test_placeholder_stops_between_key_steps() -> None:
@@ -185,3 +188,51 @@ def test_placeholder_stops_between_key_steps() -> None:
     assert result.success is True
     assert "停止" in result.message
     assert sender.calls == [("key_combo", "a")]
+
+
+def test_placeholder_runs_swipes_between_clicks_and_keys(caplog) -> None:
+    """执行顺序：点击 → 滑动 → 按键，日志给出每步序号。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(
+        sender=sender,
+        sleep=lambda _s: None,
+        params={
+            "click_points": [[5, 6]],
+            "swipes": [{"from": [100, 100], "to": [400, 100], "duration_ms": 500,
+                        "wait_after_ms": 0}],
+            "keys": [{"combo": "enter", "wait_after_ms": 0}],
+            "wait_after_ms": 0,
+        },
+    )
+    result = PlaceholderTaskA().run(ctx)
+    assert result.success is True
+    assert sender.calls == [
+        ("click_at", 5, 6),
+        ("drag", (100, 100), (400, 100), 0.5),
+        ("key_combo", "enter"),
+    ]
+    assert "步骤 1/3：点击 (5, 6)" in caplog.text
+    assert "步骤 2/3：滑动 (100, 100) → (400, 100) 用时 500 ms" in caplog.text
+    assert "步骤 3/3：按键 enter" in caplog.text
+    assert "点击 1，滑动 1，按键 1" in result.message
+
+
+def test_placeholder_stops_between_swipes() -> None:
+    """滑动步骤之间响应停止请求。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(
+        sender=sender,
+        params={"swipes": [
+            {"from": [0, 0], "to": [10, 10], "wait_after_ms": 500},
+            {"from": [10, 10], "to": [20, 20], "wait_after_ms": 500},
+        ]},
+    )
+
+    def fake_sleep(seconds: float) -> None:
+        ctx.stop_event.set()
+
+    ctx.sleep = fake_sleep
+    result = PlaceholderTaskA().run(ctx)
+    assert result.success is True
+    assert "停止" in result.message
+    assert sender.calls == [("drag", (0, 0), (10, 10), 0.4)]

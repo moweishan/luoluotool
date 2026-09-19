@@ -302,6 +302,7 @@ class _RecordingRealInput:
         self.front_ok = front_ok
         self.cursor_to_restore = (800, 600)
         self.hold_result = (True, False)
+        self.drag_result = (True, False)
 
         def ensure_front(hwnd, log=None, sleep=None):
             self.events.append(("ensure_front", hwnd))
@@ -317,6 +318,10 @@ class _RecordingRealInput:
                             lambda sleep=None: self.events.append(("click",)) or True)
         monkeypatch.setattr(real_input, "send_key_tap",
                             lambda vk, sleep=None: self.events.append(("key", vk)) or True)
+        monkeypatch.setattr(real_input, "send_left_drag",
+                            lambda start, end, duration, sleep=None, stop_event=None:
+                            self.events.append(("drag", start, end, round(duration, 3)))
+                            or self.drag_result)
         monkeypatch.setattr(real_input, "send_key_combo",
                             lambda combo, sleep=None: self.events.append(("combo", combo)) or True)
         monkeypatch.setattr(real_input, "send_key_hold",
@@ -604,3 +609,101 @@ def test_dry_run_sender_logs_keyboard_without_input(caplog) -> None:
     sender.key_hold("w", 0.8)
     assert "干跑：模拟按键组合 ctrl+s" in caplog.text
     assert "干跑：模拟长按 w 持续 0.80s" in caplog.text
+
+
+# ------------------------------------------------------------------- 滑动
+
+
+def test_interpolate_points_is_linear_and_inclusive(user32) -> None:
+    """插值纯函数：不含起点、含终点，末点必须精确落在终点。"""
+    points = real_input.interpolate_points((0, 0), (100, 50), 5)
+    assert len(points) == 5
+    assert points[-1] == (100, 50)
+    assert points[1] == (40, 20)
+    # 退化情形：步数为 0/负数也要至少给一个终点
+    assert real_input.interpolate_points((0, 0), (10, 10), 0) == [(10, 10)]
+
+
+def test_send_left_drag_moves_in_steps_between_press_and_release(user32, monkeypatch) -> None:
+    """滑动顺序：移动起点 → 按下左键 → 多次插值移动 → 抬起左键。"""
+    monkeypatch.setattr(real_input, "virtual_desktop", lambda: (0, 0, 1000, 1000))
+    ok, interrupted = real_input.send_left_drag((0, 0), (100, 0), 0.1, sleep=lambda _s: None)
+    assert (ok, interrupted) == (True, False)
+    moves = [event for event in user32.sent if event["flags"] & real_input.MOUSEEVENTF_MOVE]
+    assert len(moves) >= real_input.DRAG_MIN_STEPS            # 分帧移动，不是一次瞬移
+    down_index = next(i for i, e in enumerate(user32.sent) if e["flags"] & real_input.MOUSEEVENTF_LEFTDOWN)
+    up_index = max(i for i, e in enumerate(user32.sent) if e["flags"] & real_input.MOUSEEVENTF_LEFTUP)
+    assert down_index < up_index
+    assert all(
+        user32.sent[i]["flags"] & real_input.MOUSEEVENTF_MOVE for i in range(down_index + 1, up_index)
+    )
+    assert user32.sent[up_index]["flags"] & real_input.MOUSEEVENTF_LEFTUP
+
+
+def test_send_left_drag_aborts_on_stop_and_releases_button(user32) -> None:
+    """急停：滑动中途收到停止请求必须立即中断并松开左键（不卡住鼠标）。"""
+    class _Stop:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def is_set(self) -> bool:
+            self.calls += 1
+            return self.calls > 1     # 第二次检查（即滑了几帧后）触发急停
+
+    ok, interrupted = real_input.send_left_drag((0, 0), (500, 500), 0.2, sleep=lambda _s: None,
+                                               stop_event=_Stop())
+    assert interrupted is True
+    assert user32.sent[-1]["flags"] & real_input.MOUSEEVENTF_LEFTUP
+
+
+def test_send_left_drag_releases_button_on_exception(user32) -> None:
+    """滑动过程中抛异常也必须松开左键。"""
+    calls = {"n": 0}
+
+    def boom(seconds: float) -> None:
+        calls["n"] += 1
+        raise RuntimeError("sleep 中断")
+
+    with pytest.raises(RuntimeError):
+        real_input.send_left_drag((0, 0), (10, 10), 0.1, sleep=boom)
+    assert user32.sent[-1]["flags"] & real_input.MOUSEEVENTF_LEFTUP
+
+
+def test_real_sender_drag_checks_front_restores_cursor_and_releases(recording) -> None:
+    """发送器层滑动：校验/置顶 → 记录光标 → 滑动 → 还原光标 → 取消置顶。"""
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((10, 20), (30, 40), 0.5)
+    assert recording.events == [
+        ("ensure_front", 555),
+        ("get_cursor_pos",),
+        ("drag", (20, 40), (40, 60), 0.5),      # 客户区 + (10,20) 偏移
+        ("restore_cursor", 800, 600),
+        ("release_topmost", 555),
+    ]
+
+
+def test_real_sender_drag_refuses_when_window_cannot_be_focused(monkeypatch) -> None:
+    """无法确保窗口在最前时绝不滑动（否则会拖到别的窗口）。"""
+    monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)
+    from tests.test_automation.test_real_input import _RecordingRealInput
+    recording = _RecordingRealInput(monkeypatch, front_ok=False)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    with pytest.raises(WindowUnavailableError, match="最前"):
+        sender.drag((0, 0), (10, 10), 0.3)
+    assert all(event[0] == "ensure_front" for event in recording.events)
+
+
+def test_real_sender_drag_logs_interruption(recording, caplog) -> None:
+    """滑动被急停中断：写 WARNING 日志。"""
+    caplog.set_level("WARNING")
+    recording.drag_result = (True, True)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((0, 0), (10, 10), 0.3)
+    assert any("被停止请求中断" in record.message for record in caplog.records)
+
+
+def test_dry_run_sender_logs_drag_without_input(caplog) -> None:
+    """干跑：滑动只写日志，零真实输入。"""
+    caplog.set_level("INFO")
+    input_sender.DryRunSender().drag((1, 2), (3, 4), 0.5)
+    assert "干跑：模拟滑动 (1, 2) → (3, 4) 用时 0.50s" in caplog.text

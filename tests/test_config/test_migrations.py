@@ -62,7 +62,7 @@ def test_migrate_v1_to_latest_adds_fields_and_preserves_values() -> None:
     raw = v1_raw()
     raw["automation"]["click_interval_ms"] = 1234
     migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 6
+    assert migrated["schema_version"] == SCHEMA_VERSION == 7
     assert migrated["automation"]["ask_elevation_on_start"] is True
     assert migrated["automation"]["restore_cursor_after_click"] is True
     assert migrated["automation"]["click_interval_ms"] == 1234
@@ -104,7 +104,7 @@ def test_migrate_v3_drops_align_flag_and_adds_restore_cursor() -> None:
     raw["schema_version"] = 3
     raw["automation"]["align_window_before_click"] = True
     migrated = migrate(raw)
-    assert migrated["schema_version"] == 6
+    assert migrated["schema_version"] == SCHEMA_VERSION
     assert "align_window_before_click" not in migrated["automation"]
     assert migrated["automation"]["restore_cursor_after_click"] is True
 
@@ -112,7 +112,7 @@ def test_migrate_v3_drops_align_flag_and_adds_restore_cursor() -> None:
 def test_migrate_v4_drops_input_mode_and_focus_pause() -> None:
     """v4 → v5：输入实现方式已固定，input_mode 与失焦暂停开关都必须移除。"""
     migrated = migrate(v4_raw())
-    assert migrated["schema_version"] == 6
+    assert migrated["schema_version"] == SCHEMA_VERSION
     automation = migrated["automation"]
     assert "input_mode" not in automation
     assert "pause_on_window_focus_loss" not in automation
@@ -132,8 +132,8 @@ def test_migrate_v4_also_drops_stale_align_flag() -> None:
     assert "align_window_before_click" not in migrated["automation"]
 
 
-def test_migrate_v5_to_v6_adds_empty_key_sequence() -> None:
-    """v5 → v6：任务参数补上 `keys: []`（默认不发送任何按键），已有 click_points 保持不变。"""
+def test_migrate_v5_adds_keys_and_swipes_defaults() -> None:
+    """v5 起：任务参数依次补上 `keys: []` 与 `swipes: []`（默认不按键、不滑动），已有取值不变。"""
     raw = v4_raw()
     raw["schema_version"] = 5
     raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"] = {
@@ -141,14 +141,15 @@ def test_migrate_v5_to_v6_adds_empty_key_sequence() -> None:
         "wait_after_ms": 700,
     }
     migrated = migrate(raw)
-    assert migrated["schema_version"] == 6
+    assert migrated["schema_version"] == SCHEMA_VERSION
     params = migrated["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"]
     assert params["keys"] == []
+    assert params["swipes"] == []
     assert params["click_points"] == [[11, 22]]
     assert params["wait_after_ms"] == 700
 
 
-def test_migrate_v5_to_v6_keeps_existing_keys() -> None:
+def test_migrate_v5_keeps_existing_keys() -> None:
     """已经手工配好 keys 的 v5 配置不得被覆盖。"""
     raw = v4_raw()
     raw["schema_version"] = 5
@@ -169,3 +170,31 @@ def test_migrate_v4_keeps_other_user_values() -> None:
     assert migrated["automation"]["click_interval_ms"] == 1500
     assert migrated["automation"]["failsafe_hotkey"] == "F9"
     assert migrated["automation"]["ask_elevation_on_start"] is False
+
+
+def test_migrate_v6_to_v7_adds_empty_swipe_sequence() -> None:
+    """v6 → v7：任务参数补上 `swipes: []`，已有 keys 保持不变。"""
+    raw = v4_raw()
+    raw["schema_version"] = 6
+    raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"] = {
+        "click_points": [],
+        "keys": [{"combo": "ctrl+s"}],
+        "wait_after_ms": 500,
+    }
+    migrated = migrate(raw)
+    assert migrated["schema_version"] == SCHEMA_VERSION
+    params = migrated["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"]
+    assert params["swipes"] == []
+    assert params["keys"][0]["combo"] == "ctrl+s"
+
+
+def test_migrate_v6_to_v7_keeps_existing_swipes() -> None:
+    """已经手工配好 swipes 的 v6 配置不得被覆盖。"""
+    raw = v4_raw()
+    raw["schema_version"] = 6
+    raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"] = {
+        "click_points": [],
+        "swipes": [{"from": [10, 10], "to": [20, 20], "duration_ms": 800}],
+    }
+    params = migrate(raw)["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"]
+    assert params["swipes"][0]["duration_ms"] == 800

@@ -59,6 +59,8 @@ FRONT_SETTLE_SECONDS = 0.05
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 
 # ---- 键盘：时序常量（键名表与组合键解析在 utils/keys.py，config 层也要用） ----
+DRAG_STEP_SECONDS = 0.016   # 滑动插值步长（≈60Hz）
+DRAG_MIN_STEPS = 4
 KEY_COMBO_GAP_SECONDS = 0.02
 KEY_HOLD_SLICE_SECONDS = 0.1
 
@@ -318,6 +320,57 @@ def _key_input(vk: int, up: bool, scan: int | None = None) -> INPUT:
     # 有扫描码时 wVk 传 0（与真实硬件一致）；没有扫描码时回退用虚拟键码
     item.u.ki = KEYBDINPUT(0 if scan else int(vk), scan, flags, 0, None)
     return item
+
+
+def interpolate_points(
+    start: tuple[int, int], end: tuple[int, int], steps: int
+) -> list[tuple[int, int]]:
+    """纯函数：在起点与终点之间线性插值出 `steps` 个中间点（不含起点、含终点）。
+
+    真实鼠标滑动必须分帧移动：一次跳跃式移动会被很多游戏识别为瞬移而不是拖拽。
+    """
+    count = max(int(steps), 1)
+    sx, sy = int(start[0]), int(start[1])
+    ex, ey = int(end[0]), int(end[1])
+    return [
+        (round(sx + (ex - sx) * index / count), round(sy + (ey - sy) * index / count))
+        for index in range(1, count + 1)
+    ]
+
+
+def send_left_drag(
+    from_screen: tuple[int, int],
+    to_screen: tuple[int, int],
+    duration_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+    stop_event: "object | None" = None,
+) -> tuple[bool, bool]:
+    """按住左键从 `from_screen` 滑到 `to_screen`（插值移动），返回 (是否成功, 是否被中断)。
+
+    - 分帧插值移动（按 `duration_seconds` 均分，最少 `DRAG_MIN_STEPS` 步）；
+    - 期间切片检查停止请求（急停可立刻打断）；
+    - **无论正常结束、异常还是被急停打断，都会在 `finally` 释放左键**（绝不卡住鼠标按键）。
+    """
+    duration = max(float(duration_seconds), 0.0)
+    steps = max(int(round(duration / DRAG_STEP_SECONDS)), DRAG_MIN_STEPS) if duration else DRAG_MIN_STEPS
+    points = interpolate_points(from_screen, to_screen, steps)
+    per_step = duration / len(points) if points else 0.0
+    ok = True
+    interrupted = False
+    try:
+        ok = move_cursor_absolute(*from_screen) and ok
+        sleep(INPUT_SETTLE_SECONDS)
+        ok = _send([_mouse_input(MOUSEEVENTF_LEFTDOWN)]) and ok
+        for point in points:
+            if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
+                interrupted = True
+                break
+            move_cursor_absolute(*point)
+            if per_step > 0:
+                sleep(per_step)
+    finally:
+        ok = _send([_mouse_input(MOUSEEVENTF_LEFTUP)]) and ok
+    return ok, interrupted
 
 
 def send_key_down(vk: int) -> bool:

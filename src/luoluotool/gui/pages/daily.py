@@ -1,4 +1,4 @@
-"""日常任务配置页：启用、占位任务 A、按键序列、循环开关与间隔。"""
+"""日常任务配置页：启用、占位任务 A、按键序列、滑动序列、循环开关与间隔。"""
 
 from collections.abc import Callable
 
@@ -17,7 +17,9 @@ from luoluotool.config.models import (
     PlaceholderTaskParams,
     TaskConfig,
     format_keys_text,
+    format_swipes_text,
     parse_keys_text,
+    parse_swipes_text,
 )
 
 LOOP_MIN_SECONDS = 1
@@ -51,6 +53,15 @@ class DailyPage(QWidget):
             "enter/esc/tab/space/up/down/left/right 等）\n"
             "执行时每次按键前都会校验并把游戏窗口置于最顶层；无法确保时不会按键。"
         )
+        self.swipes_edit = QLineEdit()
+        self.swipes_edit.setPlaceholderText("例如：100,200 > 400,600; 400,600 > 100,200*800")
+        self.swipes_edit.setToolTip(
+            "鼠标滑动（按住左键拖拽）序列，用分号分隔：\n"
+            "· 基本写法：x1,y1 > x2,y2（从起点滑到终点，默认 400 毫秒）\n"
+            "· 指定时长：x1,y1 > x2,y2*800（用时 800 毫秒，范围 50–10000）\n"
+            "坐标是游戏客户区坐标；执行时每次滑动前都会校验并把游戏窗口置于最顶层，"
+            "无法确保时不会滑动；滑动期间按急停键会立即中断并松开左键。"
+        )
         loop_row = QHBoxLayout()
         loop_row.addWidget(self.loop_box)
         loop_row.addWidget(QLabel("间隔"))
@@ -59,9 +70,13 @@ class DailyPage(QWidget):
         keys_row = QHBoxLayout()
         keys_row.addWidget(QLabel("按键序列"))
         keys_row.addWidget(self.keys_edit)
+        swipes_row = QHBoxLayout()
+        swipes_row.addWidget(QLabel("滑动序列"))
+        swipes_row.addWidget(self.swipes_edit)
         layout.addWidget(self.enabled_box)
         layout.addWidget(self.task_a_box)
         layout.addLayout(keys_row)
+        layout.addLayout(swipes_row)
         layout.addLayout(loop_row)
         layout.addStretch(1)
         self.enabled_box.toggled.connect(self._on_enabled_toggled)
@@ -69,6 +84,7 @@ class DailyPage(QWidget):
         self.loop_box.toggled.connect(self._on_loop_toggled)
         self.interval_spin.valueChanged.connect(self._on_interval_changed)
         self.keys_edit.editingFinished.connect(self._on_keys_edited)
+        self.swipes_edit.editingFinished.connect(self._on_swipes_edited)
         self.set_config(config)
 
     def set_config(self, config: AppConfig) -> None:
@@ -91,6 +107,9 @@ class DailyPage(QWidget):
         self.keys_edit.blockSignals(True)
         self.keys_edit.setText(self._keys_text())
         self.keys_edit.blockSignals(False)
+        self.swipes_edit.blockSignals(True)
+        self.swipes_edit.setText(self._swipes_text())
+        self.swipes_edit.blockSignals(False)
 
     def _params(self) -> PlaceholderTaskParams:
         task = self._config.features.daily_tasks.tasks.get("placeholder_task_a")
@@ -98,6 +117,25 @@ class DailyPage(QWidget):
 
     def _keys_text(self) -> str:
         return format_keys_text(self._params().keys)
+
+    def _swipes_text(self) -> str:
+        return format_swipes_text(self._params().swipes)
+
+    def _on_swipes_edited(self) -> None:
+        """把滑动输入框写回配置；格式非法则回退显示（不写坏配置）。"""
+        text = self.swipes_edit.text()
+        try:
+            steps = parse_swipes_text(text, self._params().wait_after_ms)
+        except ValueError:
+            self.swipes_edit.blockSignals(True)
+            self.swipes_edit.setText(self._swipes_text())
+            self.swipes_edit.blockSignals(False)
+            return
+        task = self._config.features.daily_tasks.tasks.setdefault("placeholder_task_a", TaskConfig())
+        params = PlaceholderTaskParams.from_dict(task.params)
+        params.swipes = steps
+        task.params = params.to_dict()
+        self._on_changed()
 
     def _on_keys_edited(self) -> None:
         """把输入框文本写回配置；格式非法则回退显示（不写坏配置）。"""

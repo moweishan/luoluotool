@@ -154,3 +154,35 @@ def test_daily_page_binds_keys_text() -> None:
     page.set_config(config2)
     assert page.keys_edit.text() == "enter"
     page.close()
+
+
+def test_daily_page_binds_swipes_text() -> None:
+    """日常任务页「滑动序列」输入框：文本 ↔ params.swipes 双向绑定，非法输入回退。"""
+    from luoluotool.gui.pages.daily import DailyPage
+
+    config = AppConfig.default()
+    page = DailyPage(config, lambda: None)
+    assert page.swipes_edit.text() == ""
+
+    page.swipes_edit.setText("100,200 > 400,600; 10,10 > 20,20*800")
+    page.swipes_edit.editingFinished.emit()
+    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["swipes"]
+    assert [(item["from"], item["to"], item["duration_ms"]) for item in stored] == [
+        ([100, 200], [400, 600], 400),
+        ([10, 10], [20, 20], 800),
+    ]
+
+    # 非法文本：回退显示已保存内容，配置不被破坏
+    page.swipes_edit.setText("100,200 >")
+    page.swipes_edit.editingFinished.emit()
+    assert page.swipes_edit.text() == "100,200 > 400,600; 10,10 > 20,20*800"
+    assert len(config.features.daily_tasks.tasks["placeholder_task_a"].params["swipes"]) == 2
+
+    config2 = AppConfig.default()
+    config2.features.daily_tasks.tasks["placeholder_task_a"].params = {
+        "click_points": [], "keys": [], "swipes": [{"from": [1, 1], "to": [2, 2]}],
+        "wait_after_ms": 500,
+    }
+    page.set_config(config2)
+    assert page.swipes_edit.text() == "1,1 > 2,2"
+    page.close()

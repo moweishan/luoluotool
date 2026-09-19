@@ -6,9 +6,9 @@ from luoluotool.config import models
 
 
 def test_defaults_are_safe() -> None:
-    """出厂默认：开关全关，dry_run 开启，schema_version=6。"""
+    """出厂默认：开关全关，dry_run 开启，schema_version=7。"""
     config = models.AppConfig.default()
-    assert config.schema_version == models.SCHEMA_VERSION == 6
+    assert config.schema_version == models.SCHEMA_VERSION == 7
     assert config.automation.dry_run is True
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.loop.enabled is False
@@ -35,7 +35,7 @@ def test_default_contains_placeholder_task_a() -> None:
     task = config.features.daily_tasks.tasks["placeholder_task_a"]
     assert task.enabled is False
     assert task.order == 1
-    assert task.params == {"click_points": [], "keys": [], "wait_after_ms": 500}
+    assert task.params == {"click_points": [], "keys": [], "swipes": [], "wait_after_ms": 500}
 
 
 def test_placeholder_params_defaults_and_roundtrip() -> None:
@@ -43,6 +43,7 @@ def test_placeholder_params_defaults_and_roundtrip() -> None:
     assert models.PlaceholderTaskParams.from_dict({}).to_dict() == {
         "click_points": [],
         "keys": [],
+        "swipes": [],
         "wait_after_ms": 500,
     }
     params = models.PlaceholderTaskParams.from_dict(
@@ -50,7 +51,7 @@ def test_placeholder_params_defaults_and_roundtrip() -> None:
     )
     assert params.click_points == [[10, 20], [30, 40]]
     assert params.to_dict() == {
-        "click_points": [[10, 20], [30, 40]], "keys": [], "wait_after_ms": 800
+        "click_points": [[10, 20], [30, 40]], "keys": [], "swipes": [], "wait_after_ms": 800
     }
     assert models.PlaceholderTaskParams.from_dict(None).wait_after_ms == 500
 
@@ -132,3 +133,34 @@ def test_placeholder_params_roundtrip_with_keys() -> None:
     restored = models.PlaceholderTaskParams.from_dict(params.to_dict())
     assert restored.to_dict() == params.to_dict()
     assert restored.keys[1].hold_ms == 800
+
+
+def test_swipe_step_text_roundtrip() -> None:
+    """滑动文本语法：`100,200 > 400,600`（默认 400ms）、`...*800`（指定时长）。"""
+    steps = models.parse_swipes_text("100,200 > 400,600; 10,10 > 20,20*800")
+    assert [(s.from_point, s.to_point, s.duration_ms) for s in steps] == [
+        ([100, 200], [400, 600], 400),
+        ([10, 10], [20, 20], 800),
+    ]
+    assert models.format_swipes_text(steps) == "100,200 > 400,600; 10,10 > 20,20*800"
+    assert models.parse_swipes_text("") == []
+
+
+def test_swipe_step_text_rejects_bad_input() -> None:
+    """非法滑动文本必须抛可读错误（GUI 据此回退、校验据此报错）。"""
+    for bad in ("*800", "100,200", "100 > 200,300", "a,b > c,d", "100,200 > 400,600*abc",
+                "100,200 > 400,600*60001"):
+        with pytest.raises(ValueError):
+            models.parse_swipes_text(bad)
+
+
+def test_placeholder_params_roundtrip_with_swipes() -> None:
+    """params 含 swipes 时 to_dict → from_dict 必须一致。"""
+    params = models.PlaceholderTaskParams(
+        click_points=[], keys=[],
+        swipes=[models.SwipeStepParams([1, 2], [30, 40], 800, 200)],
+        wait_after_ms=600,
+    )
+    restored = models.PlaceholderTaskParams.from_dict(params.to_dict())
+    assert restored.to_dict() == params.to_dict()
+    assert restored.swipes[0].duration_ms == 800
