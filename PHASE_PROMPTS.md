@@ -621,6 +621,33 @@ Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--smoke-gui' -Wait
 
 ---
 
+## Phase 8 — 图像识别（模板匹配）与坐标输出（2026-09-19，用户直接要求）
+
+**用户要求原文**：「加图像识别的功能，用给出的图像在当前游戏窗口之上识别图像，并给出相应的坐标」。
+
+**范围**：核心能力（automation + core）+ 命令行 `--recognize` + 调试页「图像识别测试」。
+**不做**（等用户点头）：把识别接进任务（"按图点击"需要 config schema v9 + 迁移）、多尺度匹配、GUI 框选截图。
+
+**本次只做什么**
+
+1. `requirements.txt`：新增 `numpy>=1.26`、`opencv-python-headless>=4.9`（headless 不带 GUI 组件；体积 +60–70 MB，已写入提交说明与 AGENTS）。
+2. `automation/vision.py`（新，不 import PySide6）：
+   - `Match`（frozen dataclass）：left/top/width/height/score + `center`/`right_bottom`/`describe()`，坐标全部是**客户区坐标**；
+   - `locate_all` / `locate_best`（纯函数）：灰度 + `TM_CCOEFF_NORMED` + 阈值过滤 + 按分数降序 + NMS 去重叠 + `max_results` 截断；模板比截图大抛可读 `VisionError`；
+   - `load_template`（`np.fromfile` + `cv2.imdecode`，支持中文路径）、`capture_client_bgr`（PrintWindow 全窗口 → 回退 BitBlt → BGRA 位转 numpy）、`annotate`、`save_image`（imencode + tofile，同样为中文路径）。
+3. `core/vision.py`（新）：`recognize_in_window(config, 图片, 阈值, max_results, annotate_result, capture?)` → `RecognizeResult(found, matches, message, window_size, annotated_path)`；失败（窗口未找到/最小化/模板不可读/截图失败）一律转可读结果，不抛给 GUI 线程；带框截图存 `user_data/debug/vision_<时间戳>.png`。
+4. `__main__.py`：`--recognize <图片> [--threshold 0.85] [--no-annotate] [--config PATH]`；退出码 0 命中 / 1 未命中或失败 / 2 阈值非法；输出走 `_print_safe`。
+5. `gui/pages/debug.py` + `main_window.py`：新增「图像识别测试」分组（图片路径 + 选择图片… + 阈值 0.30–1.00 + 识别图片），走既有后台线程与开发者调试门禁；`run_debug_action` 新增 `kind="vision"`。
+6. 测试（先行）：纯匹配（已知位置/多目标/找不到/阈值/NMS/`max_results`/模板过大/灰度与彩色）、模板加载（中文路径、缺文件、坏图）、BGRA→数组（含行补齐）、core 编排（正常/未命中/无窗口/最小化/坏模板/截图失败/跳过标注/多目标）、CLI 四种路径、调试页信号与忙碌禁用、`run_debug_action` 分发。
+7. 文档：PROJECT_SPEC（技术栈、功能范围、目录、验收）、AGENTS（识别规则与新依赖纪律）、CHECKLIST、README（功能与 CLI 用法）。
+
+**实测（真实窗口端到端）**：用一个可见窗口（1740×989）→ `capture_client_bgr` → 裁 100×60 模板（取自客户区 (435, 247)）→ `locate_all`（阈值 0.9）→ **命中 1 处，左上 (435, 247)、中心 (485, 277)、匹配度 1.0000，与裁剪位置完全吻合**。
+另：游戏窗口当前处于最小化（客户区 0x0），识别按设计**拒绝**并给出"窗口已最小化或不可见"提示——需要恢复窗口后才能对游戏本体做实拍验证。
+
+**验收**：全量 **399 项测试通过**；`--validate-config` = OK；`--smoke-gui` 退出码 0；`--measure-layout` = 不改变任何高度；未重新构建 exe（按用户「不要每次改动都重新构建」的要求）。
+
+---
+
 ## 后续阶段（先不执行，仅占位）
 
 当你有新的真实需求时（例如「收菜」「卡订单具体操作」），按下面模板新建阶段：
