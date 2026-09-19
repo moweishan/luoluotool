@@ -62,14 +62,17 @@ class DryRunSender:
         self._logger = log or logger
         self._bounds = bounds
 
-    def _out_of_bounds(self, x: int, y: int) -> bool:
-        """越界则写提示日志并返回 True（调用方据此跳过）。"""
+    def _skip_if_out_of_bounds(self, descriptions: list[tuple[str, tuple[int, int]]]) -> bool:
+        """越界则写提示日志并返回 True（调用方据此跳过本次输入）。
+
+        `descriptions` 是「人读标签 + 客户区坐标」列表，例如点击一个点、滑动起终点两个点。
+        """
         if self._bounds is None:
             return False
-        inside, detail = self._bounds(x, y)
-        if inside:
+        offenders, detail = check_points_in_bounds(descriptions, self._bounds)
+        if not offenders:
             return False
-        self._logger.warning("干跑：点击坐标 (%d, %d) 不在游戏窗口内（%s），已跳过", x, y, detail)
+        self._logger.warning("干跑：%s 不在游戏窗口内（%s），已跳过", "、".join(offenders), detail)
         return True
 
     def move_to(self, x: int, y: int) -> None:
@@ -79,7 +82,7 @@ class DryRunSender:
         self.click_at(x, y)
 
     def click_at(self, x: int, y: int) -> None:
-        if self._out_of_bounds(x, y):
+        if self._skip_if_out_of_bounds([(f"点击坐标 ({x}, {y})", (x, y))]):
             return
         self._logger.info("干跑：模拟点击 (%d, %d)", x, y)
 
@@ -87,6 +90,10 @@ class DryRunSender:
         self._logger.info("干跑：模拟按键 (vk=%d)", vk)
 
     def drag(self, from_xy: tuple[int, int], to_xy: tuple[int, int], duration_seconds: float) -> None:
+        if self._skip_if_out_of_bounds(
+            [(f"滑动起点 {tuple(from_xy)}", from_xy), (f"滑动终点 {tuple(to_xy)}", to_xy)]
+        ):
+            return
         self._logger.info(
             "干跑：模拟滑动 (%d, %d) → (%d, %d) 用时 %.2fs",
             from_xy[0], from_xy[1], to_xy[0], to_xy[1], duration_seconds,
@@ -171,10 +178,21 @@ class RealInputSender:
 
         与点击同样：**每次滑动前**校验并确保游戏窗口在最顶层，无法确保时绝不输入；
         滑动可被急停打断，且任何情况下都会校验并释放左键（松开后复查，未松开则补发）。
+        **起点与终点都必须落在游戏窗口客户区内**（2026-09-19 用户要求，与点击同一规则）：
+        任一端越界或读不到客户区就整段跳过并写 WARNING。
         结束后按 `restore_cursor_after_click` 把真实光标移回原位，但**先延迟再分帧
         小步移回**（`_restore_cursor_after_drag`）：一次跳回会被残留的拖拽状态算成
         巨大位移，表现为画面乱飘。
         """
+        offenders, detail = check_points_in_bounds(
+            [(f"起点 {tuple(from_xy)}", from_xy), (f"终点 {tuple(to_xy)}", to_xy)],
+            lambda x, y: point_in_client_area(self.hwnd, x, y),
+        )
+        if offenders:
+            self._logger.warning(
+                "滑动%s 不在游戏窗口内（%s），已跳过本次滑动", "、".join(offenders), detail
+            )
+            return
         front = self._ensure_front_or_raise("滑动")
         saved: tuple[int, int] | None = None
         try:
@@ -344,6 +362,23 @@ def point_in_client_area(hwnd: int, x: int, y: int) -> tuple[bool, str]:
         return False, f"无法读取窗口客户区（{exc}）"
     inside = 0 <= int(x) < int(width) and 0 <= int(y) < int(height)
     return inside, f"客户区 {int(width)}x{int(height)}"
+
+
+def check_points_in_bounds(
+    points: list[tuple[str, tuple[int, int]]],
+    check: Callable[[int, int], tuple[bool, str]],
+) -> tuple[tuple[str, ...], str]:
+    """逐个判定若干客户区点，返回 (越界点的标签, 客户区说明)。
+
+    点击只传一个点，滑动传起点与终点——这样"滑动任意一端出界就不滑动"与点击共用同一份判定。
+    """
+    offenders: list[str] = []
+    detail = ""
+    for label, (x, y) in points:
+        inside, detail = check(int(x), int(y))
+        if not inside:
+            offenders.append(label)
+    return tuple(offenders), detail
 
 
 def _dry_run_bounds(

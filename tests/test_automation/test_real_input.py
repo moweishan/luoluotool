@@ -397,12 +397,63 @@ def test_real_sender_skips_click_when_bounds_unreadable(recording, monkeypatch, 
     assert "无法读取窗口客户区" in caplog.text
 
 
-def test_real_sender_drag_is_not_bounds_checked(recording, monkeypatch) -> None:
-    """记录当前范围：越界校验只作用于**点击**；滑动（drag）暂未纳入（如需再单独提需求）。"""
-    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 10, 10))
+def test_real_sender_skips_drag_when_start_outside_window(recording, monkeypatch, caplog) -> None:
+    """滑动起点越界：不滑动、不置顶、不移动光标，只写 WARNING。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
     sender = RealInputSender(555, sleep=lambda _s: None)
-    sender.drag((100, 100), (200, 200), 0.1)
-    assert ("drag", (110, 120), (210, 220), 0.1) in recording.events
+    sender.drag((200, 10), (50, 10), 0.2)
+    assert recording.events == []
+    assert "滑动起点 (200, 10) 不在游戏窗口内" in caplog.text
+    assert "已跳过本次滑动" in caplog.text and "客户区 100x50" in caplog.text
+
+
+def test_real_sender_skips_drag_when_end_outside_window(recording, monkeypatch, caplog) -> None:
+    """滑动终点越界同样跳过（即使起点合法）。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((50, 10), (10, 999), 0.2)
+    assert recording.events == []
+    assert "滑动终点 (10, 999) 不在游戏窗口内" in caplog.text
+
+
+def test_real_sender_skips_drag_when_both_points_outside(recording, monkeypatch, caplog) -> None:
+    """起终点都越界时，日志把两个越界点都列出来。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((200, 10), (10, 999), 0.2)
+    assert recording.events == []
+    assert "起点 (200, 10)、终点 (10, 999) 不在游戏窗口内" in caplog.text
+
+
+def test_real_sender_drag_inside_window_runs(recording, monkeypatch) -> None:
+    """起终点都在窗口内：滑动照常执行，顺序与不带校验时一致。"""
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 200, 100))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((10, 20), (30, 40), 0.5)
+    assert recording.events == [
+        ("ensure_front", 555),
+        ("get_cursor_pos",),
+        ("drag", (20, 40), (40, 60), 0.5),      # 客户区 + (10,20) 偏移
+        ("restore_cursor_smooth", 800, 600),
+        ("release_topmost", 555),
+    ]
+
+
+def test_real_sender_skips_drag_when_bounds_unreadable(recording, monkeypatch, caplog) -> None:
+    """读不到客户区时按越界处理：滑动也不执行。"""
+    caplog.set_level(logging.WARNING)
+
+    def boom(hwnd: int):
+        raise OSError("窗口已关闭")
+
+    monkeypatch.setattr(input_sender, "get_client_rect", boom)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((10, 10), (20, 20), 0.2)
+    assert recording.events == []
+    assert "不在游戏窗口内" in caplog.text and "已跳过本次滑动" in caplog.text
 
 
 # ------------------------------------------------------------------- 发送器

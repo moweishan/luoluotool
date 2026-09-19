@@ -107,6 +107,43 @@ def test_dry_run_sender_logs_click_inside_bounds(caplog) -> None:
     assert "模拟点击 (10, 10)" in caplog.text
 
 
+# ------------------------------------------------------- 滑动越界校验（Phase 8 增量）
+
+
+def test_dry_run_sender_reports_out_of_bounds_drag(caplog) -> None:
+    """干跑：滑动起终点越界时跳过并提示（不写"模拟滑动"日志）。"""
+    caplog.set_level(logging.WARNING)
+    sender = input_sender.DryRunSender(
+        bounds=lambda x, y: (0 <= x < 100 and 0 <= y < 50, "客户区 100x50")
+    )
+    sender.drag((10, 10), (500, 10), 0.3)
+    assert "滑动终点 (500, 10) 不在游戏窗口内" in caplog.text
+    assert "已跳过" in caplog.text
+    assert "模拟滑动" not in caplog.text
+
+
+def test_dry_run_sender_logs_drag_inside_bounds(caplog) -> None:
+    """干跑：起终点都在窗口内时照常写"模拟滑动"日志。"""
+    caplog.set_level(logging.INFO)
+    sender = input_sender.DryRunSender(
+        bounds=lambda x, y: (0 <= x < 100 and 0 <= y < 50, "客户区 100x50")
+    )
+    sender.drag((10, 10), (90, 40), 0.3)
+    assert "模拟滑动 (10, 10) → (90, 40)" in caplog.text
+
+
+def test_check_points_in_bounds_reports_each_offender() -> None:
+    """多点校验：把每个越界点都报出来（从起点到终点）。"""
+    check = lambda x, y: (0 <= x < 10 and 0 <= y < 10, "客户区 10x10")  # noqa: E731
+    offenders, detail = input_sender.check_points_in_bounds(
+        [("点击坐标 (1, 1)", (1, 1)), ("终点 (99, 99)", (99, 99))], check
+    )
+    assert offenders == ("终点 (99, 99)",)
+    assert detail == "客户区 10x10"
+    offenders_ok, _ = input_sender.check_points_in_bounds([("起点 (1, 1)", (1, 1))], check)
+    assert offenders_ok == ()
+
+
 def test_build_channel_dry_run_validates_click_against_window(monkeypatch, caplog) -> None:
     """干跑模式下若能查到游戏窗口，就按真实客户区校验点击范围（干跑也能提前发现越界配置）。"""
     caplog.set_level(logging.INFO)
