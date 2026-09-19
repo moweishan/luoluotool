@@ -57,6 +57,12 @@ class _RecordingSender:
     def key_tap(self, vk: int) -> None:
         self.calls.append(("key_tap", vk))
 
+    def key_combo(self, combo: str) -> None:
+        self.calls.append(("key_combo", combo))
+
+    def key_hold(self, combo: str, seconds: float) -> None:
+        self.calls.append(("key_hold", combo, round(seconds, 3)))
+
 
 def test_placeholder_clicks_configured_points_in_order(caplog) -> None:
     sender = _RecordingSender()
@@ -105,3 +111,77 @@ def test_placeholder_respects_readiness_gate() -> None:
     result = PlaceholderTaskA().run(ctx)
     assert "停止" in result.message
     assert sender.calls == []
+
+
+def test_placeholder_runs_keys_after_clicks(caplog) -> None:
+    """按键序列在点击之后按顺序执行：普通组合键走 key_combo，长按走 key_hold。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(
+        sender=sender,
+        sleep=lambda _s: None,
+        params={
+            "click_points": [[5, 6]],
+            "keys": [
+                {"combo": "ctrl+s", "hold_ms": 0, "wait_after_ms": 0},
+                {"combo": "w", "hold_ms": 800, "wait_after_ms": 0},
+            ],
+            "wait_after_ms": 0,
+        },
+    )
+    result = PlaceholderTaskA().run(ctx)
+    assert result.success is True
+    assert sender.calls == [
+        ("click_at", 5, 6),
+        ("key_combo", "ctrl+s"),
+        ("key_hold", "w", 0.8),
+    ]
+    assert "步骤 1/3：点击 (5, 6)" in caplog.text
+    assert "步骤 2/3：按键 ctrl+s" in caplog.text
+    assert "步骤 3/3：长按 w 持续 800 ms" in caplog.text
+    assert "点击 1，按键 2" in result.message
+
+
+def test_placeholder_with_only_keys_does_not_warn(caplog) -> None:
+    """只配置按键（没有点击坐标）时应正常执行，不再像以前那样判为"未配置"。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(
+        sender=sender, sleep=lambda _s: None,
+        params={"click_points": [], "keys": [{"combo": "enter"}], "wait_after_ms": 0},
+    )
+    result = PlaceholderTaskA().run(ctx)
+    assert result.success is True
+    assert sender.calls == [("key_combo", "enter")]
+    assert "未配置" not in caplog.text
+
+
+def test_placeholder_without_any_steps_only_logs(caplog) -> None:
+    """点击与按键都为空时才提示未配置，且不产生任何输入。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(sender=sender, sleep=lambda _s: None, params={})
+    result = PlaceholderTaskA().run(ctx)
+    assert result.success is True
+    assert sender.calls == []
+    assert "未配置点击坐标与按键" in caplog.text
+
+
+def test_placeholder_stops_between_key_steps() -> None:
+    """按键步骤之间也要响应停止请求（不继续发送后续按键）。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(
+        sender=sender,
+        params={
+            "keys": [
+                {"combo": "a", "wait_after_ms": 500},
+                {"combo": "b", "wait_after_ms": 500},
+            ]
+        },
+    )
+
+    def fake_sleep(seconds: float) -> None:
+        ctx.stop_event.set()
+
+    ctx.sleep = fake_sleep
+    result = PlaceholderTaskA().run(ctx)
+    assert result.success is True
+    assert "停止" in result.message
+    assert sender.calls == [("key_combo", "a")]

@@ -40,6 +40,10 @@ class InputSender(Protocol):
 
     def key_tap(self, vk: int) -> None: ...
 
+    def key_combo(self, combo: str) -> None: ...
+
+    def key_hold(self, combo: str, seconds: float) -> None: ...
+
 
 class DryRunSender:
     """干跑模式：只写日志，绝不产生任何输入。"""
@@ -59,6 +63,12 @@ class DryRunSender:
     def key_tap(self, vk: int) -> None:
         self._logger.info("干跑：模拟按键 (vk=%d)", vk)
 
+    def key_combo(self, combo: str) -> None:
+        self._logger.info("干跑：模拟按键组合 %s", combo)
+
+    def key_hold(self, combo: str, seconds: float) -> None:
+        self._logger.info("干跑：模拟长按 %s 持续 %.2fs", combo, seconds)
+
 
 class RealInputSender:
     """真实键鼠输入通道（`SendInput`）：真实移动光标 + 模拟真实鼠标/键盘。
@@ -76,11 +86,14 @@ class RealInputSender:
         restore_cursor: bool = True,
         log: logging.Logger | None = None,
         sleep: Callable[[float], None] | None = None,
+        stop_event: threading.Event | None = None,
     ) -> None:
         self.hwnd = hwnd
         self.restore_cursor = restore_cursor
         self._logger = log or logger
         self._sleep = sleep if sleep is not None else time.sleep
+        # 用于长按期间响应急停（切片检查），None 表示不检查
+        self._stop_event = stop_event
 
     def move_to(self, x: int, y: int) -> None:
         """悬停不点击：真实输入通道下不做任何光标移动（避免无意义地干扰用户的鼠标）。"""
@@ -116,6 +129,43 @@ class RealInputSender:
             self._logger.info("真实按键完成：vk=%d（已确保窗口在最顶层）", vk)
         finally:
             self._release_topmost_if_needed(front)
+
+    def key_combo(self, combo: str) -> None:
+        """发送组合键（如 `ctrl+s`）：每次按键前同样会校验并确保窗口在最顶层。"""
+        front = self._ensure_front_or_raise("按键")
+        try:
+            self._validate_combo(combo)
+            if not real_input.send_key_combo(combo, self._sleep):
+                raise WindowUnavailableError(f"按键注入失败（SendInput 未被系统接受）：{combo}")
+            self._logger.info("真实按键完成：%s（已确保窗口在最顶层）", combo)
+        finally:
+            self._release_topmost_if_needed(front)
+
+    def key_hold(self, combo: str, seconds: float) -> None:
+        """长按组合键 `seconds` 秒：可被急停打断，且无论何种情况都会释放按键（不卡键）。"""
+        front = self._ensure_front_or_raise("按键")
+        try:
+            self._validate_combo(combo)
+            ok, interrupted = real_input.send_key_hold(
+                combo, seconds, self._sleep, self._stop_event
+            )
+            if not ok:
+                raise WindowUnavailableError(f"长按注入失败（SendInput 未被系统接受）：{combo}")
+            if interrupted:
+                self._logger.warning("长按 %s 被停止请求中断（已释放按键）", combo)
+            else:
+                self._logger.info(
+                    "真实长按完成：%s 持续 %.2fs（已确保窗口在最顶层）", combo, seconds
+                )
+        finally:
+            self._release_topmost_if_needed(front)
+
+    def _validate_combo(self, combo: str) -> None:
+        """提前解析按键文本，把"未知键名"变成可读错误（不进入注入流程）。"""
+        try:
+            real_input.parse_combo(combo)
+        except ValueError as exc:
+            raise WindowUnavailableError(f"按键组合无法解析：{exc}") from exc
 
     def _ensure_front_or_raise(self, action: str) -> real_input.FrontResult:
         if not is_window_ready(self.hwnd):
@@ -214,5 +264,7 @@ def build_channel(
     if not is_window_ready(hwnd):
         raise WindowUnavailableError("游戏窗口已最小化或不可见，请恢复窗口后重试")
     gate = WindowReadinessGate(hwnd, stop_event, sleep, log)
-    sender = RealInputSender(hwnd, config.automation.restore_cursor_after_click, log, sleep)
+    sender = RealInputSender(
+        hwnd, config.automation.restore_cursor_after_click, log, sleep, stop_event
+    )
     return InputChannel(sender, gate.wait_until_ready)

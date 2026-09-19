@@ -1,8 +1,9 @@
-"""config 迁移测试：schema v1 → v2 → v3 → v4 → v5。
+"""config 迁移测试：schema v1 → v2 → v3 → v4 → v5 → v6。
 
 v1 加 `ask_elevation_on_start`；v2→v3 加 `align_window_before_click`；
 v3→v4 去掉该布尔并加 `restore_cursor_after_click`；
-v4→v5 因输入实现方式固定为「真实鼠标键盘」而移除 `input_mode` 与已失效的 `pause_on_window_focus_loss`。
+v4→v5 因输入实现方式固定为「真实鼠标键盘」而移除 `input_mode` 与已失效的 `pause_on_window_focus_loss`；
+v5→v6 任务参数新增按键序列 `params.keys`。
 """
 
 from luoluotool.config.models import SCHEMA_VERSION
@@ -61,7 +62,7 @@ def test_migrate_v1_to_latest_adds_fields_and_preserves_values() -> None:
     raw = v1_raw()
     raw["automation"]["click_interval_ms"] = 1234
     migrated = migrate(raw)
-    assert migrated["schema_version"] == SCHEMA_VERSION == 5
+    assert migrated["schema_version"] == SCHEMA_VERSION == 6
     assert migrated["automation"]["ask_elevation_on_start"] is True
     assert migrated["automation"]["restore_cursor_after_click"] is True
     assert migrated["automation"]["click_interval_ms"] == 1234
@@ -103,7 +104,7 @@ def test_migrate_v3_drops_align_flag_and_adds_restore_cursor() -> None:
     raw["schema_version"] = 3
     raw["automation"]["align_window_before_click"] = True
     migrated = migrate(raw)
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     assert "align_window_before_click" not in migrated["automation"]
     assert migrated["automation"]["restore_cursor_after_click"] is True
 
@@ -111,7 +112,7 @@ def test_migrate_v3_drops_align_flag_and_adds_restore_cursor() -> None:
 def test_migrate_v4_drops_input_mode_and_focus_pause() -> None:
     """v4 → v5：输入实现方式已固定，input_mode 与失焦暂停开关都必须移除。"""
     migrated = migrate(v4_raw())
-    assert migrated["schema_version"] == 5
+    assert migrated["schema_version"] == 6
     automation = migrated["automation"]
     assert "input_mode" not in automation
     assert "pause_on_window_focus_loss" not in automation
@@ -129,6 +130,35 @@ def test_migrate_v4_also_drops_stale_align_flag() -> None:
     raw["automation"]["align_window_before_click"] = True
     migrated = migrate(raw)
     assert "align_window_before_click" not in migrated["automation"]
+
+
+def test_migrate_v5_to_v6_adds_empty_key_sequence() -> None:
+    """v5 → v6：任务参数补上 `keys: []`（默认不发送任何按键），已有 click_points 保持不变。"""
+    raw = v4_raw()
+    raw["schema_version"] = 5
+    raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"] = {
+        "click_points": [[11, 22]],
+        "wait_after_ms": 700,
+    }
+    migrated = migrate(raw)
+    assert migrated["schema_version"] == 6
+    params = migrated["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"]
+    assert params["keys"] == []
+    assert params["click_points"] == [[11, 22]]
+    assert params["wait_after_ms"] == 700
+
+
+def test_migrate_v5_to_v6_keeps_existing_keys() -> None:
+    """已经手工配好 keys 的 v5 配置不得被覆盖。"""
+    raw = v4_raw()
+    raw["schema_version"] = 5
+    raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"] = {
+        "click_points": [],
+        "keys": [{"combo": "ctrl+s", "hold_ms": 0, "wait_after_ms": 300}],
+        "wait_after_ms": 500,
+    }
+    params = migrate(raw)["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["params"]
+    assert params["keys"][0]["combo"] == "ctrl+s"
 
 
 def test_migrate_v4_keeps_other_user_values() -> None:

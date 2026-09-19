@@ -61,8 +61,12 @@ class _FakeUser32:
         return int(self.minimized)
 
     def MapVirtualKeyW(self, vk, kind):
+        """返回确定性伪扫描码（vk & 0xFF），便于测试按扫描码断言按键身份。
+
+        真实系统中扫描码由 Windows 提供，且扫描码路径下 wVk 按硬件语义填 0。
+        """
         self.calls.append(("MapVirtualKeyW", vk, kind))
-        return 0x1E  # 任意扫描码即可（测试只关心 flags）
+        return int(vk) & 0xFF
 
     def GetWindowLongPtrW(self, hwnd, index):
         self.calls.append(("GetWindowLongPtrW", hwnd, index))
@@ -297,6 +301,7 @@ class _RecordingRealInput:
         self.front_results: list[bool] = []
         self.front_ok = front_ok
         self.cursor_to_restore = (800, 600)
+        self.hold_result = (True, False)
 
         def ensure_front(hwnd, log=None, sleep=None):
             self.events.append(("ensure_front", hwnd))
@@ -312,6 +317,12 @@ class _RecordingRealInput:
                             lambda sleep=None: self.events.append(("click",)) or True)
         monkeypatch.setattr(real_input, "send_key_tap",
                             lambda vk, sleep=None: self.events.append(("key", vk)) or True)
+        monkeypatch.setattr(real_input, "send_key_combo",
+                            lambda combo, sleep=None: self.events.append(("combo", combo)) or True)
+        monkeypatch.setattr(real_input, "send_key_hold",
+                            lambda combo, seconds, sleep=None, stop_event=None, slice_seconds=0.1:
+                            self.events.append(("hold", combo, round(seconds, 3)))
+                            or self.hold_result)
         monkeypatch.setattr(real_input, "set_cursor_pos",
                             lambda x, y: self.events.append(("restore_cursor", x, y)))
         monkeypatch.setattr(real_input, "release_topmost",
@@ -453,3 +464,143 @@ def test_sendinput_is_confined_to_real_input_module() -> None:
             if token in text:
                 offenders.append(f"{path.name}:{token}")
     assert offenders == [], f"这些模块不应直接调用输入注入 API：{offenders}"
+
+
+# ------------------------------------------------------------- 组合键与长按
+
+
+def test_parse_combo_letters_digits_and_named_keys() -> None:
+    """回归：字母键名是小写（曾经表里写成大写，导致 `ctrl+s` 报"未知按键名"）。"""
+    assert real_input.parse_combo("s")[1] == 0x53
+    assert real_input.parse_combo("A")[1] == 0x41          # 大小写都接受
+    assert real_input.parse_combo("5")[1] == 0x35
+    assert real_input.parse_combo("f5")[1] == 0x74
+    assert real_input.parse_combo("enter")[1] == 0x0D
+    assert real_input.parse_combo("esc")[1] == 0x1B
+    assert real_input.parse_combo("space")[1] == 0x20
+    assert real_input.parse_combo("left")[1] == 0x25
+
+
+def test_parse_combo_splits_modifiers_and_key() -> None:
+    """组合键解析：修饰键元组按书写顺序，主键为最后一段。"""
+    modifiers, main_vk = real_input.parse_combo("ctrl+shift+s")
+    assert modifiers == (real_input.MODIFIER_KEYS["ctrl"], real_input.MODIFIER_KEYS["shift"])
+    assert main_vk == 0x53
+    # 单独的修饰键：修饰键元组为空、主键就是它自己
+    assert real_input.parse_combo("ctrl") == ((), real_input.MODIFIER_KEYS["ctrl"])
+
+
+def test_parse_combo_rejects_bad_text_with_readable_reason() -> None:
+    """非法组合键必须给出可读原因（GUI/校验据此提示用户）。"""
+    for bad, keyword in (("", "不能为空"), ("ctrl+", "空片段"), ("ctrl+ctrl+s", "重复"),
+                         ("meta+s", "未知修饰键"), ("ctrl+nosuchkey", "未知按键名")):
+        with pytest.raises(ValueError) as excinfo:
+            real_input.parse_combo(bad)
+        assert keyword in str(excinfo.value), bad
+
+
+def test_send_key_combo_presses_modifiers_then_key(user32) -> None:
+    """注入顺序：控制键按下 → 主键按下/抬起 → 控制键抬起（逆序释放）。"""
+    assert real_input.send_key_combo("ctrl+s", sleep=lambda _s: None) is True
+    events = [(event["scan"], event["flags"]) for event in user32.sent]
+    keys = [scan for scan, _flags in events]
+    ctrl_scan = real_input.MODIFIER_KEYS["ctrl"] & 0xFF
+    assert keys == [ctrl_scan, 0x53, 0x53, ctrl_scan]
+    assert not events[0][1] & real_input.KEYEVENTF_KEYUP     # ctrl 按下
+    assert events[2][1] & real_input.KEYEVENTF_KEYUP         # s 抬起
+    assert events[3][1] & real_input.KEYEVENTF_KEYUP         # ctrl 抬起
+
+
+def test_send_key_combo_uses_extended_flag_for_arrow_keys(user32) -> None:
+    """方向键等扩展键必须带 EXTENDEDKEY，否则部分游戏识别不到。"""
+    real_input.send_key_combo("left", sleep=lambda _s: None)
+    assert all(event["flags"] & real_input.KEYEVENTF_EXTENDEDKEY for event in user32.sent)
+
+
+def test_send_key_combo_releases_modifiers_even_when_key_injection_fails(user32, monkeypatch) -> None:
+    """主键发送失败时也必须在 finally 里释放已按下的修饰键（绝不卡键）。"""
+    monkeypatch.setattr(real_input, "send_key_tap", lambda vk, sleep=None: False)
+    assert real_input.send_key_combo("ctrl+s", sleep=lambda _s: None) is False
+    scans = [event["scan"] for event in user32.sent]
+    assert scans == [real_input.MODIFIER_KEYS["ctrl"] & 0xFF] * 2
+    assert user32.sent[-1]["flags"] & real_input.KEYEVENTF_KEYUP
+
+
+def test_send_key_hold_runs_full_duration_and_releases(user32) -> None:
+    """长按：按满时长后释放；返回 (成功, 是否被中断)。"""
+    slept: list[float] = []
+    ok, interrupted = real_input.send_key_hold("w", 0.25, sleep=slept.append, slice_seconds=0.1)
+    assert (ok, interrupted) == (True, False)
+    assert abs(sum(slept) - 0.25) < 1e-6
+    scans = [event["scan"] for event in user32.sent]
+    assert scans[0] == 0x57 and scans[-1] == 0x57
+    assert user32.sent[-1]["flags"] & real_input.KEYEVENTF_KEYUP
+
+
+def test_send_key_hold_aborts_on_stop_request_and_releases(user32) -> None:
+    """急停期间长按必须立刻中断并释放按键（停止请求 500ms 内生效的要求）。"""
+    class _Stop:
+        def __init__(self) -> None:
+            self.flag = False
+
+        def is_set(self) -> bool:
+            return self.flag
+
+    stop = _Stop()
+
+    def fake_sleep(seconds: float) -> None:
+        stop.flag = True   # 第一个切片后就收到停止请求
+
+    ok, interrupted = real_input.send_key_hold("w", 5.0, sleep=fake_sleep, stop_event=stop)
+    assert ok is True
+    assert interrupted is True
+    assert user32.sent[-1]["flags"] & real_input.KEYEVENTF_KEYUP
+
+
+def test_send_key_hold_releases_key_on_exception(user32) -> None:
+    """长按过程中抛异常也必须释放按键。"""
+
+    def boom(seconds: float) -> None:
+        raise RuntimeError("sleep 中断")
+
+    with pytest.raises(RuntimeError):
+        real_input.send_key_hold("w", 1.0, sleep=boom)
+    assert user32.sent[-1]["flags"] & real_input.KEYEVENTF_KEYUP
+
+
+def test_real_sender_key_combo_checks_front_each_time(recording) -> None:
+    """组合键：每次发送前都要校验/置顶窗口，成功则取消置顶。"""
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.key_combo("ctrl+s")
+    assert recording.events == [
+        ("ensure_front", 555), ("combo", "ctrl+s"), ("release_topmost", 555),
+    ]
+
+
+def test_real_sender_key_combo_rejects_unknown_name_without_injecting(recording) -> None:
+    """未知键名在注入之前就以可读错误拒绝（不产生任何输入）。"""
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    with pytest.raises(WindowUnavailableError, match="无法解析"):
+        sender.key_combo("ctrl+nosuchkey")
+    assert ("combo", "ctrl+nosuchkey") not in recording.events
+
+
+def test_real_sender_key_hold_reports_interruption(recording, caplog) -> None:
+    """长按被停止请求中断：写 WARNING 日志，并按配置取消置顶。"""
+    caplog.set_level("WARNING")
+    recording.hold_result = (True, True)
+    sender = RealInputSender(555, stop_event=None, sleep=lambda _s: None)
+    sender.key_hold("w", 3.0)
+    assert ("hold", "w", 3.0) in recording.events
+    assert ("release_topmost", 555) in recording.events
+    assert any("被停止请求中断" in record.message for record in caplog.records)
+
+
+def test_dry_run_sender_logs_keyboard_without_input(caplog) -> None:
+    """干跑模式：组合键与长按只写日志，零真实输入。"""
+    caplog.set_level("INFO")
+    sender = input_sender.DryRunSender()
+    sender.key_combo("ctrl+s")
+    sender.key_hold("w", 0.8)
+    assert "干跑：模拟按键组合 ctrl+s" in caplog.text
+    assert "干跑：模拟长按 w 持续 0.80s" in caplog.text

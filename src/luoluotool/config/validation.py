@@ -3,8 +3,11 @@
 import logging
 
 from luoluotool.config.models import SCHEMA_VERSION
+from luoluotool.utils.keys import parse_combo
 
 logger = logging.getLogger(__name__)
+
+MAX_KEY_STEPS = 20
 
 _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _SECTIONS = (
@@ -83,6 +86,34 @@ def _is_point(value: object) -> bool:
     )
 
 
+def _validate_key_steps(prefix: str, steps: object, errors: list[str]) -> None:
+    """校验按键步骤列表：`[{"combo": "ctrl+s", "hold_ms": 0, "wait_after_ms": 500}, ...]`。"""
+    if not isinstance(steps, list):
+        errors.append(f"{prefix}.keys 必须是数组")
+        return
+    if len(steps) > MAX_KEY_STEPS:
+        errors.append(f"{prefix}.keys 最多 {MAX_KEY_STEPS} 步")
+    for index, step in enumerate(steps):
+        item_prefix = f"{prefix}.keys[{index}]"
+        if not isinstance(step, dict):
+            errors.append(f"{item_prefix} 必须是对象")
+            continue
+        combo = step.get("combo")
+        if not isinstance(combo, str) or not combo.strip() or len(combo) > 60:
+            errors.append(f"{item_prefix}.combo 必须是非空字符串（最长 60）")
+        else:
+            try:
+                parse_combo(combo)
+            except ValueError as exc:
+                errors.append(f"{item_prefix}.combo 非法：{exc}")
+        hold = step.get("hold_ms", 0)
+        if isinstance(hold, bool) or not isinstance(hold, int) or not (0 <= hold <= 60000):
+            errors.append(f"{item_prefix}.hold_ms 必须是 0–60000 之间的整数")
+        wait = step.get("wait_after_ms", 500)
+        if isinstance(wait, bool) or not isinstance(wait, int) or not (0 <= wait <= 60000):
+            errors.append(f"{item_prefix}.wait_after_ms 必须是 0–60000 之间的整数")
+
+
 def _validate_task_params(task_id: str, params: object, errors: list[str]) -> None:
     """校验任务私有参数结构（缺省键合法，回落默认值）。"""
     prefix = f"features.daily_tasks.tasks.{task_id}.params"
@@ -92,6 +123,7 @@ def _validate_task_params(task_id: str, params: object, errors: list[str]) -> No
     points = params.get("click_points", [])
     if not isinstance(points, list) or not all(_is_point(point) for point in points):
         errors.append(f"{prefix}.click_points 必须是 [[x, y], ...] 形式的非负整数坐标数组")
+    _validate_key_steps(prefix, params.get("keys", []), errors)
     wait = params.get("wait_after_ms", 500)
     if isinstance(wait, bool) or not isinstance(wait, int) or not (0 <= wait <= 60000):
         errors.append(f"{prefix}.wait_after_ms 必须是 0–60000 之间的整数")
@@ -160,7 +192,34 @@ def _migrate_v4_to_v5(raw: dict) -> dict:
     return migrated
 
 
-_MIGRATIONS = {1: _migrate_v1_to_v2, 2: _migrate_v2_to_v3, 3: _migrate_v3_to_v4, 4: _migrate_v4_to_v5}
+def _migrate_v5_to_v6(raw: dict) -> dict:
+    """v5 → v6：任务参数新增按键序列 `params.keys`（默认空数组 = 不发送任何按键）。"""
+    migrated = dict(raw)
+    features = dict(migrated.get("features") or {})
+    daily = dict(features.get("daily_tasks") or {})
+    tasks = {}
+    for task_id, task in (daily.get("tasks") or {}).items():
+        if isinstance(task, dict):
+            item = dict(task)
+            params = dict(item.get("params") or {})
+            params.setdefault("keys", [])
+            item["params"] = params
+            tasks[task_id] = item
+        else:
+            tasks[task_id] = task
+    daily["tasks"] = tasks
+    features["daily_tasks"] = daily
+    migrated["features"] = features
+    return migrated
+
+
+_MIGRATIONS = {
+    1: _migrate_v1_to_v2,
+    2: _migrate_v2_to_v3,
+    3: _migrate_v3_to_v4,
+    4: _migrate_v4_to_v5,
+    5: _migrate_v5_to_v6,
+}
 
 
 def migrate(raw: object) -> object:

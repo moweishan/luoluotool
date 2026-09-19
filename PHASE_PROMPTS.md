@@ -359,6 +359,52 @@ UI 只做展示与绑定，禁止在 gui/ 里写任务逻辑或文件逻辑（�
 
 ---
 
+## Phase 5.4 — 键盘输入功能（组合键 + 长按）
+
+**背景**：Phase 5.3 的真实键鼠通道已具备单键 `key_tap`，但游戏操作大量依赖按键（快捷键、方向键、长按移动），
+需要把它扩展成**可配置的按键序列**，并遵守同一套安全规则。
+
+**本次只做什么**：
+1. `utils/keys.py`（新，叶子层）：`KEY_NAME_TO_VK`（a-z、0-9、f1-f24、enter/esc/tab/space/backspace/方向键/小键盘等）、
+   `MODIFIER_KEYS`（ctrl/alt/shift/win）、`EXTENDED_VKS`、`parse_combo("ctrl+shift+a") -> (修饰键元组, 主键 vk)`；
+   非法输入抛**可读** `ValueError`（空文本/空片段/重复修饰键/未知键名）。
+2. `automation/real_input.py`：`send_key_down/up`、`send_key_combo`（按下修饰键 → 敲主键 → **逆序**释放修饰键，
+   失败也在 `finally` 释放）、`send_key_hold(combo, seconds, sleep, stop_event)`（按 100ms 切片推进，
+   可被急停打断；任何退出路径都释放按键）；扩展键自动带 `KEYEVENTF_EXTENDEDKEY`；扫描码路径 `wVk=0`（与真实硬件一致）。
+3. `automation/input_sender.py`：协议新增 `key_combo` / `key_hold`；`RealInputSender` 每次按键前
+   **同样校验并置顶窗口**，未知键名在注入前以可读错误拒绝；长按被急停中断时写 WARNING；`build_channel` 把
+   `stop_event` 传给 sender；`DryRunSender` 只写日志（零输入）。
+4. `config/models.py`：`KeyStepParams{combo, hold_ms, wait_after_ms}` + `parse_keys_text` / `format_keys_text`
+   （文本语法 `ctrl+s, w*800, enter`；解析时即校验键名）；`PlaceholderTaskParams.keys`。
+5. `config/validation.py`：`keys` 结构校验（数组、≤20 步、`combo` 非空且可解析、`hold_ms`/`wait_after_ms` 0–60000）
+   → **schema v6 + `_migrate_v5_to_v6`**（`params.keys` 默认 `[]`）；`config.example.json` 同步。
+6. `core/registry.py`：占位任务 A 现在按「先点击、后按键」执行，日志区分「点击/按键/长按」，
+   步骤间响应停止请求；只有点击与按键都为空时才提示未配置。
+7. `gui/pages/daily.py`：新增「按键序列」输入框（示例与 tooltip 说明语法），非法输入**回退显示**不写坏配置。
+8. 测试：组合键解析（含字母键名小写回归）/修饰键重复/未知键名、注入顺序与逆序释放、失败也释放修饰键、
+   扩展键标志、长按满时长/急停打断/异常释放、sender 层每次按键前校验与未知键名拒绝、
+   任务编排顺序与停止、schema v5→v6 迁移与 keys 校验、GUI 绑定与非法输入回退；全部注入假实现（零真实输入）。
+
+**不要做什么**：不发送鼠标以外的其他设备输入；不实现"按住不放直到程序退出"这类无法保证释放的模式；不绕过每次输入前的置顶校验；不修改 Phase 5.3 的鼠标行为。
+
+**验收命令**：
+```bash
+.venv\Scripts\python -m pytest -q
+.venv\Scripts\python -m pytest tests/test_automation -q --cov=src/luoluotool/automation --cov-report=term-missing
+.venv\Scripts\python -m luoluotool --validate-config
+.venv\Scripts\python -m luoluotool --smoke-gui
+```
+
+**完成标准**：
+- [ ] 全量测试通过；`real_input.py` 覆盖率 ≥ 80%。
+- [ ] `config.json` 自动迁移到 v6（`params.keys` 补齐）；`--validate-config` 输出 `OK`。
+- [ ] 日常任务页可编辑按键序列；非法输入即提示并回退，配置不被写坏。
+- [ ] **手动验收**：配置 `{"keys": [{"combo": "ctrl+s"}, {"combo": "w", "hold_ms": 800}]}` → 真实模式启动 →
+      游戏收到对应按键；长按期间按急停键，按键**立即释放**且日志出现「被停止请求中断」。
+- [ ] 干跑模式下按键只写日志、零真实输入。
+
+---
+
 ## Phase 6 — 卡订单与预留功能页闭环
 
 **阶段目标**：功能二/三/四在主流程中形成完整闭环（开关→运行→日志），无推测性逻辑。

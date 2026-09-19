@@ -1,12 +1,14 @@
+import pytest
+
 """config.models 测试：默认值、序列化往返、schema 键完整性。"""
 
 from luoluotool.config import models
 
 
 def test_defaults_are_safe() -> None:
-    """出厂默认：开关全关，dry_run 开启，schema_version=5。"""
+    """出厂默认：开关全关，dry_run 开启，schema_version=6。"""
     config = models.AppConfig.default()
-    assert config.schema_version == models.SCHEMA_VERSION == 5
+    assert config.schema_version == models.SCHEMA_VERSION == 6
     assert config.automation.dry_run is True
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.loop.enabled is False
@@ -33,20 +35,23 @@ def test_default_contains_placeholder_task_a() -> None:
     task = config.features.daily_tasks.tasks["placeholder_task_a"]
     assert task.enabled is False
     assert task.order == 1
-    assert task.params == {"click_points": [], "wait_after_ms": 500}
+    assert task.params == {"click_points": [], "keys": [], "wait_after_ms": 500}
 
 
 def test_placeholder_params_defaults_and_roundtrip() -> None:
     """params 结构：缺失键回落默认值，往返一致。"""
     assert models.PlaceholderTaskParams.from_dict({}).to_dict() == {
         "click_points": [],
+        "keys": [],
         "wait_after_ms": 500,
     }
     params = models.PlaceholderTaskParams.from_dict(
         {"click_points": [[10, 20], [30, 40]], "wait_after_ms": 800}
     )
     assert params.click_points == [[10, 20], [30, 40]]
-    assert params.to_dict() == {"click_points": [[10, 20], [30, 40]], "wait_after_ms": 800}
+    assert params.to_dict() == {
+        "click_points": [[10, 20], [30, 40]], "keys": [], "wait_after_ms": 800
+    }
     assert models.PlaceholderTaskParams.from_dict(None).wait_after_ms == 500
 
 
@@ -95,3 +100,35 @@ def test_to_dict_keys_match_schema_v1() -> None:
     assert set(data["logging"]) == {"level", "max_file_mb", "backup_count"}
     task = data["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]
     assert set(task) == {"enabled", "order", "params"}
+
+
+def test_key_step_text_roundtrip() -> None:
+    """按键步骤文本语法：`ctrl+s`、`w*800`，解析与格式化互逆。"""
+    steps = models.parse_keys_text("ctrl+s, w*800, enter")
+    assert [(step.combo, step.hold_ms) for step in steps] == [
+        ("ctrl+s", 0), ("w", 800), ("enter", 0)
+    ]
+    assert models.format_keys_text(steps) == "ctrl+s, w*800, enter"
+    # 中英文逗号与换行都当分隔符；空片段忽略
+    assert len(models.parse_keys_text("a，b\nc, , ")) == 3
+
+
+def test_key_step_text_rejects_bad_input() -> None:
+    """非法文本必须抛可读错误（未知键名/格式错/长按超限）；空文本表示"清空序列"。"""
+    assert models.parse_keys_text("") == []      # 清空输入框 = 不发送任何按键
+    assert models.parse_keys_text("   ") == []
+    for bad in ("ctrl+", "*800", "w*abc", "*", "ctrl+nosuchkey", "w*60001"):
+        with pytest.raises(ValueError):
+            models.parse_keys_text(bad)
+
+
+def test_placeholder_params_roundtrip_with_keys() -> None:
+    """params 含 keys 时 to_dict → from_dict 必须一致。"""
+    params = models.PlaceholderTaskParams(
+        click_points=[[1, 2]],
+        keys=[models.KeyStepParams("ctrl+s", 0, 300), models.KeyStepParams("w", 800, 200)],
+        wait_after_ms=600,
+    )
+    restored = models.PlaceholderTaskParams.from_dict(params.to_dict())
+    assert restored.to_dict() == params.to_dict()
+    assert restored.keys[1].hold_ms == 800

@@ -29,8 +29,9 @@ def registered_ids() -> list[str]:
 
 @register
 class PlaceholderTaskA(BaseTask):
-    """占位任务 A：按 params.click_points 依次点击。
+    """占位任务 A：按 params.click_points 依次点击，再按 params.keys 依次发送按键。
 
+    按键步骤支持组合键（`ctrl+s`）与长按（`{"combo": "w", "hold_ms": 800}`）。
     真实/干跑由输入层决定：干跑模式只写日志，绝不产生真实输入。
     """
 
@@ -38,18 +39,39 @@ class PlaceholderTaskA(BaseTask):
 
     def run(self, ctx: TaskContext) -> TaskResult:
         params = PlaceholderTaskParams.from_dict(ctx.params)
-        total = len(params.click_points)
+        click_total = len(params.click_points)
+        key_total = len(params.keys)
+        total = click_total + key_total
         if total == 0:
             ctx.logger.warning(
-                "占位任务 A 未配置点击坐标（params.click_points 为空），本轮无操作；"
-                '示例："params": {"click_points": [[100, 100]], "wait_after_ms": 500}'
+                "占位任务 A 未配置点击坐标与按键（params.click_points 与 params.keys 均为空），"
+                "本轮无操作；示例："
+                '"params": {"click_points": [[100, 100]], "keys": [{"combo": "ctrl+s"}], '
+                '"wait_after_ms": 500}'
             )
-            return TaskResult(self.task_id, True, "未配置点击坐标，跳过")
-        for index, point in enumerate(params.click_points, start=1):
+            return TaskResult(self.task_id, True, "未配置点击坐标与按键，跳过")
+        step = 0
+        for point in params.click_points:
             if not ctx.wait_until_ready():
-                return TaskResult(self.task_id, True, f"第 {index} 步前收到停止请求")
+                return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
+            step += 1
             x, y = int(point[0]), int(point[1])
-            ctx.logger.info("步骤 %d/%d：点击 (%d, %d)", index, total, x, y)
+            ctx.logger.info("步骤 %d/%d：点击 (%d, %d)", step, total, x, y)
             ctx.sender.click_at(x, y)
             ctx.interruptible_sleep(params.wait_after_ms / 1000)
-        return TaskResult(self.task_id, True, f"完成 {total} 步点击")
+        for item in params.keys:
+            if not ctx.wait_until_ready():
+                return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
+            step += 1
+            if item.hold_ms > 0:
+                ctx.logger.info(
+                    "步骤 %d/%d：长按 %s 持续 %d ms", step, total, item.combo, item.hold_ms
+                )
+                ctx.sender.key_hold(item.combo, item.hold_ms / 1000)
+            else:
+                ctx.logger.info("步骤 %d/%d：按键 %s", step, total, item.combo)
+                ctx.sender.key_combo(item.combo)
+            ctx.interruptible_sleep(item.wait_after_ms / 1000)
+        return TaskResult(
+            self.task_id, True, f"完成 {total} 步（点击 {click_total}，按键 {key_total}）"
+        )

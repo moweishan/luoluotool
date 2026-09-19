@@ -1,10 +1,12 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v5（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v6（dataclass 实现）。"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-SCHEMA_VERSION = 5
+from luoluotool.utils.keys import parse_combo
+
+SCHEMA_VERSION = 6
 
 
 @dataclass
@@ -39,15 +41,79 @@ class LoopConfig:
 
 
 @dataclass
+class KeyStepParams:
+    """一个按键步骤：组合键文本 + 可选长按毫秒 + 步骤后等待毫秒。
+
+    文本语法（GUI 单行输入也用它；解析/格式化为纯函数，见 `parse_keys_text`）：
+    `ctrl+s`（组合键）、`w*800`（长按 800ms）、`enter`（普通按键）。
+    """
+
+    combo: str = ""
+    hold_ms: int = 0
+    wait_after_ms: int = 500
+
+    def to_dict(self) -> dict:
+        return {"combo": self.combo, "hold_ms": self.hold_ms, "wait_after_ms": self.wait_after_ms}
+
+    @classmethod
+    def from_dict(cls, data: dict | None) -> KeyStepParams:
+        raw = data or {}
+        return cls(
+            str(raw.get("combo", "")),
+            int(raw.get("hold_ms", 0) or 0),
+            int(raw.get("wait_after_ms", 500)),
+        )
+
+    def to_text(self) -> str:
+        """还原为单行文本（长按为 0 时省略 `*ms`）。"""
+        return f"{self.combo}*{self.hold_ms}" if self.hold_ms else self.combo
+
+    @classmethod
+    def from_text(cls, text: str, wait_after_ms: int = 500) -> KeyStepParams:
+        """解析单个步骤文本：`ctrl+s` 或 `w*800`；键名非法时抛可读 `ValueError`。"""
+        raw = (text or "").strip()
+        if not raw:
+            raise ValueError("按键步骤不能为空")
+        if "*" in raw:
+            combo, _, hold = raw.rpartition("*")
+            hold = hold.strip()
+            if not combo.strip() or not hold.isdigit():
+                raise ValueError(f"按键步骤格式非法（应为 按键 或 按键*长按毫秒）：{text!r}")
+            step = cls(combo.strip(), int(hold), wait_after_ms)
+        else:
+            step = cls(raw, 0, wait_after_ms)
+        parse_combo(step.combo)   # 校验键名/修饰键（未知键名在这里就报错）
+        if step.hold_ms > 60000:
+            raise ValueError(f"长按时间过长（0–60000 毫秒）：{text!r}")
+        return step
+
+
+def parse_keys_text(text: str, wait_after_ms: int = 500) -> list[KeyStepParams]:
+    """把 `"ctrl+s, w*800, enter"` 解析为按键步骤列表（分隔符支持中英文逗号与换行）。"""
+    steps: list[KeyStepParams] = []
+    for chunk in (text or "").replace("，", ",").replace("\n", ",").split(","):
+        if chunk.strip():
+            steps.append(KeyStepParams.from_text(chunk, wait_after_ms))
+    return steps
+
+
+def format_keys_text(steps: list[KeyStepParams]) -> str:
+    """把按键步骤列表格式化回单行文本（与 `parse_keys_text` 互逆）。"""
+    return ", ".join(step.to_text() for step in steps)
+
+
+@dataclass
 class PlaceholderTaskParams:
     """placeholder_task_a 的私有参数（params 内容，缺省键回落默认值）。"""
 
     click_points: list[list[int]] = field(default_factory=list)
+    keys: list[KeyStepParams] = field(default_factory=list)
     wait_after_ms: int = 500
 
     def to_dict(self) -> dict:
         return {
             "click_points": [list(point) for point in self.click_points],
+            "keys": [step.to_dict() for step in self.keys],
             "wait_after_ms": self.wait_after_ms,
         }
 
@@ -55,7 +121,8 @@ class PlaceholderTaskParams:
     def from_dict(cls, data: dict | None) -> PlaceholderTaskParams:
         raw = data or {}
         points = [list(point) for point in (raw.get("click_points") or [])]
-        return cls(points, raw.get("wait_after_ms", 500))
+        keys = [KeyStepParams.from_dict(item) for item in (raw.get("keys") or [])]
+        return cls(points, keys, raw.get("wait_after_ms", 500))
 
 
 @dataclass

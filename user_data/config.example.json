@@ -1,5 +1,5 @@
 {
-  "schema_version": 5,
+  "schema_version": 6,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -9,6 +9,7 @@
           "order": 1,
           "params": {
             "click_points": [],
+            "keys": [],
             "wait_after_ms": 500
           }
         }

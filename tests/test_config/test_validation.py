@@ -29,11 +29,11 @@ def test_root_must_be_dict() -> None:
 
 def test_schema_version_checks() -> None:
     raw = _default_raw()
-    raw["schema_version"] = 6
+    raw["schema_version"] = 7
     assert any("schema_version" in e for e in validate(raw))
     raw["schema_version"] = 0
     assert any("schema_version" in e for e in validate(raw))
-    raw["schema_version"] = "5"
+    raw["schema_version"] = "6"
     assert any("schema_version" in e for e in validate(raw))
     del raw["schema_version"]
     assert any("schema_version" in e for e in validate(raw))
@@ -146,3 +146,28 @@ def test_task_params_structure_validation() -> None:
         tasks["placeholder_task_a"]["params"] = {"wait_after_ms": bad_wait}
         errors = validate(raw)
         assert any("wait_after_ms" in e for e in errors), bad_wait
+
+
+def test_task_keys_validation() -> None:
+    """keys 结构校验：合法通过；非法结构/越界/超量都要报错。"""
+    raw = _default_raw()
+    tasks = raw["features"]["daily_tasks"]["tasks"]
+    tasks["placeholder_task_a"]["params"] = {
+        "click_points": [],
+        "keys": [{"combo": "ctrl+s", "hold_ms": 0, "wait_after_ms": 300}],
+    }
+    assert validate(raw) == []
+
+    for bad_keys in (
+        "ctrl+s",                                             # 不是数组
+        [{"combo": ""}],                                      # 空组合键
+        [{"combo": "a" * 61}],                                # 超长
+        [{"combo": "a", "hold_ms": -1}],                      # 越界
+        [{"combo": "a", "hold_ms": True}],                    # 布尔
+        [{"combo": "a", "wait_after_ms": 60001}],             # 越界
+        [{"combo": "a"}] * 21,                                # 超量
+        ["ctrl+s"],                                           # 元素不是对象
+    ):
+        tasks["placeholder_task_a"]["params"] = {"keys": bad_keys}
+        errors = validate(raw)
+        assert any("keys" in error for error in errors), bad_keys

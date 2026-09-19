@@ -125,3 +125,32 @@ def test_settings_page_binds_restore_cursor_switch() -> None:
     page.set_config(config2)
     assert page.restore_cursor_box.isChecked() is False
     page.close()
+
+
+def test_daily_page_binds_keys_text() -> None:
+    """日常任务页「按键序列」输入框：文本 ↔ params.keys 双向绑定，非法输入回退不写坏配置。"""
+    from luoluotool.gui.pages.daily import DailyPage
+
+    config = AppConfig.default()
+    page = DailyPage(config, lambda: None)
+    assert page.keys_edit.text() == ""  # 默认空
+
+    page.keys_edit.setText("ctrl+s, w*800")
+    page.keys_edit.editingFinished.emit()
+    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["keys"]
+    assert [(item["combo"], item["hold_ms"]) for item in stored] == [("ctrl+s", 0), ("w", 800)]
+
+    # 非法文本：回退显示已保存的内容，配置不被破坏
+    page.keys_edit.setText("ctrl+")
+    page.keys_edit.editingFinished.emit()
+    assert page.keys_edit.text() == "ctrl+s, w*800"
+    assert len(config.features.daily_tasks.tasks["placeholder_task_a"].params["keys"]) == 2
+
+    # set_config 会按配置刷新显示
+    config2 = AppConfig.default()
+    config2.features.daily_tasks.tasks["placeholder_task_a"].params = {
+        "click_points": [], "keys": [{"combo": "enter"}], "wait_after_ms": 500,
+    }
+    page.set_config(config2)
+    assert page.keys_edit.text() == "enter"
+    page.close()

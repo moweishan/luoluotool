@@ -26,7 +26,7 @@
 - 时间间隔类配置必须有上下限校验（例如 `click_interval_ms` 限 100–5000）。
 - GUI：长任务一律放工作线程（QThread），禁止在主线程 sleep 或忙等；按钮防重复点击（启动后禁用启动钮）。
 - 每次真实输入注入前检查 stop 事件；停止请求发出后 500ms 内必须停止动作序列。
-- 输入注入实现方式（**只有一种**：真实鼠标键盘 `SendInput`；窗口消息/合成指针/对齐窗口三种实现已按用户要求删除）：`automation/real_input.py`（Phase 5.3）必须：**每次点击/按键前**校验游戏窗口是否在最顶层，不在则先 `HWND_TOPMOST` 置顶再 `SetForegroundWindow` 置前（失败用 `AttachThreadInput` 兜底）并回读复核；无法确保窗口在最前时**绝不输入**（抛可读错误）；最小化先 `SW_RESTORE`；输入结束取消本次由我们设置的置顶；点击后按 `restore_cursor_after_click` 还原真实光标；`SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`；
+- 输入注入实现方式（**只有一种**：真实鼠标键盘 `SendInput`；窗口消息/合成指针/对齐窗口三种实现已按用户要求删除）：`automation/real_input.py`（Phase 5.3）必须：**每次点击/按键前**校验游戏窗口是否在最顶层，不在则先 `HWND_TOPMOST` 置顶再 `SetForegroundWindow` 置前（失败用 `AttachThreadInput` 兜底）并回读复核；无法确保窗口在最前时**绝不输入**（抛可读错误）；最小化先 `SW_RESTORE`；输入结束取消本次由我们设置的置顶；点击后按 `restore_cursor_after_click` 还原真实光标；键盘支持单键/组合键（`key_combo("ctrl+s")`）/长按（`key_hold`），**长按必须切片检查急停并在任何退出路径释放按键（绝不卡键）**，组合键必须逆序释放修饰键；键名表与解析放 `utils/keys.py`（config 与 GUI 复用，配置校验与 GUI 会即时拒绝未知键名）；`SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`；
 - 文件长度控制：单个文件超过 400 行必须先考虑拆分；超过 600 行必须拆分（模板生成的 UI 文件除外）。
 
 ## 3. 禁止事项（红线）

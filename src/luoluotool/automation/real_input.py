@@ -20,6 +20,13 @@ from dataclasses import dataclass
 import win32con
 import win32gui
 
+from luoluotool.utils.keys import (  # 键名表与组合键解析（config 层共用）
+    EXTENDED_VKS,
+    KEY_NAME_TO_VK,
+    MODIFIER_KEYS,
+    parse_combo,
+)
+
 logger = logging.getLogger(__name__)
 
 # ctypes 入口集中在这里（测试会整体替换为假实现，保证单测零真实输入）
@@ -50,6 +57,10 @@ CLICK_HOLD_SECONDS = 0.04
 INPUT_SETTLE_SECONDS = 0.05
 FRONT_SETTLE_SECONDS = 0.05
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
+
+# ---- 键盘：时序常量（键名表与组合键解析在 utils/keys.py，config 层也要用） ----
+KEY_COMBO_GAP_SECONDS = 0.02
+KEY_HOLD_SLICE_SECONDS = 0.1
 
 
 class MOUSEINPUT(ctypes.Structure):
@@ -285,24 +296,104 @@ def send_left_click(sleep: Callable[[float], None] = time.sleep) -> bool:
     return ok
 
 
+def _key_input(vk: int, up: bool, scan: int | None = None) -> INPUT:
+    """构造一条键盘事件（优先用扫描码；扩展键带上 EXTENDEDKEY 标志）。"""
+    if scan is None:
+        try:
+            scan = int(user32.MapVirtualKeyW(int(vk), 0))
+        except Exception as exc:
+            logger.warning("MapVirtualKeyW 失败（vk=%d），回退为虚拟键码：%s", vk, exc)
+            scan = 0
+    flags = 0
+    if scan:
+        flags |= KEYEVENTF_SCANCODE
+    else:
+        scan = 0
+    if int(vk) in EXTENDED_VKS:
+        flags |= KEYEVENTF_EXTENDEDKEY
+    if up:
+        flags |= KEYEVENTF_KEYUP
+    item = INPUT()
+    item.type = INPUT_KEYBOARD
+    # 有扫描码时 wVk 传 0（与真实硬件一致）；没有扫描码时回退用虚拟键码
+    item.u.ki = KEYBDINPUT(0 if scan else int(vk), scan, flags, 0, None)
+    return item
+
+
+def send_key_down(vk: int) -> bool:
+    """按下单个键（不抬起）。"""
+    return _send([_key_input(int(vk), up=False)])
+
+
+def send_key_up(vk: int) -> bool:
+    """抬起单个键（用于长按结束/异常兜底，避免卡键）。"""
+    return _send([_key_input(int(vk), up=True)])
+
+
 def send_key_tap(vk: int, sleep: Callable[[float], None] = time.sleep) -> bool:
     """真实按键：用扫描码按下 → 抬起（更接近真实硬件，兼容读 GetKeyState 的游戏）。"""
-    try:
-        scan = int(user32.MapVirtualKeyW(int(vk), 0))
-    except Exception as exc:
-        logger.warning("MapVirtualKeyW 失败（vk=%d），回退为虚拟键码：%s", vk, exc)
-        scan = 0
-    if scan:
-        down_flags, up_flags = KEYEVENTF_SCANCODE, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-    else:
-        down_flags, up_flags = 0, KEYEVENTF_KEYUP
-    down, up = INPUT(), INPUT()
-    down.type = INPUT_KEYBOARD
-    down.u.ki = KEYBDINPUT(0, scan, down_flags, 0, None)
-    up.type = INPUT_KEYBOARD
-    up.u.ki = KEYBDINPUT(0, scan, up_flags, 0, None)
-    ok = _send([down])
+    ok = send_key_down(int(vk))
     sleep(CLICK_HOLD_SECONDS)
     # 无论按下是否成功都要抬起，避免出现"卡键"
-    ok = _send([up]) and ok
+    return send_key_up(int(vk)) and ok
+
+
+
+
+def send_key_combo(combo: str, sleep: Callable[[float], None] = time.sleep) -> bool:
+    """发送组合键：按顺序按下修饰键 → 敲主键 → 逆序释放修饰键。"""
+    modifiers, main_vk = parse_combo(combo)
+    return _send_combo(modifiers, main_vk, sleep)
+
+
+def _send_combo(modifiers: tuple[int, ...], main_vk: int, sleep: Callable[[float], None]) -> bool:
+    """按下修饰键与主键、敲击主键、再逆序释放修饰键（异常/失败也保证释放）。"""
+    pressed: list[int] = []
+    ok = True
+    try:
+        for vk in modifiers:
+            ok = send_key_down(vk) and ok
+            pressed.append(vk)
+            sleep(KEY_COMBO_GAP_SECONDS)
+        ok = send_key_tap(main_vk, sleep) and ok
+    finally:
+        for vk in reversed(pressed):
+            send_key_up(vk)   # 兜底释放，避免修饰键卡住
     return ok
+
+
+def send_key_hold(
+    combo: str,
+    hold_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+    stop_event: "object | None" = None,
+    slice_seconds: float = KEY_HOLD_SLICE_SECONDS,
+) -> tuple[bool, bool]:
+    """长按组合键 `hold_seconds` 秒，返回 (是否成功, 是否被停止请求中断)。
+
+    长按按 `slice_seconds` 切片推进，期间可被停止请求（`stop_event`）打断；
+    无论正常结束、异常还是被中断，都会在 `finally` 里释放按键（绝不卡键）。
+    """
+    modifiers, main_vk = parse_combo(combo)
+    pressed: list[int] = []
+    ok = True
+    interrupted = False
+    try:
+        for vk in modifiers:
+            ok = send_key_down(vk) and ok
+            pressed.append(vk)
+            sleep(KEY_COMBO_GAP_SECONDS)
+        ok = send_key_down(main_vk) and ok
+        remaining = max(float(hold_seconds), 0.0)
+        while remaining > 0:
+            if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
+                interrupted = True
+                break
+            step = min(slice_seconds, remaining)
+            sleep(step)
+            remaining -= step
+    finally:
+        send_key_up(main_vk)
+        for vk in reversed(pressed):
+            send_key_up(vk)
+    return ok, interrupted
