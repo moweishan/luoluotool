@@ -375,9 +375,65 @@ def test_locate_scaled_respects_scale_range() -> None:
     ) is not None
 
 
-def test_default_scale_range_covers_four_times_zoom() -> None:
-    """默认缩放范围必须覆盖 4 倍放大（用户要求 0.4x–4.0x）。"""
-    assert vision.DEFAULT_SCALE_RANGE == (0.40, 4.00)
+def test_default_scale_range_is_fast_then_extended() -> None:
+    """默认范围 0.3x–4.0x，且必须**分两档**搜：先 0.3x–2.0x 快搜，找不到才扩到 0.3x–4.0x。"""
+    assert vision.DEFAULT_SCALE_RANGE == (0.30, 4.00)
+    assert vision.SCALE_FAST_MAX == 2.00
+    assert vision._scale_tiers(vision.DEFAULT_SCALE_RANGE) == [(0.30, 2.00), (0.30, 4.00)]
+    assert vision._scale_tiers((0.8, 1.2)) == [(0.8, 1.2)]        # 范围本来就窄：只有一档
+    assert vision._scale_tiers((2.5, 3.0)) == [(2.5, 3.0)]        # 整段都在快搜上界之上：也一档
+    assert vision._scale_tiers((1.0, 2.5)) == [(1.0, 2.00), (1.0, 2.5)]
+
+
+def _record_scales(monkeypatch, original: np.ndarray) -> list[float]:
+    """记录多尺度搜索实际评估过的缩放比例（由候选模板宽度反推）。"""
+    real_score = vision._best_score
+    seen: list[float] = []
+
+    def recording(source: np.ndarray, template: np.ndarray) -> float:
+        seen.append(round(template.shape[1] / original.shape[1], 3))
+        return real_score(source, template)
+
+    monkeypatch.setattr(vision, "_best_score", recording)
+    return seen
+
+
+def test_locate_scaled_fast_pass_does_not_touch_extended_range(monkeypatch) -> None:
+    """第一档（快搜）：目标在 0.3x–2.0x 内时，绝不评估 2.0x 以上的档位。"""
+    canvas = _haystack(600, 800)
+    pattern = _scaled(_rich_pattern(), 1.6)
+    _paste(canvas, pattern, 300, 180)
+
+    evaluated = _record_scales(monkeypatch, _rich_pattern())
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 1.6) <= 0.03
+    assert max(evaluated) <= vision.SCALE_FAST_MAX + 0.07
+
+
+def test_locate_scaled_extended_pass_runs_when_fast_pass_misses(monkeypatch) -> None:
+    """第二档（扩展）：快搜找不到时，必须把范围扩到 4.0x 继续搜。"""
+    canvas = _haystack(600, 800)
+    pattern = _scaled(_rich_pattern(), 3.5)
+    _paste(canvas, pattern, 400, 250)
+
+    evaluated = _record_scales(monkeypatch, _rich_pattern())
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 3.5) <= 0.03
+    assert max(evaluated) > vision.SCALE_FAST_MAX            # 证明第二档真的跑了
+
+
+def test_locate_scaled_finds_three_tenths_scale() -> None:
+    """下界放宽到 0.3x：画面被缩小到 0.3 倍也要能识别。"""
+    canvas = _haystack(600, 800)
+    pattern = _scaled(_rich_pattern(), 0.30)
+    _paste(canvas, pattern, 300, 180)
+
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 0.30) <= 0.03
+    assert abs(match.left - 300) <= 3 and abs(match.top - 180) <= 3
 
 
 def test_locate_scaled_finds_two_and_a_half_times_zoom() -> None:

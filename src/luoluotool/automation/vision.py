@@ -26,7 +26,8 @@ PW_RENDERFULLCONTENT = 2
 PW_CLIENTONLY = 1
 
 # 多尺度（缩放）匹配：游戏画面放大/缩小时模板的像素尺寸会变，必须按比例搜索
-DEFAULT_SCALE_RANGE = (0.40, 4.00)
+DEFAULT_SCALE_RANGE = (0.30, 4.00)   # 完整搜索范围（第二档会用到上界 4.0x）
+SCALE_FAST_MAX = 2.00                # 第一档（快搜）上界：先只搜到这里，档位少、命中率高
 DEFAULT_SCALE_STEP = 0.10        # 粗搜步长
 SCALE_REFINE_STEP = 0.02         # 在最佳比例附近精修的步长
 SCALE_REFINE_SPAN = 0.06
@@ -232,36 +233,38 @@ def _is_substantial(resized: np.ndarray, original: np.ndarray) -> bool:
     return original_area <= 0 or resized_area >= original_area * SCALE_STRONG_AREA_RATIO
 
 
-def locate_all_scaled(
-    haystack: np.ndarray,
-    template: np.ndarray,
-    threshold: float = DEFAULT_THRESHOLD,
-    max_results: int = DEFAULT_MAX_RESULTS,
-    grayscale: bool = True,
-    scale_range: tuple[float, float] = DEFAULT_SCALE_RANGE,
-    scale_step: float = DEFAULT_SCALE_STEP,
-) -> list[Match]:
-    """**多尺度**模板匹配：先粗搜缩放比例，再在最佳比例附近精修，最后在该比例上取全部命中。
+def _scale_tiers(scale_range: tuple[float, float]) -> list[tuple[float, float]]:
+    """把搜索范围拆成"先窄后宽"的档位（用户要求：先 0.3x–2.0x，找不到再扩到 0.3x–4.0x）。
 
-    为什么需要它：游戏画面放大/缩小时，模板的像素尺寸会跟着变，
-    1:1 匹配（`locate_all`）就再也对不上（用户实测的现象）。
-    返回的 `Match.scale` 是命中时用的缩放比例，坐标仍是**客户区坐标**。
+    窄档档位少、绝大多数情况一次就命中；只有窄档确实找不到时才付第二档的代价。
+    范围本来就落在窄档之内（或整段都在窄档上界之上）时只有一档。
     """
-    source = _prepare(haystack, grayscale)
-    target = _prepare(template, grayscale)
+    low, high = float(min(scale_range)), float(max(scale_range))
+    if high <= SCALE_FAST_MAX + 1e-9 or low >= SCALE_FAST_MAX - 1e-9:
+        return [(low, high)]
+    return [(low, SCALE_FAST_MAX), (low, high)]
 
-    best: tuple[float, float] | None = None
-    best_substantial = False                          # best 对应的模板是否"足够大"（见 _is_substantial）
-    strong_score = float(threshold) + SCALE_STRONG_MARGIN
-    for scale in scale_candidates(scale_range, scale_step):
+
+def _scan_coarse(
+    source: np.ndarray,
+    target: np.ndarray,
+    scales: list[float],
+    best: tuple[float, float] | None,
+    best_substantial: bool,
+    strong_score: float,
+) -> tuple[tuple[float, float] | None, bool]:
+    """在给定档位上做粗搜，沿用"最佳候选 + 越过峰值回落才停"的状态（可跨档继续）。
+
+    结束粗搜的条件：已经有了"够强且足够大"的最佳候选，且当前分数明显从峰值回落
+    —— 后面只会更差。**不能**改成"第一个够强的候选就停"：分数是在真实缩放附近缓慢爬升
+    的，3.50x 的真值在 3.30x 就有 0.9018（高于阈值+0.05），一旦就此停住，±0.06 的
+    精修窗口够不到真值，实测会报成 3.36x（框比目标小一圈）。见 test_..._after_peak。
+    """
+    for scale in scales:
         resized = _resize_template(target, scale)
         if resized is None:
             continue
         score = _best_score(source, resized)
-        # 结束粗搜的条件：已经有了"够强且足够大"的最佳候选，且当前分数明显从峰值回落
-        # —— 后面只会更差。**不能**改成"第一个够强的候选就停"：分数是在真实缩放附近缓慢爬升
-        # 的，3.50x 的真值在 3.30x 就有 0.9018（高于阈值+0.05），一旦就此停住，±0.06 的
-        # 精修窗口够不到真值，实测会报成 3.36x（框比目标小一圈）。见 test_..._after_peak。
         if (
             best is not None
             and best_substantial
@@ -272,10 +275,16 @@ def locate_all_scaled(
         if _better_scale(best, scale, score):
             best = (scale, score)
             best_substantial = _is_substantial(resized, target)
+    return best, best_substantial
 
-    if best is None or best[1] < float(threshold) - SCALE_REFINE_MARGIN:
-        return []                                     # 粗搜都没个像样的候选，精修也没意义
 
+def _refine_scale(
+    source: np.ndarray, target: np.ndarray, best: tuple[float, float]
+) -> tuple[float, float]:
+    """在最佳比例附近精修（只接受**严格更好**的分数）。
+
+    不能再用"贴近 1.0x"的平局规则，否则会把真实比例（例如 1.40x）掰成更靠近 1.0 的邻居（1.38x）。
+    """
     best_scale, best_score = best
     for scale in scale_candidates(
         (best_scale - SCALE_REFINE_SPAN, best_scale + SCALE_REFINE_SPAN), SCALE_REFINE_STEP
@@ -284,17 +293,55 @@ def locate_all_scaled(
         if resized is None:
             continue
         score = _best_score(source, resized)
-        # 精修阶段只接受**严格更好**的分数：不能再用"贴近 1.0x"的平局规则，
-        # 否则会把真实比例（例如 1.40x）掰成更靠近 1.0 的邻居（1.38x）。
         if score > best_score + 1e-9:
             best_scale, best_score = scale, score
-    best = (best_scale, best_score)
+    return best_scale, best_score
 
-    # 阈值必须在**精修之后**判断：真实缩放常常落在粗搜两档之间
-    # （例如 0.75x 落在 0.70/0.80 之间，粗搜只有 0.83，精修到 0.74x 是 0.95 —— 实测踩到）
-    if best_score < float(threshold):
+
+def locate_all_scaled(
+    haystack: np.ndarray,
+    template: np.ndarray,
+    threshold: float = DEFAULT_THRESHOLD,
+    max_results: int = DEFAULT_MAX_RESULTS,
+    grayscale: bool = True,
+    scale_range: tuple[float, float] = DEFAULT_SCALE_RANGE,
+    scale_step: float = DEFAULT_SCALE_STEP,
+) -> list[Match]:
+    """**多尺度**模板匹配：按档粗搜缩放比例 → 在最佳比例附近精修 → 在该比例上取全部命中。
+
+    为什么需要它：游戏画面放大/缩小时，模板的像素尺寸会跟着变，
+    1:1 匹配（`locate_all`）就再也对不上（用户实测的现象）。
+    搜索分两档（`_scale_tiers`）：先 0.3x–2.0x 快搜，**没命中才**把范围扩到 0.3x–4.0x 继续搜；
+    第二档不重复扫第一档的档位。返回的 `Match.scale` 是命中时用的缩放比例，坐标仍是**客户区坐标**。
+    """
+    source = _prepare(haystack, grayscale)
+    target = _prepare(template, grayscale)
+
+    strong_score = float(threshold) + SCALE_STRONG_MARGIN
+    best: tuple[float, float] | None = None
+    best_substantial = False                          # best 对应的模板是否"足够大"（见 _is_substantial）
+    scanned: set[float] = set()                       # 已经粗搜过的档位（第二档不重复扫）
+    matched: tuple[float, float] | None = None
+    for low, high in _scale_tiers(scale_range):
+        pending = [s for s in scale_candidates((low, high), scale_step) if s not in scanned]
+        scanned.update(pending)
+        best, best_substantial = _scan_coarse(
+            source, target, pending, best, best_substantial, strong_score
+        )
+        if best is None or best[1] < float(threshold) - SCALE_REFINE_MARGIN:
+            continue                                  # 这一档连像样的候选都没有，换下一档
+        # 阈值必须在**精修之后**判断：真实缩放常常落在粗搜两档之间
+        # （例如 0.75x 落在 0.70/0.80 之间，粗搜只有 0.83，精修到 0.74x 是 0.95 —— 实测踩到）
+        refined = _refine_scale(source, target, best)
+        if refined[1] >= float(threshold):
+            matched = refined                          # 这一档找到了
+            break
+        if refined[1] > best[1]:
+            best = refined                             # 精修更好就带进下一档继续比
+
+    if matched is None:
         return []
-
+    best_scale = matched[0]
     resized = _resize_template(target, best_scale)
     if resized is None:
         return []
