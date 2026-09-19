@@ -633,6 +633,42 @@ def test_developer_tab_does_not_change_page_heights(window_factory, tmp_path) ->
     assert [page.height() for page in (window.settings_page, window.daily_page)] == before_pages
 
 
+def test_feature_page_switches_add_placeholder_tasks_to_queue(window_factory, tmp_path) -> None:
+    """Phase 6 闭环：卡订单/功能三/功能四页的开关勾选后进入运行队列（开关 → 运行 → 日志）。"""
+    from luoluotool.core.runner import Runner
+
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    assert Runner(config).queued_tasks() == []      # 默认全部关闭 → 空队列
+
+    window.order_hold_page.enabled_box.setChecked(True)
+    window.feature3_page.enabled_box.setChecked(True)
+    window.feature4_page.enabled_box.setChecked(True)
+    window.order_hold_page.reserved_box_1.setChecked(True)   # 预留开关：零行为
+    window.order_hold_page.reserved_box_2.setChecked(True)
+    assert Runner(config).queued_tasks() == ["order_hold", "feature_3", "feature_4"]
+
+    window.order_hold_page.enabled_box.setChecked(False)
+    assert Runner(config).queued_tasks() == ["feature_3", "feature_4"]
+
+
+def test_feature_task_run_logs_planned_message_end_to_end(window_factory, tmp_path, caplog) -> None:
+    """Phase 6 闭环：开关开启 → 运行 → 日志出现「该功能尚未实现真实逻辑（规划中）」。"""
+    import logging as _logging
+
+    from luoluotool.core.runner import Runner
+
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    window.order_hold_page.enabled_box.setChecked(True)
+    window.feature3_page.enabled_box.setChecked(True)
+    caplog.set_level(_logging.INFO)
+    Runner(config, sleep=lambda _s: None).start()
+    planned = [record.message for record in caplog.records if "尚未实现" in record.message]
+    assert len(planned) == 2
+    assert "order_hold" in planned[0] and "feature_3" in planned[1]
+
+
 def test_developer_mode_from_config_mounts_tab_at_startup(window_factory, tmp_path) -> None:
     """配置里 developer_mode=true 时启动即挂载调试页。"""
     config = AppConfig.default()

@@ -1,5 +1,6 @@
 """core.runner 测试：执行顺序、循环、连续失败自停、急停、错误恢复（虚拟时间）。"""
 
+import logging
 import threading
 import time
 
@@ -205,3 +206,115 @@ def test_channel_factory_is_used_for_sender(monkeypatch) -> None:
     runner.start()
     assert created == ["built"]
     assert EXECUTION_LOG == ["one"]
+
+
+# ------------------------------------------- Phase 6：多来源任务编排（日常组 + 单功能组）
+
+
+def _with_features(config: AppConfig, order_hold=False, feature_3=False, feature_4=False) -> AppConfig:
+    config.features.order_hold.enabled = order_hold
+    config.features.feature_3.enabled = feature_3
+    config.features.feature_4.enabled = feature_4
+    return config
+
+
+def test_queue_merges_daily_group_then_single_feature_group() -> None:
+    """编排规则：日常任务组（按 order 升序）→ 单功能组（卡订单 → 功能三 → 功能四）。"""
+    config = _with_features(
+        _config([("test_fake_two", True, 2), ("test_fake_one", True, 1), ("test_fake_off", False, 0)]),
+        order_hold=True, feature_3=True,
+    )
+    runner = Runner(config)
+    assert runner.queued_tasks() == ["test_fake_one", "test_fake_two", "order_hold", "feature_3"]
+    assert "test_fake_off" not in runner.queued_tasks()
+
+
+def test_queue_order_is_deterministic_for_equal_orders() -> None:
+    """相同 order 时按任务 ID 字典序，保证每次运行的顺序完全一致。"""
+    config = _config([("test_fake_two", True, 1), ("test_fake_one", True, 1)])
+    assert Runner(config).queued_tasks() == ["test_fake_one", "test_fake_two"]
+
+
+def test_single_feature_switch_off_keeps_task_out() -> None:
+    """单功能组由功能主开关决定：开关关闭时不入队（默认全部关闭 → 空队列）。"""
+    config = _config([("test_fake_one", True, 1)])
+    assert Runner(config).queued_tasks() == ["test_fake_one"]
+    assert Runner(_with_features(_config([]))).queued_tasks() == []
+
+
+def test_reserved_switches_never_affect_queue() -> None:
+    """卡订单两个预留开关是纯占位：任意组合都不改变运行任务集合（零行为）。"""
+    expected: list[str] | None = None
+    for switch_1 in (False, True):
+        for switch_2 in (False, True):
+            config = _with_features(_config([("test_fake_one", True, 1)]), order_hold=True)
+            config.features.order_hold.reserved_switch_1 = switch_1
+            config.features.order_hold.reserved_switch_2 = switch_2
+            queue = Runner(config).queued_tasks()
+            expected = expected if expected is not None else queue
+            assert queue == expected == ["test_fake_one", "order_hold"]
+
+
+def test_daily_group_switch_does_not_affect_queue() -> None:
+    """`daily_tasks.enabled`（启用日常任务）保持「存/读/显示」：不参与编排（既有语义）。"""
+    config = _config([("test_fake_one", True, 1)])
+    assert config.features.daily_tasks.enabled is False
+    assert Runner(config).queued_tasks() == ["test_fake_one"]
+    config.features.daily_tasks.enabled = True
+    assert Runner(config).queued_tasks() == ["test_fake_one"]
+
+
+def test_placeholder_feature_tasks_run_in_queue_order_with_planned_logs(caplog) -> None:
+    """端到端：主开关开启的功能任务按队列顺序执行，日志中出现"规划中"记录。"""
+    caplog.set_level(logging.INFO)
+    config = _with_features(_config([("test_fake_one", True, 1)]), order_hold=True, feature_3=True,
+                            feature_4=True)
+    Runner(config).start()
+    planned = [record.message for record in caplog.records if "尚未实现" in record.message]
+    assert len(planned) == 3
+    for message, task_id in zip(planned, ("order_hold", "feature_3", "feature_4")):
+        assert message.startswith(f"进入 {task_id}") and "规划中" in message
+    assert "任务队列（4 个）：test_fake_one → order_hold → feature_3 → feature_4" in caplog.text
+    assert EXECUTION_LOG == ["one"]
+
+
+def test_feature_tasks_only_log_and_never_produce_input(monkeypatch, caplog) -> None:
+    """占位功能任务零输入：即使真实模式通道被注入，也不会调用任何输入原语。"""
+    from luoluotool.automation.input_sender import DryRunSender, InputChannel
+
+    caplog.set_level(logging.INFO)
+    calls: list[str] = []
+
+    class _RecordingChannelSender(DryRunSender):
+        def click_at(self, x: int, y: int) -> None:
+            calls.append("click_at")
+
+        def key_combo(self, combo: str) -> None:
+            calls.append("key_combo")
+
+        def drag(self, from_xy, to_xy, duration_seconds: float) -> None:
+            calls.append("drag")
+
+    config = _with_features(_config([]), order_hold=True, feature_3=True, feature_4=True)
+    runner = Runner(
+        config,
+        channel_factory=lambda *_args: InputChannel(_RecordingChannelSender()),
+    )
+    runner.start()
+    assert calls == []
+    assert caplog.text.count("规划中") >= 6   # 三个任务各一条进入 + 一条心跳
+
+
+def test_feature_task_loop_repeats_and_stops(caplog) -> None:
+    """循环开启时占位功能任务按轮重复执行（尊重循环间隔），停止请求可立即中断。"""
+    caplog.set_level(logging.INFO)
+    config = _with_features(_config([], loop_enabled=True, interval=5), order_hold=True)
+    runner = Runner(config, sleep=lambda _s: None)
+
+    def heartbeat_count() -> int:
+        return sum(1 for record in caplog.records if "心跳" in record.message)
+
+    _run_in_thread(runner, lambda: heartbeat_count() >= 3)
+    assert heartbeat_count() >= 3
+    assert runner.state is RunState.IDLE
+    assert "自动停止" not in caplog.text   # 停止是正常路径，不算失败自停

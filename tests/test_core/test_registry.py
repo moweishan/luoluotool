@@ -236,3 +236,70 @@ def test_placeholder_stops_between_swipes() -> None:
     assert result.success is True
     assert "停止" in result.message
     assert sender.calls == [("drag", (0, 0), (10, 10), 0.4)]
+
+
+# --------------------------------------------------- Phase 6：三个预留功能占位任务
+
+
+PLANNED_MESSAGE = "该功能尚未实现真实逻辑（规划中）"
+
+
+def test_three_placeholder_feature_tasks_are_registered() -> None:
+    """Phase 6：卡订单/功能三/功能四三个占位任务已注册，任务 ID 与功能模块对应。"""
+    from luoluotool.core.registry import (
+        FEATURE_3_TASK_ID,
+        FEATURE_4_TASK_ID,
+        ORDER_HOLD_TASK_ID,
+        Feature3Task,
+        Feature4Task,
+        OrderHoldTask,
+    )
+
+    assert (ORDER_HOLD_TASK_ID, FEATURE_3_TASK_ID, FEATURE_4_TASK_ID) == (
+        "order_hold", "feature_3", "feature_4",
+    )
+    for task_id, task_class in (
+        (ORDER_HOLD_TASK_ID, OrderHoldTask),
+        (FEATURE_3_TASK_ID, Feature3Task),
+        (FEATURE_4_TASK_ID, Feature4Task),
+    ):
+        assert task_id in registered_ids()
+        assert get(task_id) is task_class
+
+
+@pytest.mark.parametrize("task_id", ["order_hold", "feature_3", "feature_4"])
+def test_placeholder_feature_task_logs_entry_and_heartbeat(task_id, caplog) -> None:
+    """占位任务只允许「进入日志 + 心跳日志」：两条 INFO，且不产生任何输入。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(sender=sender, sleep=lambda _s: None, params={"anything": 1})
+    result = get(task_id)().run(ctx)
+
+    assert result.success is True
+    assert result.task_id == task_id
+    assert "规划中" in result.message
+    messages = [record.message for record in caplog.records]
+    assert any(task_id in text and PLANNED_MESSAGE in text for text in messages)   # 进入日志
+    assert any(task_id in text and "心跳" in text for text in messages)            # 心跳日志
+    assert len([text for text in messages if task_id in text]) == 2                # 只有这两条
+    assert sender.calls == []                    # 绝不产生任何输入
+    assert ctx.params == {"anything": 1}         # 不读参数、不做任何推测性逻辑
+
+
+@pytest.mark.parametrize("task_id", ["order_hold", "feature_3", "feature_4"])
+def test_placeholder_feature_task_respects_stop(task_id, caplog) -> None:
+    """占位任务响应停止请求：已请求停止时直接返回，不写进入/心跳日志。"""
+    ctx = TaskContext(params={})
+    ctx.stop_event.set()
+    result = get(task_id)().run(ctx)
+    assert result.success is True
+    assert "停止" in result.message
+    assert [record.message for record in caplog.records] == []
+
+
+def test_placeholder_feature_tasks_do_not_touch_input_protocol() -> None:
+    """三个占位任务不得调用任何输入原语（只有日志与停止检查）。"""
+    sender = _RecordingSender()
+    ctx = TaskContext(sender=sender, sleep=lambda _s: None, params={})
+    for task_id in ("order_hold", "feature_3", "feature_4"):
+        get(task_id)().run(ctx)
+    assert sender.calls == []

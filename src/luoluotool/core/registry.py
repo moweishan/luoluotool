@@ -1,7 +1,15 @@
-"""任务注册表：任务 ID → 任务类；内置占位任务 A。"""
+"""任务注册表：任务 ID → 任务类；内置占位任务 A 与三个预留功能占位任务。"""
 
 from luoluotool.config.models import PlaceholderTaskParams
 from luoluotool.core.task import BaseTask, TaskContext, TaskResult
+
+# 任务 ID 常量（runner 编排与注册表共用，避免两处硬编码不一致）
+PLACEHOLDER_TASK_A_ID = "placeholder_task_a"
+ORDER_HOLD_TASK_ID = "order_hold"
+FEATURE_3_TASK_ID = "feature_3"
+FEATURE_4_TASK_ID = "feature_4"
+
+_PLANNED_MESSAGE = "该功能尚未实现真实逻辑（规划中）"
 
 _REGISTRY: dict[str, type[BaseTask]] = {}
 
@@ -36,7 +44,7 @@ class PlaceholderTaskA(BaseTask):
     真实/干跑由输入层决定：干跑模式只写日志，绝不产生真实输入。
     """
 
-    task_id = "placeholder_task_a"
+    task_id = PLACEHOLDER_TASK_A_ID
 
     def run(self, ctx: TaskContext) -> TaskResult:
         params = PlaceholderTaskParams.from_dict(ctx.params)
@@ -94,3 +102,46 @@ class PlaceholderTaskA(BaseTask):
             self.task_id, True,
             f"完成 {total} 步（点击 {click_total}，滑动 {swipe_total}，按键 {key_total}）",
         )
+
+
+class PlaceholderFeatureTask(BaseTask):
+    """Phase 6 预留功能占位任务：**只写「进入日志 + 心跳日志」并响应停止**。
+
+    严格边界（用户要求）：不产生任何输入、不读 params、不含任何推测性业务逻辑；
+    卡订单的两个预留开关同样不参与行为（只存/读/显示）。真实功能由后续阶段实现。
+    """
+
+    feature_label = ""
+
+    def run(self, ctx: TaskContext) -> TaskResult:
+        if ctx.should_stop():
+            return TaskResult(self.task_id, True, "收到停止请求，未执行")
+        ctx.logger.info(
+            "进入 %s（%s）：%s", self.task_id, self.feature_label, _PLANNED_MESSAGE
+        )
+        ctx.logger.info("%s 心跳：本轮无实际操作，等待后续阶段实现（规划中）", self.task_id)
+        return TaskResult(self.task_id, True, "规划中：本轮无实际动作")
+
+
+@register
+class OrderHoldTask(PlaceholderFeatureTask):
+    """功能二：卡订单（占位；两个预留开关不触发任何行为）。"""
+
+    task_id = ORDER_HOLD_TASK_ID
+    feature_label = "功能二：卡订单"
+
+
+@register
+class Feature3Task(PlaceholderFeatureTask):
+    """功能三（占位）。"""
+
+    task_id = FEATURE_3_TASK_ID
+    feature_label = "功能三"
+
+
+@register
+class Feature4Task(PlaceholderFeatureTask):
+    """功能四（占位）。"""
+
+    task_id = FEATURE_4_TASK_ID
+    feature_label = "功能四"

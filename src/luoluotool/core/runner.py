@@ -11,7 +11,12 @@ from luoluotool.automation.input_sender import (
     build_channel,
 )
 from luoluotool.config.models import AppConfig, TaskConfig
-from luoluotool.core.registry import get
+from luoluotool.core.registry import (
+    FEATURE_3_TASK_ID,
+    FEATURE_4_TASK_ID,
+    ORDER_HOLD_TASK_ID,
+    get,
+)
 from luoluotool.core.state import RunState, StateMachine
 from luoluotool.core.task import TaskContext, TaskResult
 
@@ -93,6 +98,10 @@ class Runner:
         if not selected:
             logger.info("未选择任何任务，不执行")
             return
+        logger.info(
+            "任务队列（%d 个）：%s",
+            len(selected), " → ".join(task_id for task_id, _ in selected),
+        )
         failures = 0
         max_failures = self._config.automation.max_consecutive_failures
         while not self._stop_event.is_set():
@@ -117,15 +126,39 @@ class Runner:
                 self._config.features.daily_tasks.loop.interval_seconds
             )
 
+    def queued_tasks(self) -> list[str]:
+        """返回本次运行的任务队列（按执行顺序）；供日志与测试查询编排结果。"""
+        return [task_id for task_id, _ in self._selected_tasks()]
+
     def _selected_tasks(self) -> list[tuple[str, TaskConfig]]:
-        """返回勾选任务（ID + 配置），按 order 升序。"""
+        """任务编排（Phase 6）：**日常任务组 → 单功能组**，统一顺序执行、统一失败计数。
+
+        规则：
+        1. 日常任务组：`features.daily_tasks.tasks[id].enabled == true` 的任务入队，
+           按 `order` 升序、同 `order` 按任务 ID 字典序（保证每次运行顺序完全一致）；
+        2. 单功能组：功能主开关开启即入队，固定顺序 **卡订单 → 功能三 → 功能四**；
+        3. `features.daily_tasks.enabled`（启用日常任务）与卡订单两个预留开关
+           **不参与编排**（保持「存/读/显示」的既有语义）。
+        """
         selected: list[tuple[str, TaskConfig]] = [
             (task_id, cfg)
             for task_id, cfg in self._config.features.daily_tasks.tasks.items()
             if cfg.enabled
         ]
-        selected.sort(key=lambda item: item[1].order)
+        selected.sort(key=lambda item: (item[1].order, item[0]))
+        for task_id, enabled in self._single_feature_tasks():
+            if enabled:
+                selected.append((task_id, TaskConfig(enabled=True, params={})))
         return selected
+
+    def _single_feature_tasks(self) -> tuple[tuple[str, bool], ...]:
+        """单功能组：功能主开关 → 任务 ID（顺序固定：卡订单 → 功能三 → 功能四）。"""
+        features = self._config.features
+        return (
+            (ORDER_HOLD_TASK_ID, bool(features.order_hold.enabled)),
+            (FEATURE_3_TASK_ID, bool(features.feature_3.enabled)),
+            (FEATURE_4_TASK_ID, bool(features.feature_4.enabled)),
+        )
 
     def _run_one(self, task_id: str, task_config: TaskConfig) -> TaskResult:
         task_class = get(task_id)  # 未注册任务仍走整体 ERROR（保持既有语义）
