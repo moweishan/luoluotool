@@ -200,7 +200,7 @@
 | 不在最顶层则置顶 | `SetWindowPos(HWND_TOPMOST)`（`SWP_NOSIZE|SWP_NOMOVE|SWP_SHOWWINDOW|SWP_NOACTIVATE`） |
 | 键盘必须落在游戏窗口 | 置顶之外再 `SetForegroundWindow`（前台锁定失败时用 `AttachThreadInput` 兜底），并**回读 `GetForegroundWindow` 复核** |
 | 无法确保在最前 | **绝不输入**：返回 `FrontResult.ok=False` → 抛可读错误拒绝本次输入 |
-| 点击必须在窗口内（2026-09-19） | 点击前用 `input_sender.point_in_client_area(hwnd, x, y)` 校验客户区 `[0,w)×[0,h)`；**越界不点击**，只写 WARNING「点击坐标 (x, y) 不在游戏窗口内（客户区 WxH），已跳过本次点击」；读不到客户区（窗口已关闭/权限不足）同样按越界处理。干跑通道用 `DryRunSender(bounds=...)` 做同样校验（干跑时若查不到窗口则跳过校验并写 INFO）。滑动（drag）暂不在校验范围内 |
+| 点击/滑动必须在窗口内（2026-09-19） | 点击前用 `input_sender.point_in_client_area(hwnd, x, y)` 校验客户区 `[0,w)×[0,h)`；**滑动（drag）的起点与终点同样校验**（`check_points_in_bounds`，任一端越界整段跳过）。越界一律**不输入**，只写 WARNING「点击坐标 (x, y) 不在游戏窗口内（客户区 WxH），已跳过本次点击」／「滑动起点 (x, y)、终点 (x, y) 不在游戏窗口内（…），已跳过本次滑动」；读不到客户区（窗口已关闭/权限不足）同样按越界处理。干跑通道用 `DryRunSender(bounds=...)` 做同样校验（干跑时若查不到窗口则跳过校验并写 INFO） |
 | 最小化窗口 | 上层直接**拒绝输入**（`is_window_ready` 判定最小化/不可见即抛错）；`ensure_window_front` 内部的 `ShowWindow(SW_RESTORE)` 仅作为兜底路径 |
 | 输入后收拾现场 | 取消**本次由我们设置的**置顶（避免游戏窗口长期浮在最上层）；点击后按 `restore_cursor_after_click` 把真实光标移回原位，滑动结束**同样还原**但先延迟 `DRAG_RESTORE_DELAY_SECONDS` 再分帧小步移回（见下方修复记录） |
 | 注入面收敛 | `SendInput`/`SetCursorPos` 只允许出现在 `real_input.py`（有跨模块守卫测试） |
@@ -430,17 +430,9 @@ LuoLuoTool/
 | Phase 6 | 卡订单与预留页逻辑闭环（开关 → 入队 → 日志 → 可急停），任务编排规则明确且可测，预留开关零行为 |
 | Phase 7 | exe 在干净 Windows 上冒烟通过 |
 
-### 已知问题（Phase 7 打包时发现，待修复；Phase 7 未改业务代码）
-1. **冻结 exe 的 `--measure-layout` 在 GBK 控制台崩溃**：`__main__._measure_layout` 直接 `print()` 布局报告，
-   报告里含 `✓ ✗ ·` 等 GBK 无法编码的符号 → `UnicodeEncodeError` → 退出码 1
-   （复现：`dist\LuoLuoTool\LuoLuoTool.exe --measure-layout`）。
-   开发期之所以不报错，是因为本机 CPython 处于 UTF-8 模式（`sys.flags.utf8_mode == 1`，stdout 编码 utf-8）；
-   冻结后 PyInstaller 的隔离解释器按 ANSI 代码页（cp936）初始化 stdout，且**忽略** `PYTHONIOENCODING` /
-   `PYTHONUTF8` / `chcp 65001`（四种规避方式实测均无效）。
-   影响面：仅该 CLI 子命令（`--version`/`--validate-config`/`--smoke-gui` 与 GUI 均正常；
-   日志走 stderr 的 backslashreplace 与 UTF-8 日志文件，不受影响）。
-   建议修法（任选其一，属业务代码，需在对应阶段改）：报告改用 ASCII 符号；或在打印前
-   `sys.stdout.reconfigure(errors="replace")`。
+### 已知问题（Phase 7 打包时发现）
+1. ~~冻结 exe 的 `--measure-layout` 在 GBK 控制台崩溃~~ **已于 2026-09-19 修复**：报告里的 `✓ ✗` 换成
+   GBK 可编码的 `[OK]` / `[NG]`，并由 `__main__._print_safe()` 兜底任何不可编码字符（先原样打印、失败后按当前编码替换；stdout 为 None 时静默跳过）。回归测试：`test_format_measure_report_is_cp936_printable`、`test_print_safe_degrades_on_gbk_console`、`test_print_safe_survives_missing_stdout`。实测冻结 exe 的 `--measure-layout` 现退出码 0。
 
 ## 12. 变更管理
 

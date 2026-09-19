@@ -179,9 +179,8 @@ PyInstaller 打包的 exe 常被 Windows Defender / 国产杀软误报为可疑�
 > 已知限制：未做代码签名（首次运行可能有 SmartScreen 提示）；one-dir 首次启动比开发期慢
 > （一次性解包 + Qt 初始化）；不做 one-file 与安装包（Phase 7 明确范围外）。
 
-> 已知问题：冻结后的 exe 跑 `--measure-layout`（重定向后）会在 GBK 控制台报 `UnicodeEncodeError`
-> （报告里含 `✓` 等符号），退出码 1；`--version` / `--validate-config` / `--smoke-gui` 与 GUI 不受影响。
-> 属业务代码问题，只记录未修改，详见 `PROJECT_SPEC.md` 已知问题 1。
+> 已知问题：无（`--measure-layout` 在 GBK 控制台的 `UnicodeEncodeError` 已于 2026-09-19 修复：
+> 报告改用 GBK 可编码的 `[OK]`/`[NG]` 标记，并加了打印降级兜底 `__main__._print_safe`）。
 
 ### 7.5 实测数据（2026-09-19，本机 Windows 10 x64）
 

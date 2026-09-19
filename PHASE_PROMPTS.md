@@ -597,6 +597,20 @@ Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--smoke-gui' -Wait
 **验收**：全量 **354 项测试通过**；`--validate-config` = OK；`--smoke-gui` 退出码 0；`--measure-layout` = 不改变任何高度。
 实测：生产默认 `dry_run=False`；首次生成配置 `dry_run=false`；对真实游戏窗口（客户区 1920×1052）干跑点击 (10,10) → 模拟点击、(99999,99999) → 越界跳过 + WARNING。
 
+### 增量记录续（2026-09-19 晚，用户追加两项）
+
+用户原话要点：①「给滑动也加越界校验」；②「修复 `--measure-layout` 的旧问题」。
+
+1. **滑动越界校验**（`automation/input_sender.py`）：新增 `check_points_in_bounds(points, check)`（一次判定多个客户区点，返回越界点标签与客户区说明）——
+   - `RealInputSender.drag`：起点与终点都校验，任一越界 → WARNING「滑动起点 (x, y)、终点 (x, y) 不在游戏窗口内（客户区 WxH），已跳过本次滑动」并 return（不置顶、不移动光标、不拖拽）；
+   - `DryRunSender.drag`：同样校验（共用同一份判定逻辑，干跑时若查不到窗口仍只写 INFO 不失败）；点击路径也改为复用该函数（消息格式不变）。
+   - 实测（真实游戏窗口 1920×1052，干跑零输入）：起终点在窗口内 → `模拟滑动 (100, 100) → (600, 300)`；终点 `(99999, 300)` / 起点 `(-5, 100)` → 均跳过 + WARNING。
+2. **修复 `--measure-layout` 的 GBK 崩溃**：`format_measure_report` 的 `✓ ✗` 换成 **`[OK]` / `[NG]`**（GBK 可编码）；`__main__` 新增 `_print_safe(text)`——先原样写 stdout，遇 `UnicodeEncodeError` 按当前编码替换不可编码字符后再写，stdout 为 `None`（窗口化无控制台）时静默跳过。`_measure_layout` 改用它打印。
+   - 测试：报告 `cp936` 可编码 + 无 `✓✗`；GBK 严格 stdout 下 `_print_safe` 与整条 CLI 都不崩（退出码 0）；`stdout=None` 不崩。
+   - 冻结环境复测：重建 exe 后 `--measure-layout` 退出码 **0**（此前为 1）。
+
+**验收（本轮）**：全量 **366 项测试通过**；`--validate-config` = OK；`--smoke-gui` 退出码 0；`--measure-layout` = 不改变任何高度；重建 exe 后 `--measure-layout` 退出码 0。
+
 ---
 
 ## 后续阶段（先不执行，仅占位）
