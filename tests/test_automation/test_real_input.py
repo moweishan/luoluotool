@@ -7,6 +7,7 @@
 """
 
 import ctypes
+import logging
 from ctypes import wintypes
 
 import pytest
@@ -342,6 +343,68 @@ def test_restore_cursor_smooth_falls_back_when_read_fails(user32, monkeypatch) -
     assert ("SetCursorPos", 444, 555) in user32.calls
 
 
+# ------------------------------------------------ 点击越界校验（必须在窗口内）
+
+
+def test_real_sender_skips_click_outside_window(recording, monkeypatch, caplog) -> None:
+    """点击坐标必须在游戏窗口客户区内：越界时**不点击**并给出日志提示。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(150, 10)
+    assert recording.events == []                  # 不置顶、不记录光标、不移动、不点击
+    assert "不在游戏窗口内" in caplog.text
+    assert "已跳过" in caplog.text and "客户区 100x50" in caplog.text
+
+
+def test_real_sender_click_bounds_are_exclusive(recording, monkeypatch, caplog) -> None:
+    """边界语义：客户区为 [0,width)×[0,height)，右下边界点算越界。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    for x, y in ((100, 10), (10, 50), (-1, 10), (10, -1)):
+        sender.click_at(x, y)
+    assert recording.events == []
+    assert caplog.text.count("不在游戏窗口内") == 4
+
+
+def test_real_sender_clicks_inside_window(recording, monkeypatch) -> None:
+    """范围内的点击照常执行（顺序与不带校验时一致）。"""
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 200, 100))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80)
+    assert recording.events == [
+        ("ensure_front", 555),
+        ("get_cursor_pos",),
+        ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
+        ("click",),
+        ("restore_cursor", 800, 600),
+        ("release_topmost", 555),
+    ]
+
+
+def test_real_sender_skips_click_when_bounds_unreadable(recording, monkeypatch, caplog) -> None:
+    """读不到客户区（窗口已关闭/权限不足）时按越界处理：宁可不点击。"""
+    caplog.set_level(logging.WARNING)
+
+    def boom(hwnd: int):
+        raise OSError("窗口已关闭")
+
+    monkeypatch.setattr(input_sender, "get_client_rect", boom)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(10, 10)
+    assert recording.events == []
+    assert "无法读取窗口客户区" in caplog.text
+
+
+def test_real_sender_drag_is_not_bounds_checked(recording, monkeypatch) -> None:
+    """记录当前范围：越界校验只作用于**点击**；滑动（drag）暂未纳入（如需再单独提需求）。"""
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 10, 10))
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.drag((100, 100), (200, 200), 0.1)
+    assert ("drag", (110, 120), (210, 220), 0.1) in recording.events
+
+
 # ------------------------------------------------------------------- 发送器
 
 
@@ -389,6 +452,8 @@ class _RecordingRealInput:
                             lambda hwnd: self.events.append(("release_topmost", hwnd)) or True)
         monkeypatch.setattr(real_input, "client_to_screen",
                             lambda hwnd, point: (point[0] + 10, point[1] + 20))
+        # 假窗口客户区 1920x1080：点击越界校验需要一个尺寸（真实实现读 GetClientRect）
+        monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 1920, 1080))
 
 
 @pytest.fixture
@@ -432,8 +497,9 @@ def test_real_sender_refuses_input_when_window_cannot_be_focused(monkeypatch) ->
 
 
 def test_real_sender_refuses_when_window_not_ready(monkeypatch) -> None:
-    """窗口最小化/不可见时直接拒绝。"""
+    """窗口最小化/不可见时直接拒绝（假窗口同时给出合法客户区，确保走到就绪检查）。"""
     monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: False)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 100))
     sender = RealInputSender(555, sleep=lambda _s: None)
     with pytest.raises(WindowUnavailableError):
         sender.click_at(10, 10)

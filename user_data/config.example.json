@@ -33,7 +33,7 @@
     }
   },
   "automation": {
-    "dry_run": true,
+    "dry_run": false,
     "window_title_keyword": "桃源深处有人家",
     "click_interval_ms": 800,
     "post_click_wait_ms": 500,

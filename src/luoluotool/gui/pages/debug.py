@@ -1,9 +1,13 @@
-"""开发者调试页：窗口诊断、干跑开关与输入测试（单点/连点/滑动/键盘）。
+"""开发者调试页：窗口诊断、布局测量、干跑开关与输入测试（单点/连点/滑动/键盘）。
 
 页面只做「参数收集 + 按钮 + 结果展示」，实际动作交给 `core.debug` 在后台线程执行；
 测试动作与正式任务共用同一输入通道（干跑只写日志、真实模式每次输入前校验并置顶窗口）。
+
+**开发者调试未开启时本页所有选项都不生效**（用户 2026-09-19 要求）：整页禁用、
+干跑开关的改动不写入配置；主窗口还会拒绝本页发出的动作请求。
 """
 
+import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import Signal
@@ -21,6 +25,8 @@ from PySide6.QtWidgets import (
 
 from luoluotool.config.models import AppConfig
 from luoluotool.gui.widgets import ScrollablePage
+
+logger = logging.getLogger(__name__)
 
 PAGE_TITLE = "开发者调试"
 COORDINATE_MAX = 10000
@@ -167,11 +173,12 @@ class DebugPage(ScrollablePage):
     # ------------------------------------------------------------------ 绑定
 
     def set_config(self, config: AppConfig) -> None:
-        """重新绑定配置并刷新控件（不触发脏标记）。"""
+        """重新绑定配置并刷新控件（不触发脏标记）；同时按开发者调试开关决定整页是否可用。"""
         self._config = config
         self.dry_run_box.blockSignals(True)
         self.dry_run_box.setChecked(config.automation.dry_run)
         self.dry_run_box.blockSignals(False)
+        self.setEnabled(bool(config.automation.developer_mode))
 
     def set_busy(self, busy: bool) -> None:
         """执行期间禁用所有测试按钮，避免重复触发。"""
@@ -185,6 +192,14 @@ class DebugPage(ScrollablePage):
     # ------------------------------------------------------------------ 槽
 
     def _on_dry_run_toggled(self) -> None:
+        """干跑开关：仅在「开发者调试」开启时生效；未开启则回滚勾选、不写配置。"""
+        if not self._config.automation.developer_mode:
+            logger.warning("开发者调试未开启，忽略干跑开关变更（本页选项不生效）")
+            self.dry_run_box.blockSignals(True)
+            self.dry_run_box.setChecked(self._config.automation.dry_run)
+            self.dry_run_box.blockSignals(False)
+            self.set_status("开发者调试未开启：本页所有选项不生效（干跑开关未修改）")
+            return
         self._config.automation.dry_run = self.dry_run_box.isChecked()
         self._on_changed()
 

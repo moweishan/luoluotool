@@ -428,18 +428,37 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
 
     def _apply_developer_mode(self) -> None:
-        """配置决定是否显示开发者调试页；重复调用安全（幂等）。"""
+        """配置决定是否显示开发者调试页；重复调用安全（幂等）。
+
+        未开启时：移除页签、禁用整页，并**中断正在运行的调试动作**（用户 2026-09-19 要求：
+        开发者调试未开启时该页所有选项都不生效）。
+        """
         index = self.tabs.indexOf(self.debug_page)
         enabled = bool(self._config.automation.developer_mode)
+        self.debug_page.setEnabled(enabled)
         if enabled and index < 0:
             self.tabs.addTab(self.debug_page, DEBUG_TAB_TITLE)
             logger.info("已启用开发者调试页")
         elif not enabled and index >= 0:
             self.tabs.removeTab(index)
+            if self._debug_thread is not None and self._debug_thread.isRunning():
+                self._debug_thread.request_stop()
+                logger.info("开发者调试已关闭：正在中断调试测试")
+            self.debug_page.set_status("开发者调试已关闭：本页所有选项不生效")
             logger.info("已关闭开发者调试页")
+
+    def _debug_actions_allowed(self) -> bool:
+        """调试动作统一门禁：开发者调试未开启时拒绝执行（并给出可见提示）。"""
+        if self._config.automation.developer_mode:
+            return True
+        logger.warning("开发者调试未开启，已忽略调试动作请求（本页所有选项不生效）")
+        self.debug_page.set_status("开发者调试未开启：本页所有选项不生效")
+        return False
 
     def _on_debug_test(self, kind: str, params: dict) -> None:
         """开发者调试按钮：后台线程执行，避免阻塞 GUI；执行期间禁用按钮。"""
+        if not self._debug_actions_allowed():
+            return
         if self._debug_thread is not None and self._debug_thread.isRunning():
             self.debug_page.set_status("上一个测试仍在执行，请先等待完成或点击「停止」")
             return
@@ -463,12 +482,16 @@ class MainWindow(QMainWindow):
 
     def _on_measure_layout(self) -> None:
         """布局测量（开发者调试页入口）：纯几何计算，同步执行、无输入、不改配置。"""
+        if not self._debug_actions_allowed():
+            return
         report = format_measure_report(measure_layout(self))
         self.debug_page.set_status(report)
         for line in report.splitlines():
             logger.info("%s", line)
 
     def _on_diagnose(self) -> None:
+        if not self._debug_actions_allowed():
+            return
         if self._diagnose_thread is not None and self._diagnose_thread.isRunning():
             return  # 防重复点击
         self.debug_page.diagnose_button.setEnabled(False)

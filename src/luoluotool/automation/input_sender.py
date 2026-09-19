@@ -17,7 +17,7 @@ from typing import Protocol
 import win32gui
 
 from luoluotool.automation import real_input
-from luoluotool.automation.window import find_window
+from luoluotool.automation.window import find_window, get_client_rect
 from luoluotool.config.models import AppConfig
 
 logger = logging.getLogger(__name__)
@@ -48,18 +48,39 @@ class InputSender(Protocol):
 
 
 class DryRunSender:
-    """干跑模式：只写日志，绝不产生任何输入。"""
+    """干跑模式：只写日志，绝不产生任何输入。
 
-    def __init__(self, log: logging.Logger | None = None) -> None:
+    `bounds` 可选注入「(x, y) → (是否在窗口内, 说明)」的越界校验回调：干跑时若能查到
+    游戏窗口，越界点击同样会被跳过并写日志（与真实模式行为一致，便于提前发现配置错误）。
+    """
+
+    def __init__(
+        self,
+        log: logging.Logger | None = None,
+        bounds: Callable[[int, int], tuple[bool, str]] | None = None,
+    ) -> None:
         self._logger = log or logger
+        self._bounds = bounds
+
+    def _out_of_bounds(self, x: int, y: int) -> bool:
+        """越界则写提示日志并返回 True（调用方据此跳过）。"""
+        if self._bounds is None:
+            return False
+        inside, detail = self._bounds(x, y)
+        if inside:
+            return False
+        self._logger.warning("干跑：点击坐标 (%d, %d) 不在游戏窗口内（%s），已跳过", x, y, detail)
+        return True
 
     def move_to(self, x: int, y: int) -> None:
         self._logger.info("干跑：移动到 (%d, %d)", x, y)
 
     def click(self, x: int, y: int) -> None:
-        self._logger.info("干跑：模拟点击 (%d, %d)", x, y)
+        self.click_at(x, y)
 
     def click_at(self, x: int, y: int) -> None:
+        if self._out_of_bounds(x, y):
+            return
         self._logger.info("干跑：模拟点击 (%d, %d)", x, y)
 
     def key_tap(self, vk: int) -> None:
@@ -111,6 +132,13 @@ class RealInputSender:
         self.click_at(x, y)
 
     def click_at(self, x: int, y: int) -> None:
+        # 硬规则（2026-09-19 用户要求）：点击位置必须在游戏窗口客户区内，越界不点击
+        inside, detail = point_in_client_area(self.hwnd, x, y)
+        if not inside:
+            self._logger.warning(
+                "点击坐标 (%d, %d) 不在游戏窗口内（%s），已跳过本次点击", x, y, detail
+            )
+            return
         front = self._ensure_front_or_raise("点击")
         saved: tuple[int, int] | None = None
         try:
@@ -303,6 +331,48 @@ class InputChannel:
     readiness: Callable[[], bool] | None = None
 
 
+def point_in_client_area(hwnd: int, x: int, y: int) -> tuple[bool, str]:
+    """判断客户区坐标 (x, y) 是否落在窗口客户区内；返回 (是否在内, 说明文字)。
+
+    边界语义：客户区为 `[0, width) × [0, height)`（右下边界点算越界）。
+    读取失败（窗口已关闭、权限不足等）按**越界**处理——宁可不点击。
+    """
+    try:
+        _, _, width, height = get_client_rect(hwnd)
+    except Exception as exc:
+        logger.warning("读取窗口客户区失败（hwnd=%s）：%s", hwnd, exc)
+        return False, f"无法读取窗口客户区（{exc}）"
+    inside = 0 <= int(x) < int(width) and 0 <= int(y) < int(height)
+    return inside, f"客户区 {int(width)}x{int(height)}"
+
+
+def _dry_run_bounds(
+    keyword: str, log: logging.Logger | None = None
+) -> Callable[[int, int], tuple[bool, str]]:
+    """干跑用的惰性越界校验（点击时才查窗口；查不到就不校验）。
+
+    惰性是刻意的：干跑模式下 `build_channel` **不得**查询窗口（有测试守卫：干跑无需游戏在运行），
+    因此窗口查找推迟到第一次点击时。
+    """
+    target_logger = log or logger
+
+    def bounds(x: int, y: int) -> tuple[bool, str]:
+        try:
+            hwnd = find_window(keyword)
+        except Exception as exc:
+            target_logger.warning("干跑：查找游戏窗口失败，跳过点击越界校验：%s", exc)
+            return True, "查找窗口失败"
+        if hwnd is None:
+            target_logger.info(
+                "干跑：未找到标题含“%s”的窗口，跳过点击越界校验（(%d, %d) 直接模拟）",
+                keyword, x, y,
+            )
+            return True, "未找到游戏窗口"
+        return point_in_client_area(hwnd, x, y)
+
+    return bounds
+
+
 def build_channel(
     config: AppConfig,
     stop_event: threading.Event,
@@ -314,7 +384,9 @@ def build_channel(
     真实模式窗口不可用时抛可读错误（不执行任何输入）。
     """
     if config.automation.dry_run:
-        return InputChannel(DryRunSender(log))
+        return InputChannel(
+            DryRunSender(log, _dry_run_bounds(config.automation.window_title_keyword, log))
+        )
     keyword = config.automation.window_title_keyword
     hwnd = find_window(keyword)
     if hwnd is None:

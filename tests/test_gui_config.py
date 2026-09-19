@@ -67,13 +67,16 @@ def test_reload_restores_file_values(window_factory, tmp_path) -> None:
     assert window.windowTitle() == WINDOW_TITLE
 
 
+@pytest.mark.real_defaults
 def test_reset_restores_defaults_and_marks_dirty(window_factory, tmp_path) -> None:
     window = window_factory(tmp_path / "config.json")
-    window.debug_page.dry_run_box.setChecked(False)
+    window.settings_page.developer_box.setChecked(True)   # 调试页选项需调试开关开启才生效
+    window.debug_page.dry_run_box.setChecked(True)
     window._save()
-    window._reset()
     assert window._config.automation.dry_run is True
-    assert window.debug_page.dry_run_box.isChecked() is True
+    window._reset()
+    assert window._config.automation.dry_run is False      # 出厂默认：干跑不开启
+    assert window.debug_page.dry_run_box.isChecked() is False
     assert window.windowTitle() == f"{WINDOW_TITLE} *"
 
 

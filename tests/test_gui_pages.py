@@ -200,10 +200,11 @@ def test_settings_page_binds_developer_switch() -> None:
 
 
 def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
-    """调试页：干跑开关绑定 dry_run；四个测试按钮发出带参数的请求信号。"""
+    """调试页：开发者调试开启时，干跑开关绑定 dry_run；四个测试按钮发出带参数的请求信号。"""
     from luoluotool.gui.pages.debug import DebugPage
 
     config = AppConfig.default()
+    config.automation.developer_mode = True      # 未开启调试时本页选项一律不生效（另有用例）
     page = DebugPage(config, lambda: None)
     requests: list[tuple] = []
     page.test_requested.connect(lambda kind, params: requests.append((kind, params)))
@@ -246,11 +247,42 @@ def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
     page.close()
 
 
+def test_debug_page_options_are_inert_when_developer_mode_off() -> None:
+    """开发者调试未开启：调试页所有选项都不生效（整页禁用 + 干跑开关不写配置）。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()          # developer_mode 默认 false
+    config.automation.dry_run = True
+    page = DebugPage(config, lambda: None)
+    assert page.isEnabled() is False      # 整页禁用（即使被程序化显示出来也点不动）
+
+    page.dry_run_box.setChecked(False)    # 尝试改动干跑开关
+    assert config.automation.dry_run is True        # 配置未被修改
+    assert page.dry_run_box.isChecked() is True     # 勾选状态被回滚
+    assert "不生效" in page.status_label.text()
+    page.close()
+
+
+def test_debug_page_options_are_active_when_developer_mode_on() -> None:
+    """开发者调试开启：整页启用，选项正常生效。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    assert page.isEnabled() is True
+    page.dry_run_box.setChecked(False)
+    assert config.automation.dry_run is False
+    page.close()
+
+
 def test_debug_page_busy_disables_buttons_and_status() -> None:
     """执行期间禁用全部测试按钮，并显示状态文案。"""
     from luoluotool.gui.pages.debug import DebugPage
 
-    page = DebugPage(AppConfig.default(), lambda: None)
+    config = AppConfig.default()
+    config.automation.developer_mode = True     # 未开启调试时整页禁用，与本用例无关
+    page = DebugPage(config, lambda: None)
     page.set_busy(True)
     for button in (page.single_button, page.repeat_button, page.swipe_button,
                    page.key_button, page.diagnose_button):

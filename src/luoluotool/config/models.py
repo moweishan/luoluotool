@@ -275,7 +275,9 @@ class FeatureConfig:
 class AutomationConfig:
     """自动化参数。"""
 
-    dry_run: bool = True
+    # 2026-09-19 用户要求：干跑模式**默认不开启**（首次启动即真实模式）；
+    # 真实模式启动前仍有强制确认弹窗 + F8 急停兜底。
+    dry_run: bool = False
     window_title_keyword: str = "桃源深处有人家"
     click_interval_ms: int = 800
     post_click_wait_ms: int = 500
@@ -305,7 +307,7 @@ class AutomationConfig:
     @classmethod
     def from_dict(cls, data: dict) -> AutomationConfig:
         return cls(
-            data.get("dry_run", True),
+            data.get("dry_run", False),
             data.get("window_title_keyword", "桃源深处有人家"),
             data.get("click_interval_ms", 800),
             data.get("post_click_wait_ms", 500),

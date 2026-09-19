@@ -62,6 +62,75 @@ def test_build_channel_dry_run_needs_no_window(monkeypatch) -> None:
     assert channel.readiness is None
 
 
+# ------------------------------------------------- 点击越界校验（必须在窗口内）
+
+
+def test_point_in_client_area_boundaries(monkeypatch) -> None:
+    """客户区判定：含左上、不含右下边界，负坐标一律算越界。"""
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
+    assert input_sender.point_in_client_area(1, 0, 0) == (True, "客户区 100x50")
+    assert input_sender.point_in_client_area(1, 99, 49)[0] is True
+    assert input_sender.point_in_client_area(1, 100, 10)[0] is False
+    assert input_sender.point_in_client_area(1, 10, 50)[0] is False
+    assert input_sender.point_in_client_area(1, -1, 0)[0] is False
+    assert input_sender.point_in_client_area(1, 0, -1)[0] is False
+
+
+def test_point_in_client_area_read_failure(monkeypatch, caplog) -> None:
+    """读不到客户区时按越界处理（宁可不点击）。"""
+    caplog.set_level(logging.WARNING)
+
+    def boom(hwnd: int):
+        raise OSError("窗口已关闭")
+
+    monkeypatch.setattr(input_sender, "get_client_rect", boom)
+    inside, detail = input_sender.point_in_client_area(1, 10, 10)
+    assert inside is False
+    assert "无法读取窗口客户区" in detail
+    assert "读取窗口客户区失败" in caplog.text
+
+
+def test_dry_run_sender_reports_out_of_bounds(caplog) -> None:
+    """干跑通道注入窗口矩形后：越界点击只写提示日志，不写"模拟点击"，也不产生输入。"""
+    caplog.set_level(logging.WARNING)
+    sender = input_sender.DryRunSender(bounds=lambda x, y: (False, "客户区 100x50"))
+    sender.click_at(150, 10)
+    assert "不在游戏窗口内" in caplog.text and "已跳过" in caplog.text
+    assert "模拟点击 (150, 10)" not in caplog.text
+
+
+def test_dry_run_sender_logs_click_inside_bounds(caplog) -> None:
+    """范围内的点击照常写"模拟点击"日志。"""
+    caplog.set_level(logging.INFO)
+    sender = input_sender.DryRunSender(bounds=lambda x, y: (True, "客户区 100x50"))
+    sender.click_at(10, 10)
+    assert "模拟点击 (10, 10)" in caplog.text
+
+
+def test_build_channel_dry_run_validates_click_against_window(monkeypatch, caplog) -> None:
+    """干跑模式下若能查到游戏窗口，就按真实客户区校验点击范围（干跑也能提前发现越界配置）。"""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(input_sender, "find_window", lambda keyword: 777)
+    monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 100, 50))
+    config = AppConfig.default()
+    channel = input_sender.build_channel(config, threading.Event(), lambda s: None, input_sender.logger)
+    channel.sender.click_at(10, 10)
+    channel.sender.click_at(500, 10)
+    assert "模拟点击 (10, 10)" in caplog.text
+    assert "不在游戏窗口内" in caplog.text
+
+
+def test_build_channel_dry_run_tolerates_missing_window(monkeypatch, caplog) -> None:
+    """干跑时找不到窗口不做越界校验、也不失败（干跑不需要游戏正在运行）。"""
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(input_sender, "find_window", lambda keyword: None)
+    config = AppConfig.default()
+    channel = input_sender.build_channel(config, threading.Event(), lambda s: None, input_sender.logger)
+    channel.sender.click_at(10, 10)
+    assert "模拟点击 (10, 10)" in caplog.text
+    assert "未找到" in caplog.text
+
+
 def test_build_channel_real_mode_missing_window(monkeypatch) -> None:
     monkeypatch.setattr(input_sender, "find_window", lambda keyword: None)
     config = AppConfig.default()

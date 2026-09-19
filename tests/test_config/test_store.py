@@ -8,6 +8,15 @@ from luoluotool.config import models
 from luoluotool.config import store
 
 
+@pytest.mark.real_defaults
+def test_first_run_config_file_has_dry_run_off(tmp_path) -> None:
+    """首次启动生成的文件必须是 `dry_run: false`（用户 2026-09-19 要求：干跑默认不开启）。"""
+    path = tmp_path / "config.json"
+    store.load(path)
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["automation"]["dry_run"] is False
+
+
 def test_load_missing_file_creates_defaults(tmp_path) -> None:
     path = tmp_path / "config.json"
     config = store.load(path)

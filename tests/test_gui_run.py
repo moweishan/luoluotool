@@ -299,7 +299,9 @@ def test_diagnose_button_runs_and_reports(window_factory, tmp_path, monkeypatch)
         mw, "diagnose_window",
         lambda keyword, debug_dir: DiagnosticResult(f"诊断结果: {keyword}", False),
     )
-    window = window_factory(tmp_path / "config.json")
+    config = AppConfig.default()
+    config.automation.developer_mode = True     # 调试页选项需调试开关开启才生效
+    window = window_factory(tmp_path / "config.json", config)
     window.debug_page.diagnose_button.click()
     thread = window._diagnose_thread
     assert thread is not None
@@ -318,7 +320,9 @@ def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -
         raise RuntimeError("模拟失败")
 
     monkeypatch.setattr(mw, "diagnose_window", boom)
-    window = window_factory(tmp_path / "config.json")
+    config = AppConfig.default()
+    config.automation.developer_mode = True     # 调试页选项需调试开关开启才生效
+    window = window_factory(tmp_path / "config.json", config)
     window.debug_page.diagnose_button.click()
     assert window._diagnose_thread is not None
     assert window._diagnose_thread.wait(3000)
@@ -667,6 +671,57 @@ def test_feature_task_run_logs_planned_message_end_to_end(window_factory, tmp_pa
     planned = [record.message for record in caplog.records if "尚未实现" in record.message]
     assert len(planned) == 2
     assert "order_hold" in planned[0] and "feature_3" in planned[1]
+
+
+def test_debug_actions_are_rejected_when_developer_mode_off(window_factory, tmp_path, caplog) -> None:
+    """开发者调试未开启：调试动作（测试/诊断/布局测量）一律拒绝执行并给出提示。"""
+    import logging as _logging
+
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    caplog.set_level(_logging.WARNING)
+    assert window.tabs.indexOf(window.debug_page) < 0
+
+    window.debug_page.test_requested.emit("single_click", {"x": 1, "y": 2})
+    window.debug_page.diagnose_requested.emit()
+    window.debug_page.layout_measure_requested.emit()
+
+    assert window._debug_thread is None      # 没有起任何调试线程
+    assert window._diagnose_thread is None   # 没有发起窗口诊断
+    assert "不生效" in window.debug_page.status_label.text()
+    assert caplog.text.count("开发者调试未开启") == 3
+
+
+def test_debug_actions_run_when_developer_mode_on(window_factory, tmp_path) -> None:
+    """开发者调试开启：布局测量（纯几何）正常执行，状态区出现报告。"""
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+    window.debug_page.layout_measure_requested.emit()
+    assert "布局测量" in window.debug_page.status_label.text()
+
+
+def test_turning_developer_mode_off_stops_running_debug_action(window_factory, tmp_path) -> None:
+    """关闭开发者调试：正在跑的调试动作被立即中断，调试页禁用。"""
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+
+    stopped: list[str] = []
+
+    class _FakeDebugThread:
+        def isRunning(self) -> bool:      # noqa: N802 (QThread 命名)
+            return True
+
+        def request_stop(self) -> None:
+            stopped.append("stop")
+
+    window._debug_thread = _FakeDebugThread()
+    window.settings_page.developer_box.setChecked(False)
+    assert stopped == ["stop"]
+    assert window.tabs.indexOf(window.debug_page) < 0
+    assert window.debug_page.isEnabled() is False
+    assert "不生效" in window.debug_page.status_label.text()
 
 
 def test_developer_mode_from_config_mounts_tab_at_startup(window_factory, tmp_path) -> None:

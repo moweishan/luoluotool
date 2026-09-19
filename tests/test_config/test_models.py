@@ -5,11 +5,13 @@ import pytest
 from luoluotool.config import models
 
 
+@pytest.mark.real_defaults
 def test_defaults_are_safe() -> None:
-    """出厂默认：开关全关，dry_run 开启，schema_version=8。"""
+    """出厂默认：开关全关，**dry_run 关闭**（2026-09-19 用户要求，首次启动即真实模式），
+    schema_version=8。"""
     config = models.AppConfig.default()
     assert config.schema_version == models.SCHEMA_VERSION
-    assert config.automation.dry_run is True
+    assert config.automation.dry_run is False
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.loop.enabled is False
     assert config.features.order_hold.enabled is False
@@ -67,12 +69,14 @@ def test_to_dict_from_dict_roundtrip() -> None:
     assert restored.to_dict() == config.to_dict()
 
 
+@pytest.mark.real_defaults
 def test_from_dict_partial_uses_defaults() -> None:
-    """缺失的节/字段回落到默认值。"""
+    """缺失的节/字段回落到默认值（含 dry_run 的生产默认：false = 首次启动即真实模式）。"""
     config = models.AppConfig.from_dict(
         {"schema_version": 1, "features": {}, "automation": {}, "logging": {}}
     )
-    assert config.automation.dry_run is True
+    assert config.automation.dry_run is False
+    assert models.AutomationConfig().dry_run is False
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.tasks == {}
     assert config.logging.level == "INFO"
