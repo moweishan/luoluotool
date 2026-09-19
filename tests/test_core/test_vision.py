@@ -333,3 +333,257 @@ def test_capture_window_reports_capture_failure(monkeypatch) -> None:
 
     image, message = core_vision.capture_window(AppConfig.default(), capture=boom)
     assert image is None and "截图失败" in message
+
+
+# ------------------------------------------------ 多张模板（任一张命中即用它的值）
+
+
+def _pattern_b(height: int = 16, width: int = 16) -> np.ndarray:
+    """第二张模板用的图案（与 `_pattern` 结构差异大，避免互相误匹配）。"""
+    pattern = np.full((height, width, 3), 30, dtype=np.uint8)
+    pattern[4:12, 4:12] = 240
+    pattern[::2, ::2] = 90
+    return pattern
+
+
+def _write_png(path, pattern) -> None:
+    import cv2
+
+    ok, buffer = cv2.imencode(".png", pattern)
+    assert ok
+    buffer.tofile(str(path))
+
+
+@pytest.fixture
+def two_templates(tmp_path):
+    """写两张模板图片：t1 = 条纹图案，t2 = 方块图案。"""
+    first = tmp_path / "t1.png"
+    second = tmp_path / "t2.png"
+    _write_png(first, _pattern())
+    _write_png(second, _pattern_b())
+    return (first, second), (_pattern(), _pattern_b())
+
+
+def test_recognize_uses_first_template_that_matches(monkeypatch, two_templates, tmp_path) -> None:
+    """多张模板：按顺序试，第一张命中就用它的结果（后面的不再试）。"""
+    (first, second), (pattern_a, _) = two_templates
+    canvas = _haystack(160, 300)
+    canvas[20 : 20 + pattern_a.shape[0], 20 : 20 + pattern_a.shape[1]] = pattern_a
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), [first, second], capture=lambda hwnd: canvas
+    )
+    assert result.found is True
+    assert result.matched_template == first
+    assert result.matches[0].center == (30, 25)
+    assert "t1.png" in result.message and "第 1/2 张" in result.message
+
+
+def test_recognize_falls_through_to_second_template(monkeypatch, two_templates, tmp_path) -> None:
+    """第一张模板在画面里没有时，自动改用第二张（并报告用的是哪一张）。
+
+    这里把阈值提到 0.9：实测 t1（条纹）缩到 0.5x 时会"蹭"上 t2 的亮块区拿到 0.883，
+    按默认 0.85 就算第一张命中了。这正是"先用先命中"策略的固有权衡——模板之间若互相
+    形似，应把阈值调高（或让模板更有辨识度）。
+    """
+    (first, second), (_, pattern_b) = two_templates
+    canvas = _haystack(160, 300)
+    canvas[90 : 90 + pattern_b.shape[0], 240 : 240 + pattern_b.shape[1]] = pattern_b
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), [first, second], threshold=0.9, capture=lambda hwnd: canvas
+    )
+    assert result.found is True
+    assert result.matched_template == second
+    assert result.matches[0].center == (248, 98)
+    assert "t2.png" in result.message and "第 2/2 张" in result.message
+    assert "t1.png" not in result.message          # 未命中的那张不写成"命中模板"
+
+
+def test_recognize_reports_all_templates_when_none_match(monkeypatch, two_templates, tmp_path) -> None:
+    """全部模板都没命中：一条可读消息里列出试过的每张模板及各自结果。"""
+    (first, second), _ = two_templates
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), [first, second], threshold=0.95, capture=lambda hwnd: _haystack()
+    )
+    assert result.found is False and result.matches == ()
+    assert "未识别到目标" in result.message and "已试 2 张模板" in result.message
+    assert "t1.png" in result.message and "t2.png" in result.message
+    assert "未命中" in result.message
+
+
+def test_recognize_skips_unreadable_template(monkeypatch, two_templates, tmp_path) -> None:
+    """列表里有读不出来的图片时跳过它，继续用后面的模板（不整体失败）。"""
+    (first, second), (_, pattern_b) = two_templates
+    canvas = _haystack(160, 300)
+    canvas[40 : 40 + pattern_b.shape[0], 40 : 40 + pattern_b.shape[1]] = pattern_b
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), [tmp_path / "缺失.png", second, first], capture=lambda hwnd: canvas
+    )
+    assert result.found is True and result.matched_template == second
+
+
+def test_recognize_skips_flat_template(monkeypatch, tmp_path) -> None:
+    """纯色模板会被跳过（会在平坦区域刷满分），消息里给出原因而不是一堆假坐标。"""
+    flat = tmp_path / "flat.png"
+    _write_png(flat, np.full((40, 40, 3), 180, dtype=np.uint8))
+    _patch_window(monkeypatch)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), [flat], capture=lambda hwnd: _haystack()
+    )
+    assert result.found is False
+    assert "纯色" in result.message and "flat.png" in result.message
+
+
+def test_recognize_reports_broken_template_with_reason(monkeypatch, tmp_path) -> None:
+    """只有坏图片时：消息里带上"无法读取模板图片"的原因（给用户可操作的提示）。"""
+    _patch_window(monkeypatch)
+    result = core_vision.recognize_in_window(
+        AppConfig.default(),
+        [tmp_path / "缺失.png", tmp_path / "也没有.png"],
+        capture=lambda hwnd: _haystack(),
+    )
+    assert result.found is False
+    assert "无法读取模板图片" in result.message
+    assert "缺失.png" in result.message and "也没有.png" in result.message
+
+
+def test_recognize_requires_at_least_one_template(monkeypatch) -> None:
+    """模板列表为空：直接给可读提示，不截图、不识别。"""
+    _patch_window(monkeypatch)
+
+    def forbidden(hwnd):
+        raise AssertionError("没有模板时不应截图")
+
+    result = core_vision.recognize_in_window(AppConfig.default(), [], capture=forbidden)
+    assert result.found is False
+    assert "至少一张模板" in result.message
+
+
+def test_recognize_captures_only_once_for_many_templates(monkeypatch, two_templates, tmp_path) -> None:
+    """多张模板共用同一张截图（避免每张模板各截一次，也保证结果一致）。"""
+    (first, second), (_, pattern_b) = two_templates
+    canvas = _haystack(160, 300)
+    canvas[60 : 60 + pattern_b.shape[0], 60 : 60 + pattern_b.shape[1]] = pattern_b
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    captures: list[int] = []
+
+    def counting(hwnd):
+        captures.append(hwnd)
+        return canvas
+
+    result = core_vision.recognize_in_window(AppConfig.default(), [first, second], capture=counting)
+    assert result.found is True
+    assert len(captures) == 1
+
+
+# ------------------------------------------------ 一张模板命中多处（屏幕多个区域）
+
+
+def test_recognize_lists_every_region_for_one_template(monkeypatch, template_file, tmp_path) -> None:
+    """一张模板在屏幕上出现多次：全部列出，并指明默认使用哪一处（第 1 处＝匹配度最高）。"""
+    template_path, pattern = template_file
+    canvas = _haystack(160, 400)
+    for x, y in ((20, 20), (150, 40), (300, 110)):
+        canvas[y : y + pattern.shape[0], x : x + pattern.shape[1]] = pattern
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), template_path, capture=lambda hwnd: canvas
+    )
+    assert result.found is True
+    assert len(result.matches) == 3
+    assert "命中 3 处" in result.message
+    assert "使用值" in result.message
+    indexed = [line for line in result.message.splitlines() if line.strip().startswith(("1)", "2)", "3)"))]
+    assert len(indexed) == 3
+
+
+def test_recognize_region_count_follows_max_results(monkeypatch, template_file, tmp_path) -> None:
+    """最多列出多少处：受 `max_results` 限制，触顶时消息里给出提示。"""
+    template_path, pattern = template_file
+    canvas = _haystack(160, 400)
+    for x, y in ((20, 20), (150, 40), (300, 110)):
+        canvas[y : y + pattern.shape[0], x : x + pattern.shape[1]] = pattern
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    result = core_vision.recognize_in_window(
+        AppConfig.default(), template_path, max_results=2, capture=lambda hwnd: canvas
+    )
+    assert result.found is True
+    assert len(result.matches) == 2
+    assert "已达上限 2" in result.message
+
+
+# ------------------------------------------------ 命令行：多张模板 / 多区域上限
+
+
+def test_cli_recognize_accepts_multiple_templates(
+    monkeypatch, two_templates, tmp_path, capsys
+) -> None:
+    """`--recognize a.png b.png`：按顺序试，第二张命中时退出码 0 且打印它的结果。
+
+    阈值用 0.9：条纹模板缩到 0.5x 会"蹭"上第二张的亮块区拿到 0.883（见上面同款测试的说明）。
+    """
+    from luoluotool.__main__ import main
+
+    (first, second), (_, pattern_b) = two_templates
+    canvas = _haystack(160, 300)
+    canvas[70 : 70 + pattern_b.shape[0], 120 : 120 + pattern_b.shape[1]] = pattern_b
+    _patched_cli_env(monkeypatch, canvas, tmp_path)
+
+    code = main([
+        "--recognize", str(first), str(second), "--threshold", "0.9",
+        "--no-annotate", "--config", str(tmp_path / "none.json"),
+    ])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "识别成功" in out and "t2.png" in out and "第 2/2 张" in out
+    assert "中心 (128, 78)" in out
+
+
+def test_cli_recognize_max_results_limits_regions(
+    monkeypatch, template_file, tmp_path, capsys
+) -> None:
+    """`--max-results 1`：一张模板命中多处时只列出 1 处（便于脚本取唯一坐标）。"""
+    from luoluotool.__main__ import main
+
+    template_path, pattern = template_file
+    canvas = _haystack(160, 400)
+    for x, y in ((20, 20), (150, 40), (300, 110)):
+        canvas[y : y + pattern.shape[0], x : x + pattern.shape[1]] = pattern
+    _patched_cli_env(monkeypatch, canvas, tmp_path)
+
+    code = main([
+        "--recognize", str(template_path), "--max-results", "1",
+        "--no-annotate", "--config", str(tmp_path / "none.json"),
+    ])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "命中 1 处" in out
+    assert "2)" not in out
+
+
+def test_cli_recognize_rejects_bad_max_results(tmp_path, capsys) -> None:
+    """`--max-results` 必须 ≥1：非法值退出码 2，不进入识别流程。"""
+    from luoluotool.__main__ import main
+
+    code = main(["--recognize", str(tmp_path / "x.png"), "--max-results", "0"])
+    assert code == 2
+    assert "max-results" in capsys.readouterr().out
+

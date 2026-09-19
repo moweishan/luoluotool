@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from luoluotool import __version__
+from luoluotool.automation.vision import DEFAULT_MAX_RESULTS as DEFAULT_VISION_MAX_RESULTS
 from luoluotool.automation.vision import DEFAULT_THRESHOLD as DEFAULT_VISION_THRESHOLD
 from luoluotool.config.validation import migrate, validate
 from luoluotool.gui.app import run as run_gui
@@ -29,7 +30,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--recognize",
         metavar="IMAGE",
-        help="在当前游戏窗口客户区里查找该图片（模板匹配），打印命中位置的客户区坐标",
+        nargs="+",
+        help=(
+            "在当前游戏窗口客户区里查找这些图片（模板匹配），打印命中位置的客户区坐标；"
+            "可给多张：按顺序尝试，第一张达到阈值的就直接采用它的结果"
+        ),
+    )
+    parser.add_argument(
+        "--max-results",
+        type=int,
+        default=DEFAULT_VISION_MAX_RESULTS,
+        metavar="N",
+        help=(
+            f"一张模板最多列出多少处命中（同一张图出现在屏幕多个区域时全部列出，"
+            f"默认 {DEFAULT_VISION_MAX_RESULTS}）"
+        ),
     )
     parser.add_argument(
         "--threshold",
@@ -64,11 +79,12 @@ def main(argv: list[str] | None = None) -> int:
         return _measure_layout(Path(args.config) if args.config else None)
     if args.recognize:
         return _recognize(
-            Path(args.recognize),
+            [Path(item) for item in args.recognize],
             args.threshold,
             Path(args.config) if args.config else None,
             annotate=not args.no_annotate,
             allow_scale=not args.no_scale,
+            max_results=args.max_results,
         )
     config_path = Path(args.config) if args.config else None
     return run_gui([sys.argv[0]], smoke=args.smoke_gui, config_path=config_path)
@@ -144,20 +160,26 @@ def _measure_layout(config_path: Path | None) -> int:
 
 
 def _recognize(
-    image_path: Path,
+    image_paths: list[Path],
     threshold: float,
     config_path: Path | None,
     annotate: bool,
     allow_scale: bool = True,
+    max_results: int = DEFAULT_VISION_MAX_RESULTS,
 ) -> int:
-    """命令行图像识别：在游戏窗口里查找 `image_path`，打印命中位置的客户区坐标。
+    """命令行图像识别：在游戏窗口里查找模板图片，打印命中位置的客户区坐标。
 
     退出码：0 命中；1 未命中或识别失败（便于脚本判断）；2 参数非法。
+    多张模板：按顺序尝试，第一张达到阈值的直接采用它的结果（后面的不再试）。
+    多区域：一张模板命中多处时全部列出（`--max-results` 封顶），第 1 处即"默认使用值"。
     带框截图：传 `--no-annotate` 强制关闭；否则跟随配置 `automation.save_vision_annotations`。
     匹配方式：默认两档多尺度（先 0.3x–2.0x，找不到再扩到 0.3x–4.0x）；`--no-scale` 只按原始尺寸匹配。
     """
     if not 0.0 < threshold <= 1.0:
         _print_safe(f"阈值必须大于 0 且不超过 1：{threshold}")
+        return 2
+    if max_results < 1:
+        _print_safe(f"--max-results 必须至少为 1：{max_results}")
         return 2
 
     from luoluotool.config import store
@@ -169,7 +191,7 @@ def _recognize(
     path = config_path or get_user_data_dir() / "config.json"
     config = store.load(path) if path.exists() else AppConfig.default()
     result = recognize_in_window(
-        config, image_path, threshold=threshold,
+        config, image_paths, threshold=threshold, max_results=max_results,
         annotate_result=None if annotate else False,
         allow_scale=allow_scale,
     )
