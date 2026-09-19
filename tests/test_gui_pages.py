@@ -277,7 +277,7 @@ def test_debug_page_options_are_active_when_developer_mode_on() -> None:
 
 
 def test_debug_page_vision_group_emits_image_and_threshold() -> None:
-    """调试页「图像识别测试」：图片路径 + 阈值随请求发出（开发者调试开启时生效）。"""
+    """调试页「图片识别匹配测试」：图片路径 + 阈值随请求发出（开发者调试开启时生效）。"""
     from luoluotool.gui.pages.debug import DebugPage
 
     config = AppConfig.default()
@@ -293,6 +293,29 @@ def test_debug_page_vision_group_emits_image_and_threshold() -> None:
     assert requests == [("vision", {"image": r"D:\shots\按钮.png", "threshold": 0.91})]
     assert round(page.vision_threshold_spin.minimum(), 2) == 0.30
     assert round(page.vision_threshold_spin.maximum(), 2) == 1.00
+    assert "识别" in page.vision_button.text()          # 按钮文案即"图片识别匹配测试"
+    page.close()
+
+
+def test_debug_page_vision_group_is_visible_without_scrolling() -> None:
+    """回归：图片识别匹配测试必须排在最前面（曾排在页尾，需要滚动才能看到）。"""
+    from PySide6.QtWidgets import QGroupBox
+
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    page.resize(900, 500)
+    page.show()
+    _APP.processEvents()
+    content = page.scroll_area.widget()
+    groups = page.findChildren(QGroupBox)
+    assert groups and "图片识别匹配" in groups[0].title(), (
+        "图片识别匹配测试应是调试页第一个分组，实际：" + " / ".join(g.title() for g in groups)
+    )
+    top = groups[0].mapTo(content, groups[0].rect().topLeft()).y()
+    assert top < page.scroll_area.viewport().height()   # 首屏可见
     page.close()
 
 
