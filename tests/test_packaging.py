@@ -4,7 +4,11 @@
 """
 
 import re
+import shutil
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from luoluotool import __version__
 
@@ -99,7 +103,31 @@ def test_build_script_is_utf8_with_bom() -> None:
 
 
 def test_gitignore_covers_build_artifacts() -> None:
-    """构建产物（build/dist/清单）必须被 git 忽略，不能入库。"""
+    """构建产物（build/dist/清单/二进制）必须被 git 忽略，不能入库。
+
+    2026-09-19 用户要求：不要在提交时提交构建好的 exe 以及 exe 相关文件。
+    """
     text = GITIGNORE.read_text(encoding="utf-8")
-    for pattern in ("build/", "dist/", "*.manifest"):
-        assert pattern in text, f".gitignore 缺少构建产物规则：{pattern}"
+    for pattern in ("build/", "dist/", "*.manifest", "*.exe", "*.pyd", "*.dll", "*.zip"):
+        assert pattern in text, f".gitignore 缺少构建产物/二进制规则：{pattern}"
+
+
+def test_no_build_artifacts_are_tracked() -> None:
+    """守卫：git 索引里不得出现 exe 与构建产物（dist/build、*.exe/*.pyd/*.dll/压缩包）。"""
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("环境没有 git，跳过索引检查")
+    result = subprocess.run(
+        [git, "ls-files"], cwd=ROOT, capture_output=True, text=True, encoding="utf-8"
+    )
+    assert result.returncode == 0, f"git ls-files 失败：{result.stderr}"
+    tracked = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    offenders = [
+        path
+        for path in tracked
+        if path.startswith(("dist/", "build/"))
+        or path.endswith((".exe", ".pyd", ".dll", ".zip", ".manifest", ".pyz", ".pkg"))
+    ]
+    assert offenders == [], f"这些构建产物/二进制不应入库：{offenders}"
+    # packaging 目录只允许源码与脚本（spec / 构建脚本 / 运行时钩子 / 版本资源）
+    assert all(not path.endswith(".exe") for path in tracked if path.startswith("packaging/"))

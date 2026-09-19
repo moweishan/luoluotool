@@ -12,10 +12,16 @@ htmlcov/
 .mypy_cache/
 .ruff_cache/
 
-# 构建产物（Phase 7 起；dist/LuoLuoTool 里还会生成 user_data/ 与 logs/，随 dist 一起忽略）
+# 构建产物与二进制：**一律不入库**（2026-09-19 用户要求：不要提交构建好的 exe 及相关文件）
+# dist/LuoLuoTool 里还会生成 user_data/ 与 logs/，随 dist 一起忽略
 build/
 dist/
 *.manifest
+# 可执行与本地二进制（哪怕被拷到别处也不许入库）
+*.exe
+*.pyd
+*.dll
+*.zip
 # PyInstaller 中间产物（自定义 --workpath/--distpath 时可能落在仓库根）
 *.pyz
 *.pkg
