@@ -235,7 +235,13 @@ def measure_layout(window) -> LayoutMeasure:
 
 
 def format_measure_report(measure: LayoutMeasure) -> str:
-    """把测量结果格式化成可读多行报告（供 CLI 打印与调试页展示）。"""
+    """把测量结果格式化成可读多行报告（供 CLI 打印与调试页展示）。
+
+    **只使用中文 Windows 控制台（cp936）能编码的字符**：报告曾经用 `✓ ✗ ×` 作标记，
+    冻结后的 exe（GUI 子系统、stdout 按 ANSI 代码页初始化）打印时直接
+    `UnicodeEncodeError` → `--measure-layout` 退出码 1（2026-09-19 实测）。
+    现在改用 `[OK]` / `[NG]`，并由 `__main__._print_safe()` 兜底任何未来的不可编码字符。
+    """
     width, height = measure.window_size
     lines = [f"布局测量（离屏，窗口 {width}×{height}）"]
     lines.append(
@@ -263,15 +269,15 @@ def format_measure_report(measure: LayoutMeasure) -> str:
     for page in measure.pages:
         state = "已挂载" if page.mounted else "未挂载"
         scroll = "是" if page.scrollable else "否"
-        flag = " ✓" if page.problem is None else " ✗"
+        flag = " [OK]" if page.problem is None else " [NG]"
         lines.append(
             f"    {page.title:<10} 最小 {page.min_height:>4}  内容 {page.content_height:>4}  "
             f"可滚动 {scroll}  {state}{flag}"
         )
     if measure.ok:
-        lines.append("结论：挂载/卸载开发者调试页不改变任何高度，全部页签可滚动 ✓")
+        lines.append("结论：挂载/卸载开发者调试页不改变任何高度，全部页签可滚动 [OK]")
     else:
-        lines.append(f"结论：发现 {len(measure.problems)} 个问题 ✗")
+        lines.append(f"结论：发现 {len(measure.problems)} 个问题 [NG]")
         for problem in measure.problems:
             lines.append(f"    - {problem}")
     return "\n".join(lines)

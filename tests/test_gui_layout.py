@@ -114,6 +114,21 @@ def test_format_measure_report_has_summary_and_pages(window_factory) -> None:
         assert title in report
 
 
+def test_format_measure_report_is_cp936_printable(window_factory) -> None:
+    """回归（2026-09-19 实测崩溃）：报告必须能用中文 Windows 控制台的 cp936 编码打印。
+
+    冻结后的 exe 是 GUI 子系统，stdout 按系统 ANSI 代码页初始化，报告里的 `✓ ✗`
+    无法编码会抛 UnicodeEncodeError → `--measure-layout` 退出码 1。
+    这里钉住：不含这两个已知符号，且整份报告可被 cp936 完整编码（× 等 GBK 内字符不受限）。
+    """
+    window = window_factory(developer_mode=True)
+    report = format_measure_report(measure_layout(window))
+    for symbol in ("✓", "✗"):
+        assert symbol not in report, f"报告不应包含 GBK 无法编码的符号：{symbol}"
+    assert "[OK]" in report
+    report.encode("cp936")      # 不抛异常即通过
+
+
 def test_page_measure_flags_violations() -> None:
     """违规判定：内容过高的可滚动页面、以及未继承 ScrollablePage 的页面都要报错。"""
     tall = PageMeasure("高页", "tall_page", True, MAX_PAGE_MIN_HEIGHT + 300, 800, True)
@@ -184,6 +199,39 @@ def test_cli_measure_layout_with_developer_mode_config(tmp_path, capsys) -> None
     store.save(config, path)
     assert main(["--measure-layout", "--config", str(path)]) == 0
     assert "结论：挂载/卸载开发者调试页不改变任何高度" in capsys.readouterr().out
+
+
+def test_print_safe_degrades_on_gbk_console(monkeypatch, tmp_path) -> None:
+    """`--measure-layout` 在只支持 GBK 的 stdout 上不得崩溃（用户实测过的冻结 exe 场景）。"""
+    import io
+    import sys
+
+    from luoluotool.__main__ import _print_safe, main
+
+    buffer = io.BytesIO()
+    gbk_stdout = io.TextIOWrapper(buffer, encoding="gbk", errors="strict", newline="\n")
+    monkeypatch.setattr(sys, "stdout", gbk_stdout)
+    _print_safe("结论：不可编码符号 ✓ 也要能打印")     # 不抛异常即可
+    gbk_stdout.flush()
+    assert "结论" in buffer.getvalue().decode("gbk")
+
+    # 端到端：整条 CLI 在 GBK stdout 下退出码仍为 0
+    buffer2 = io.BytesIO()
+    gbk_stdout2 = io.TextIOWrapper(buffer2, encoding="gbk", errors="strict", newline="\n")
+    monkeypatch.setattr(sys, "stdout", gbk_stdout2)
+    assert main(["--measure-layout", "--config", str(tmp_path / "none.json")]) == 0
+    gbk_stdout2.flush()
+    assert "布局测量" in buffer2.getvalue().decode("gbk")
+
+
+def test_print_safe_survives_missing_stdout(monkeypatch) -> None:
+    """窗口化进程没有控制台（stdout 为 None）时，打印不得崩溃。"""
+    import sys
+
+    from luoluotool.__main__ import _print_safe
+
+    monkeypatch.setattr(sys, "stdout", None)
+    _print_safe("无处可写也不应抛异常")
 
 
 def test_debug_page_layout_measure_button_shows_report(window_factory) -> None:

@@ -62,6 +62,26 @@ def _validate_config(path: Path) -> int:
     return 0
 
 
+def _print_safe(text: str) -> None:
+    """打印一行文本；控制台编码不支持某些字符时降级为替换字符，绝不因编码异常崩溃。
+
+    背景（2026-09-19 实测）：冻结后的 exe 是 GUI 子系统，stdout 按系统 ANSI 代码页
+    （中文机为 cp936）初始化且忽略 PYTHONIOENCODING/PYTHONUTF8，报告里的 `✓` 这类符号
+    无法编码 → UnicodeEncodeError → `--measure-layout` 退出码 1。这里先原样打印，
+    失败后按当前编码把不可编码字符替换掉再打印；窗口化进程 stdout 为 None 时静默跳过。
+    """
+    stream = sys.stdout
+    try:
+        stream.write(f"{text}\n")
+        return
+    except UnicodeEncodeError:
+        encoding = getattr(stream, "encoding", None) or "utf-8"
+        stream.write(text.encode(encoding, errors="replace").decode(encoding, errors="replace") + "\n")
+    except AttributeError:
+        # stdout 为 None（窗口化进程没有控制台，且未挂运行时钩子）：无处可写，跳过
+        return
+
+
 def _measure_layout(config_path: Path | None) -> int:
     """离屏测量各页签的布局占用并打印报告；退出码 0 通过 / 1 发现问题。
 
@@ -85,7 +105,7 @@ def _measure_layout(config_path: Path | None) -> int:
     window.show()
     app.processEvents()
     measure = measure_layout(window)
-    print(format_measure_report(measure))
+    _print_safe(format_measure_report(measure))
     window.close()
     window.deleteLater()
     app.processEvents()
