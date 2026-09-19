@@ -61,6 +61,10 @@ SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 7
 # ---- 键盘：时序常量（键名表与组合键解析在 utils/keys.py，config 层也要用） ----
 DRAG_STEP_SECONDS = 0.016   # 滑动插值步长（≈60Hz）
 DRAG_MIN_STEPS = 4
+DRAG_TAIL_HOLD_STEPS = 4    # 松手前在终点保持静止的帧数（消除"甩动惯性"导致的画面继续飘）
+DRAG_PRESS_SETTLE_SECONDS = 0.05
+DRAG_RELEASE_SETTLE_SECONDS = 0.06
+VK_LBUTTON = 0x01
 KEY_COMBO_GAP_SECONDS = 0.02
 KEY_HOLD_SLICE_SECONDS = 0.1
 
@@ -322,20 +326,80 @@ def _key_input(vk: int, up: bool, scan: int | None = None) -> INPUT:
     return item
 
 
+def ease_out_quad(t: float) -> float:
+    """缓出曲线（纯函数）：`1 - (1 - t)²`，先快后慢、终点速度为 0。"""
+    return 1 - (1 - float(t)) ** 2
+
+
 def interpolate_points(
-    start: tuple[int, int], end: tuple[int, int], steps: int
+    start: tuple[int, int],
+    end: tuple[int, int],
+    steps: int,
+    easing: Callable[[float], float] | None = None,
 ) -> list[tuple[int, int]]:
-    """纯函数：在起点与终点之间线性插值出 `steps` 个中间点（不含起点、含终点）。
+    """纯函数：在起点与终点之间插值出 `steps` 个中间点（不含起点、含终点）。
 
     真实鼠标滑动必须分帧移动：一次跳跃式移动会被很多游戏识别为瞬移而不是拖拽。
+    `easing` 为 None 时线性；给定时按 `easing(进度)` 采样（拖动用缓出曲线）。
     """
     count = max(int(steps), 1)
     sx, sy = int(start[0]), int(start[1])
     ex, ey = int(end[0]), int(end[1])
-    return [
-        (round(sx + (ex - sx) * index / count), round(sy + (ey - sy) * index / count))
-        for index in range(1, count + 1)
-    ]
+    points: list[tuple[int, int]] = []
+    for index in range(1, count + 1):
+        progress = index / count
+        fraction = easing(progress) if easing is not None else progress
+        points.append((round(sx + (ex - sx) * fraction), round(sy + (ey - sy) * fraction)))
+    return points
+
+
+def build_drag_path(
+    start: tuple[int, int],
+    end: tuple[int, int],
+    steps: int,
+    tail_hold_steps: int = DRAG_TAIL_HOLD_STEPS,
+) -> list[tuple[int, int]]:
+    """生成拖动轨迹（纯函数）：**缓出采样** + 末尾在终点保持静止若干帧。
+
+    为什么要缓出 + 末尾静止：很多游戏把"匀速甩到底再松手"识别成 flick，
+    松手后镜头/画面会带着惯性继续飘。减速到静止再松手，引擎才会判定为"停住后松手"。
+    """
+    ex, ey = int(end[0]), int(end[1])
+    path = interpolate_points(start, end, max(int(steps), DRAG_MIN_STEPS), easing=ease_out_quad)
+    if path:
+        path[-1] = (ex, ey)             # 保证末点精确落在终点
+    hold = max(int(tail_hold_steps), 0)
+    path.extend([(ex, ey)] * hold)      # 末尾静止保持（松手前的"停住"）
+    return path
+
+
+def is_left_button_down() -> bool:
+    """左键当前是否处于按下状态（用于校验拖动结束后是否真的松开了）。"""
+    try:
+        return bool(user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000)
+    except Exception as exc:      # 查询失败不影响主流程，按"未知"处理
+        logger.warning("查询左键状态失败：%s", exc)
+        return False
+
+
+def ensure_left_button_up(attempts: int = 3, sleep: Callable[[float], None] = time.sleep) -> bool:
+    """确保左键处于抬起状态：已抬起则直接返回 True；否则补发抬起并复查。
+
+    用途：① 拖动前清理可能残留的按下状态；② 拖动后确认真的松开（避免游戏继续拖拽）。
+    """
+    if not is_left_button_down():
+        return True
+    for attempt in range(1, attempts + 1):
+        logger.warning("检测到左键仍处于按下状态，补发抬起（第 %d/%d 次）", attempt, attempts)
+        _send([_mouse_input(MOUSEEVENTF_LEFTUP)])
+        try:
+            sleep(DRAG_RELEASE_SETTLE_SECONDS)
+        except Exception as exc:   # 等待被中断也不能阻止后续复查/补发
+            logger.warning("等待抬起复查时被中断（继续复查）：%s", exc)
+        if not is_left_button_down():
+            return True
+    logger.error("左键未能释放：鼠标可能卡在按下状态，请手动点击一次左键")
+    return False
 
 
 def send_left_drag(
@@ -353,23 +417,36 @@ def send_left_drag(
     """
     duration = max(float(duration_seconds), 0.0)
     steps = max(int(round(duration / DRAG_STEP_SECONDS)), DRAG_MIN_STEPS) if duration else DRAG_MIN_STEPS
-    points = interpolate_points(from_screen, to_screen, steps)
-    per_step = duration / len(points) if points else 0.0
+    points = build_drag_path(from_screen, to_screen, steps)
+    per_step = duration / max(len(points) - DRAG_TAIL_HOLD_STEPS, 1) if duration else 0.0
     ok = True
     interrupted = False
     try:
+        # ① 开始前清理可能残留的按下状态（否则本次拖动会从"已经在拖"的状态开始）
+        ensure_left_button_up(sleep=sleep)
         ok = move_cursor_absolute(*from_screen) and ok
         sleep(INPUT_SETTLE_SECONDS)
         ok = _send([_mouse_input(MOUSEEVENTF_LEFTDOWN)]) and ok
-        for point in points:
+        sleep(DRAG_PRESS_SETTLE_SECONDS)      # 让引擎先注册"按下"，再从起点开始移动
+        for index, point in enumerate(points):
             if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
                 interrupted = True
                 break
             move_cursor_absolute(*point)
-            if per_step > 0:
+            if per_step > 0 and index < len(points) - DRAG_TAIL_HOLD_STEPS:
                 sleep(per_step)
+            elif per_step > 0:
+                sleep(DRAG_STEP_SECONDS)      # 末尾静止保持帧：只等待、不移动
     finally:
+        # ② 松手前先静一下，再抬起；抬起后③复查是否真的松开（没松开就补发）。
+        #    注意：等待本身抛异常（例如被中断）也**必须**继续执行抬起，绝不卡住按键。
+        try:
+            sleep(DRAG_RELEASE_SETTLE_SECONDS)
+        except Exception as exc:
+            logger.warning("松手前等待被中断，仍然执行左键抬起：%s", exc)
         ok = _send([_mouse_input(MOUSEEVENTF_LEFTUP)]) and ok
+        if not ensure_left_button_up(sleep=sleep):
+            ok = False
     return ok, interrupted
 
 

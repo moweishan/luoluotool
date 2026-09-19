@@ -142,19 +142,23 @@ class RealInputSender:
         """真实鼠标滑动：按住左键从 A 分帧移动到 B 后松开。
 
         与点击同样：**每次滑动前**校验并确保游戏窗口在最顶层，无法确保时绝不输入；
-        滑动可被急停打断，且任何情况下都会释放左键；结束后按配置还原真实光标位置。
+        滑动可被急停打断，且任何情况下都会校验并释放左键（松开后复查，未松开则补发）。
+
+        **故意不还原光标**：拖动是"镜头/画面"手势，松手后把光标跳回原位很可能被游戏
+        当成"继续拖动"，表现为画面乱飘；`restore_cursor_after_click` 只作用于点击。
         """
         front = self._ensure_front_or_raise("滑动")
-        saved: tuple[int, int] | None = None
         try:
-            saved = real_input.get_cursor_pos()
             start = real_input.client_to_screen(self.hwnd, from_xy)
             end = real_input.client_to_screen(self.hwnd, to_xy)
             ok, interrupted = real_input.send_left_drag(
                 start, end, duration_seconds, self._sleep, self._stop_event
             )
             if not ok:
-                raise WindowUnavailableError("真实鼠标滑动注入失败（SendInput 未被系统接受）")
+                raise WindowUnavailableError(
+                    "真实鼠标滑动注入失败（SendInput 未被系统接受，或左键未能释放；"
+                    "请手动点击一次左键确认鼠标已松开）"
+                )
             if interrupted:
                 self._logger.warning(
                     "滑动 (%d, %d) → (%d, %d) 被停止请求中断（已释放左键）",
@@ -166,8 +170,6 @@ class RealInputSender:
                     from_xy[0], from_xy[1], to_xy[0], to_xy[1], duration_seconds,
                 )
         finally:
-            if self.restore_cursor and saved is not None:
-                real_input.set_cursor_pos(*saved)
             self._release_topmost_if_needed(front)
 
     def key_combo(self, combo: str) -> None:

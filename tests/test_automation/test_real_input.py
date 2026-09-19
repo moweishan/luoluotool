@@ -60,6 +60,11 @@ class _FakeUser32:
         self.calls.append(("IsIconic", hwnd))
         return int(self.minimized)
 
+    def GetAsyncKeyState(self, vk):
+        """默认左键未按下；具体测试可覆盖它以模拟"卡住"或"已松开"。"""
+        self.calls.append(("GetAsyncKeyState", vk))
+        return 0
+
     def MapVirtualKeyW(self, vk, kind):
         """返回确定性伪扫描码（vk & 0xFF），便于测试按扫描码断言按键身份。
 
@@ -624,6 +629,14 @@ def test_interpolate_points_is_linear_and_inclusive(user32) -> None:
     assert real_input.interpolate_points((0, 0), (10, 10), 0) == [(10, 10)]
 
 
+def test_interpolate_points_supports_easing(user32) -> None:
+    """插值支持缓动：给定 easing 时按 `easing(进度)` 采样（拖动走缓出曲线）。"""
+    eased = real_input.interpolate_points((0, 0), (100, 0), 4, easing=real_input.ease_out_quad)
+    assert eased == [(44, 0), (75, 0), (94, 0), (100, 0)]
+    assert real_input.ease_out_quad(0.0) == 0.0
+    assert real_input.ease_out_quad(1.0) == 1.0
+
+
 def test_send_left_drag_moves_in_steps_between_press_and_release(user32, monkeypatch) -> None:
     """滑动顺序：移动起点 → 按下左键 → 多次插值移动 → 抬起左键。"""
     monkeypatch.setattr(real_input, "virtual_desktop", lambda: (0, 0, 1000, 1000))
@@ -669,17 +682,19 @@ def test_send_left_drag_releases_button_on_exception(user32) -> None:
     assert user32.sent[-1]["flags"] & real_input.MOUSEEVENTF_LEFTUP
 
 
-def test_real_sender_drag_checks_front_restores_cursor_and_releases(recording) -> None:
-    """发送器层滑动：校验/置顶 → 记录光标 → 滑动 → 还原光标 → 取消置顶。"""
+def test_real_sender_drag_checks_front_and_does_not_restore_cursor(recording) -> None:
+    """发送器层滑动：校验/置顶 → 滑动 → 取消置顶；**故意不还原光标**。
+
+    回归：松手后把光标跳回原位会被游戏当成"继续拖动"，用户实测表现为画面乱飘。
+    """
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.drag((10, 20), (30, 40), 0.5)
     assert recording.events == [
         ("ensure_front", 555),
-        ("get_cursor_pos",),
         ("drag", (20, 40), (40, 60), 0.5),      # 客户区 + (10,20) 偏移
-        ("restore_cursor", 800, 600),
         ("release_topmost", 555),
     ]
+    assert not any(event[0] == "restore_cursor" for event in recording.events)
 
 
 def test_real_sender_drag_refuses_when_window_cannot_be_focused(monkeypatch) -> None:
@@ -707,3 +722,60 @@ def test_dry_run_sender_logs_drag_without_input(caplog) -> None:
     caplog.set_level("INFO")
     input_sender.DryRunSender().drag((1, 2), (3, 4), 0.5)
     assert "干跑：模拟滑动 (1, 2) → (3, 4) 用时 0.50s" in caplog.text
+
+
+def test_build_drag_path_is_eased_out_with_still_tail() -> None:
+    """拖动轨迹：缓出（先快后慢）+ 末尾在终点保持静止若干帧（消除甩动惯性）。"""
+    path = real_input.build_drag_path((0, 0), (100, 0), 10, tail_hold_steps=4)
+    assert path[-1] == (100, 0)
+    assert path[-4:] == [(100, 0)] * 4           # 末尾静止保持
+    moves = path[:10]
+    first_delta = moves[1][0] - moves[0][0]
+    last_delta = moves[-1][0] - moves[-2][0]
+    assert first_delta > last_delta > 0          # 减速（ease-out）
+    assert moves[-1] == (100, 0)
+
+
+def test_drag_pre_clears_stuck_button_before_pressing(user32, monkeypatch) -> None:
+    """开始拖动前若左键是按下状态（上次异常残留），必须先补发抬起再开始。"""
+    state = {"down": True}
+
+    def fake_async(vk):
+        return 0x8000 if state["down"] else 0
+
+    def fake_send_input(count, inputs_ptr, size):
+        items = ctypes.cast(inputs_ptr, ctypes.POINTER(real_input.INPUT))
+        for index in range(count):
+            flags = items[index].u.mi.dwFlags
+            if flags & real_input.MOUSEEVENTF_LEFTUP:
+                state["down"] = False
+            elif flags & real_input.MOUSEEVENTF_LEFTDOWN:
+                state["down"] = True
+        return _FakeUser32.SendInput(user32, count, inputs_ptr, size)
+
+    monkeypatch.setattr(user32, "GetAsyncKeyState", fake_async)
+    monkeypatch.setattr(user32, "SendInput", fake_send_input)
+    ok, interrupted = real_input.send_left_drag((0, 0), (10, 0), 0.05, sleep=lambda _s: None)
+    assert (ok, interrupted) == (True, False)
+    flags = [event["flags"] for event in user32.sent]
+    assert flags.count(real_input.MOUSEEVENTF_LEFTUP) >= 2   # 预清理 + 正常松手
+    assert state["down"] is False
+
+
+def test_drag_reports_failure_when_button_cannot_be_released(user32, monkeypatch) -> None:
+    """松手后复查仍为按下、补发也无效时：返回失败（上层抛可读错误并提示手动点击左键）。"""
+    monkeypatch.setattr(user32, "GetAsyncKeyState", lambda vk: 0x8000)   # 永远"按下"
+    monkeypatch.setattr(real_input, "_send", lambda inputs: True)
+    monkeypatch.setattr(real_input, "move_cursor_absolute", lambda x, y: True)
+    ok, _interrupted = real_input.send_left_drag((0, 0), (10, 0), 0.05, sleep=lambda _s: None)
+    assert ok is False
+
+
+def test_drag_path_holds_still_before_release(user32, monkeypatch) -> None:
+    """松手前的最后若干次移动都停在终点（不再产生位置变化），避免被识别成甩动。"""
+    monkeypatch.setattr(real_input, "virtual_desktop", lambda: (0, 0, 1000, 1000))
+    real_input.send_left_drag((0, 0), (200, 100), 0.1, sleep=lambda _s: None)
+    moves = [event for event in user32.sent if event["flags"] & real_input.MOUSEEVENTF_MOVE]
+    # 归一化后的坐标：末尾 DRAG_TAIL_HOLD_STEPS 次移动的 dy 相同（都停在终点）
+    tail = moves[-real_input.DRAG_TAIL_HOLD_STEPS:]
+    assert len({(event["dx"], event["dy"]) for event in tail}) == 1
