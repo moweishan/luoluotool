@@ -17,6 +17,7 @@ import numpy as np
 from luoluotool.automation.input_sender import is_window_ready
 from luoluotool.automation.vision import (
     DEFAULT_MAX_RESULTS,
+    DEFAULT_SCALE_RANGE,
     DEFAULT_THRESHOLD,
     Match,
     VisionError,
@@ -24,6 +25,7 @@ from luoluotool.automation.vision import (
     capture_client_bgr,
     load_template,
     locate_all,
+    locate_all_scaled,
     save_image,
 )
 from luoluotool.automation.window import find_window
@@ -51,11 +53,15 @@ def recognize_in_window(
     max_results: int = DEFAULT_MAX_RESULTS,
     annotate_result: bool | None = None,
     capture: Callable[[int], np.ndarray] | None = None,
+    allow_scale: bool = True,
+    scale_range: tuple[float, float] = DEFAULT_SCALE_RANGE,
 ) -> RecognizeResult:
     """在当前游戏窗口客户区里查找 `image_path`，返回命中位置（客户区坐标）。
 
     - 窗口未找到 / 最小化 → 直接给可读结果，不截图；
-    - `capture` 可注入（测试用）；默认走 `vision.capture_client_bgr`；
+    - `capture` 可注入（测试用）；默认走 `vision.capture_client_bgr`（内含黑帧兜底）；
+    - `allow_scale=True`（默认）时做**多尺度匹配**：游戏画面放大/缩小时模板像素尺寸会变，
+      1:1 匹配会失败（用户实测现象）；关闭后只按原始尺寸匹配（更快、更严格）；
     - `annotate_result=None`（默认）时看配置项 `automation.save_vision_annotations`
       （开发者调试页的「识别成功时保存带框截图」开关）；显式传 True/False 可覆盖配置。
       开启时把带框截图存到 `user_data/debug/vision_<时间戳>.png` 便于人工核对。
@@ -79,7 +85,14 @@ def recognize_in_window(
     capture_fn = capture or capture_client_bgr
     try:
         haystack = capture_fn(hwnd)
-        matches = tuple(locate_all(haystack, template, threshold, max_results=max_results))
+        if allow_scale:
+            matches = tuple(
+                locate_all_scaled(
+                    haystack, template, threshold, max_results=max_results, scale_range=scale_range
+                )
+            )
+        else:
+            matches = tuple(locate_all(haystack, template, threshold, max_results=max_results))
     except VisionError as exc:
         return RecognizeResult(False, (), str(exc))
     except Exception as exc:                       # 截图的 Win32 异常也要转成可读结果
@@ -89,8 +102,10 @@ def recognize_in_window(
     height, width = haystack.shape[:2]
     window_size = (int(width), int(height))
     if not matches:
+        mode = "多尺度" if allow_scale else "原始尺寸"
         return RecognizeResult(
-            False, (), f"未识别到目标（阈值 {threshold:.2f}，截图 {width}x{height}）",
+            False, (),
+            f"未识别到目标（阈值 {threshold:.2f}，截图 {width}x{height}，匹配方式：{mode}）",
             window_size=window_size,
         )
 
@@ -99,8 +114,10 @@ def recognize_in_window(
         annotated_path = _save_annotated(haystack, matches)
 
     best = matches[0]
+    scale_text = f"，缩放匹配 {best.scale:.2f}x" if abs(best.scale - 1.0) >= 1e-3 else ""
     lines = [
-        f"识别成功：命中 {len(matches)} 处（截图 {width}x{height}，阈值 {threshold:.2f}）"
+        f"识别成功：命中 {len(matches)} 处"
+        f"（截图 {width}x{height}，阈值 {threshold:.2f}{scale_text}）"
     ]
     for index, match in enumerate(matches, start=1):
         lines.append(f"  {index}) 客户区 {match.describe()}")

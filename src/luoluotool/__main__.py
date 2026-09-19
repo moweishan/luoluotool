@@ -43,6 +43,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="图像识别时不保存带框截图（默认跟随配置项 automation.save_vision_annotations）",
     )
+    parser.add_argument(
+        "--no-scale",
+        action="store_true",
+        help="图像识别只按原始尺寸匹配（默认做多尺度匹配，容忍画面放大/缩小 0.4x–2.0x）",
+    )
     return parser
 
 
@@ -63,6 +68,7 @@ def main(argv: list[str] | None = None) -> int:
             args.threshold,
             Path(args.config) if args.config else None,
             annotate=not args.no_annotate,
+            allow_scale=not args.no_scale,
         )
     config_path = Path(args.config) if args.config else None
     return run_gui([sys.argv[0]], smoke=args.smoke_gui, config_path=config_path)
@@ -137,11 +143,18 @@ def _measure_layout(config_path: Path | None) -> int:
     return 0 if measure.ok else 1
 
 
-def _recognize(image_path: Path, threshold: float, config_path: Path | None, annotate: bool) -> int:
+def _recognize(
+    image_path: Path,
+    threshold: float,
+    config_path: Path | None,
+    annotate: bool,
+    allow_scale: bool = True,
+) -> int:
     """命令行图像识别：在游戏窗口里查找 `image_path`，打印命中位置的客户区坐标。
 
     退出码：0 命中；1 未命中或识别失败（便于脚本判断）；2 参数非法。
     带框截图：传 `--no-annotate` 强制关闭；否则跟随配置 `automation.save_vision_annotations`。
+    匹配方式：默认多尺度（容忍画面缩放 0.4x–2.0x）；`--no-scale` 只按原始尺寸匹配。
     """
     if not 0.0 < threshold <= 1.0:
         _print_safe(f"阈值必须大于 0 且不超过 1：{threshold}")
@@ -158,6 +171,7 @@ def _recognize(image_path: Path, threshold: float, config_path: Path | None, ann
     result = recognize_in_window(
         config, image_path, threshold=threshold,
         annotate_result=None if annotate else False,
+        allow_scale=allow_scale,
     )
     _print_safe(result.message)
     return 0 if result.found else 1

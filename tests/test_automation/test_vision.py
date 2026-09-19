@@ -1,5 +1,7 @@
 """automation.vision 测试：模板匹配纯函数、模板加载、截图转数组（合成图像，不依赖游戏窗口）。"""
 
+import logging
+
 import numpy as np
 import pytest
 
@@ -214,3 +216,168 @@ def test_capture_client_bgr_reports_render_failure(monkeypatch) -> None:
     monkeypatch.setattr(vision, "_render_client_bits", boom)
     with pytest.raises(vision.VisionError):
         vision.capture_client_bgr(1)
+
+
+# ---------------------------------------------------------------- 黑帧兜底
+
+
+def test_is_blank_frame_detection() -> None:
+    """纯色大图判为黑帧；有内容的图与极小图不算。"""
+    assert vision.is_blank_frame(np.zeros((40, 40, 3), dtype=np.uint8)) is True
+    assert vision.is_blank_frame(np.full((40, 40, 3), 200, dtype=np.uint8)) is True
+    assert vision.is_blank_frame(_haystack(40, 40)) is False
+    assert vision.is_blank_frame(np.zeros((1, 1, 3), dtype=np.uint8)) is False   # 太小无法判断
+
+
+def test_capture_client_bgr_falls_back_on_blank_frame(monkeypatch, caplog) -> None:
+    """PrintWindow 取到纯黑帧时自动换其它取景方式（GPU 独占渲染游戏的实测问题）。"""
+    caplog.set_level(logging.WARNING)
+    width, height = 40, 40
+    blank_bits = bytes(width * height * 4)
+    good = _haystack(height, width)
+    monkeypatch.setattr(vision, "_render_client_bits", lambda hwnd: (width, height, blank_bits))
+    monkeypatch.setattr(vision, "_render_client_bgr_fallback", lambda hwnd: good.copy())
+
+    image = vision.capture_client_bgr(1)
+    assert image.std() > 1                      # 拿到的是有内容的帧
+    assert image.shape == good.shape
+    assert "纯色" in caplog.text or "黑帧" in caplog.text
+
+
+def test_capture_client_bgr_reports_actionable_error_when_all_blank(monkeypatch) -> None:
+    """所有取景方式都是黑帧 → 可读错误并给出「以管理员身份运行 / 让窗口可见」的指引。"""
+    width, height = 40, 40
+    blank_bits = bytes(width * height * 4)
+    monkeypatch.setattr(vision, "_render_client_bits", lambda hwnd: (width, height, blank_bits))
+    monkeypatch.setattr(vision, "_render_client_bgr_fallback", lambda hwnd: None)
+
+    with pytest.raises(vision.VisionError) as excinfo:
+        vision.capture_client_bgr(1)
+    message = str(excinfo.value)
+    assert "纯色" in message or "黑帧" in message
+    assert "管理员" in message and "窗口" in message
+
+
+# ---------------------------------------------------------------- 多尺度（缩放）匹配
+
+
+def _rich_pattern(height: int = 40, width: int = 64) -> np.ndarray:
+    """造一个"有信息量"的图案（多区块 + 斜纹 + 圆点）。
+
+    多尺度测试必须用这种图案：20x10 那种小图案在任意缩放下都能"像"别的区域，
+    缩放判断本身就没有唯一解（模板匹配的固有限制），拿它测多尺度没有意义。
+    """
+    import cv2
+
+    canvas = np.zeros((height, width, 3), dtype=np.uint8)
+    canvas[:, : width // 2] = 210
+    canvas[: height // 2, :] = 120
+    for index in range(0, height, 6):                     # 斜纹
+        canvas[index : index + 2, :] = 60
+    cv2.circle(canvas, (width // 2, height // 2), min(height, width) // 4, (255, 255, 255), -1)
+    cv2.rectangle(canvas, (width - 12, 4), (width - 4, height - 4), (30, 30, 30), -1)
+    return canvas
+
+
+def _scaled(pattern: np.ndarray, scale: float) -> np.ndarray:
+    import cv2
+
+    height, width = pattern.shape[:2]
+    return cv2.resize(
+        pattern, (int(round(width * scale)), int(round(height * scale))),
+        interpolation=cv2.INTER_AREA if scale < 1 else cv2.INTER_LINEAR,
+    )
+
+
+def test_locate_scaled_finds_enlarged_template() -> None:
+    """画面被放大（模板需要放大后才匹配）：多尺度搜索必须找到，并报出缩放比例。"""
+    canvas = _haystack(300, 500)
+    pattern = _scaled(_rich_pattern(), 1.4)
+    _paste(canvas, pattern, 60, 40)
+
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 1.4) <= 0.03
+    assert abs(match.left - 60) <= 3 and abs(match.top - 40) <= 3
+    assert "缩放" in match.describe()
+
+
+def test_locate_scaled_finds_shrunk_template() -> None:
+    """画面被缩小（模板需要缩小后才匹配）同样要能找到。"""
+    canvas = _haystack(300, 500)
+    pattern = _scaled(_rich_pattern(), 0.6)
+    _paste(canvas, pattern, 100, 80)
+
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert match is not None
+    assert abs(match.scale - 0.6) <= 0.03
+    assert abs(match.left - 100) <= 3 and abs(match.top - 80) <= 3
+
+
+def test_locate_scaled_reports_scale_one_for_exact_match() -> None:
+    """原始尺寸就匹配时，缩放应识别为 1.0x（不要瞎报缩放）。"""
+    canvas = _haystack(300, 500)
+    pattern = _rich_pattern()
+    _paste(canvas, pattern, 50, 30)
+
+    match = vision.locate_best_scaled(canvas, pattern, threshold=0.9)
+    assert match is not None and abs(match.scale - 1.0) <= 0.03
+    assert (match.left, match.top) == (50, 30)
+
+
+def test_locate_scaled_finds_scale_between_coarse_steps() -> None:
+    """回归：真实缩放落在粗搜两档之间（0.75x）也必须命中 —— 阈值必须在精修之后再判。
+
+    实测过：0.70x 粗搜只有 0.83（低于 0.85），若在精修前就用阈值返回，就会漏掉
+    精修后 0.74x 的 0.95 命中。
+    """
+    canvas = _haystack(300, 500)
+    pattern = _scaled(_rich_pattern(), 0.75)
+    _paste(canvas, pattern, 120, 90)
+
+    match = vision.locate_best_scaled(canvas, _rich_pattern(), threshold=0.85)
+    assert match is not None
+    assert abs(match.scale - 0.75) <= 0.03
+    assert abs(match.left - 120) <= 3 and abs(match.top - 90) <= 3
+
+
+def test_locate_scaled_returns_empty_when_absent() -> None:
+    """画面里没有目标时返回空（多尺度不能凭空匹配出来）。"""
+    assert vision.locate_all_scaled(_haystack(), _rich_pattern(), threshold=0.9) == []
+    assert vision.locate_best_scaled(_haystack(), _rich_pattern(), threshold=0.9) is None
+
+
+def test_locate_scaled_multiple_targets_at_same_scale() -> None:
+    """同一缩放下有多个目标：全部返回（NMS 不误合并）。"""
+    canvas = _haystack(240, 560)
+    pattern = _scaled(_rich_pattern(), 1.2)
+    _paste(canvas, pattern, 20, 30)
+    _paste(canvas, pattern, 300, 130)
+
+    matches = vision.locate_all_scaled(canvas, _rich_pattern(), threshold=0.9)
+    assert len(matches) == 2
+    assert {m.center for m in matches} == {
+        (20 + pattern.shape[1] // 2, 30 + pattern.shape[0] // 2),
+        (300 + pattern.shape[1] // 2, 130 + pattern.shape[0] // 2),
+    }
+    assert all(abs(m.scale - 1.2) <= 0.03 for m in matches)
+
+
+def test_locate_scaled_respects_scale_range() -> None:
+    """限定缩放范围时，范围外的尺寸不会被匹配到。"""
+    canvas = _haystack(300, 500)
+    _paste(canvas, _scaled(_rich_pattern(), 1.8), 50, 50)
+    assert vision.locate_best_scaled(
+        canvas, _rich_pattern(), threshold=0.9, scale_range=(0.8, 1.2)
+    ) is None
+    assert vision.locate_best_scaled(
+        canvas, _rich_pattern(), threshold=0.9, scale_range=(1.5, 2.0)
+    ) is not None
+
+
+def test_scale_candidates_are_sorted_and_deduplicated() -> None:
+    """缩放候选列表：从小到大、去重、往返包含端点。"""
+    scales = vision.scale_candidates((0.8, 1.2), 0.2)
+    assert scales == [0.8, 1.0, 1.2]
+    assert vision.scale_candidates((1.1, 0.9), 0.1) == [0.9, 1.0, 1.1]
+    assert vision.scale_candidates((1.0, 1.0), 0.1) == [1.0]
