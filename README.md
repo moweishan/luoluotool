@@ -112,7 +112,75 @@ AI 编辑器的新会话不会记得之前的对话。每次新开会话时，�
 | 安全底线 | 干跑模式默认开启 + F8 全局急停热键；真实模式需用户确认；不上传日志/配置/截图；账号密码 token 永不收集 |
 | 任务编排 | 队列 = **日常任务组**（任务勾选，按 `order` + 任务 ID 字典序）→ **单功能组**（功能主开关，固定 `order_hold` → `feature_3` → `feature_4`）；失败计数与循环对整队列统一；启动时日志打印 `任务队列（N 个）：a → b → c`（Phase 6，预留开关不参与编排） |
 
-## 7. 风险声明（必须阅读）
+## 7. 构建与发布（Phase 7）
+
+### 7.1 一键构建
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build.ps1
+```
+
+脚本流程（任一环节失败即中止并返回非 0 退出码）：
+
+1. 准备 `.venv` 虚拟环境（不存在则创建）；
+2. 安装 `requirements-dev.txt`（离线时自动降级为"检查关键依赖是否已存在"）；
+3. **构建前门禁**：`pytest -q` 全量测试 + `--validate-config` + `--measure-layout`；
+4. 清理 `build\`、`dist\` 后执行 `PyInstaller --clean --noconfirm packaging\LuoLuoTool.spec`（one-dir）；
+5. 打印产物体积（exe 大小 + 目录合计 + 文件数）；
+6. exe 冒烟并输出启动耗时：`--version` → `--validate-config` → `--smoke-gui`。
+
+可选参数：`-SkipInstall`（离线/已装好依赖）、`-SkipTests`（仅排错用，**正式打包不要跳过**）。
+
+### 7.2 产物与分发
+
+- 产物：`dist\LuoLuoTool\LuoLuoTool.exe`；**必须整个 `dist\LuoLuoTool\` 目录一起拷贝**（one-dir）。
+- 目标机器**无需安装 Python**；首次运行会在产物目录下自动生成 `user_data\`（配置）与 `logs\`（日志）。
+- 采用控制台子系统：命令行能看到日志与退出码。若不想要黑窗口，把 `packaging\LuoLuoTool.spec`
+  里的 `console=True` 改为 `False` 重新打包即可（代价：命令行输出需重定向才能看到）。
+- 版本号来源：`src/luoluotool/__init__.py` 的 `__version__`；`packaging\version_info.txt`
+  必须同步（`tests/test_packaging.py` 有守卫测试，改版本号时两处一起改）。
+
+### 7.3 杀软误报处理（必须先做）
+
+PyInstaller 打包的 exe 常被 Windows Defender / 国产杀软误报为可疑程序（bootloader 特征），
+**不是病毒**。处理方式（二选一）：
+
+1. Windows 安全中心 → 病毒和威胁防护 → 管理设置 → 排除项 → 添加排除项 → **文件夹** →
+   选择 `D:\...\LuoLuoTool\dist\LuoLuoTool`；
+2. 或把整个 `dist\LuoLuoTool` 目录加入所用杀软的信任区，再运行。
+
+若仍被隔离：把 exe 从隔离区恢复并加白，重新执行 7.1 构建。
+
+### 7.4 干净机器验证步骤（无 Python 环境）
+
+1. 在目标机器（Windows 10/11 x64）上创建目录，例如 `D:\LuoLuoTool\`；
+2. 把整个 `dist\LuoLuoTool\` **目录**拷贝进去（不要只拷 exe）；
+3. 加白名单（见 7.3）；
+4. 打开 `cmd`/PowerShell 在该目录执行：
+   `LuoLuoTool.exe --version`（应打印 `luoluotool 0.1.0`）、`LuoLuoTool.exe --smoke-gui`（退出码 0）；
+5. 双击 `LuoLuoTool.exe` 打开 GUI：检查五个页签可切换、日志面板有输出；
+6. 改一个设置（例如勾选"开发者调试"）→ 点「保存」→ 关闭程序再启动，确认设置被记住
+   （文件位置：`user_data\config.json`）；
+7. 点「窗口诊断」应能查找游戏窗口并截图到 `user_data\debug\`（需游戏已启动且本工具已提权）。
+
+> 已知限制：未做代码签名（首次运行可能有 SmartScreen 提示）；one-dir 首次启动比开发期慢
+> （一次性解包 + Qt 初始化）；不做 one-file 与安装包（Phase 7 明确范围外）。
+
+> 已知问题：冻结后的 exe 跑 `--measure-layout` 会在 GBK 控制台报 `UnicodeEncodeError`（报告里含 `✓` 等符号），
+> 退出码 1；`--version` / `--validate-config` / `--smoke-gui` 与 GUI 不受影响。属业务代码问题，
+> 按 Phase 7「不改业务代码」的要求只记录未修改，详见 `PROJECT_SPEC.md` 已知问题 1。
+
+### 7.5 实测数据（2026-09-19，本机 Windows 10 x64）
+
+| 指标 | 数值 |
+|---|---|
+| exe 大小 | 2.18 MB（`LuoLuoTool.exe`，含图标与版本资源） |
+| 产物目录 | 114.4 MB / 221 个文件（其中 `_internal` 111.6 MB、`assets` 0.6 MB） |
+| `--version` 启动耗时 | 冷启动 2.5 s（首次运行）/ 热启动 **0.73 s**（3 次平均） |
+| `--smoke-gui` 耗时（含建窗 + 布局） | **0.82 s**（热启动 3 次平均） |
+| 无 Python 环境验证 | 拷贝到新目录 + 最小 PATH（`C:\Windows\system32;C:\Windows`）→ 三项命令退出码均 0，自动生成 `user_data\config.json` 与 `logs\` |
+
+## 8. 风险声明（必须阅读）
 
 本工具通过模拟键鼠操作自动化游戏日常，**可能违反游戏用户协议，存在封号风险**，
 且坐标/图像自动化在不同分辨率、窗口位置下可能失效。本文件夹要求：

@@ -245,7 +245,7 @@
 | 窗口查找/截图 | pywin32（win32gui / win32ui）；`automation/real_input.py` 负责置顶/置前与注入原语 | 成熟；后续可用截图做锚点匹配 |
 | 图像匹配 | 暂不引入；需要时用 `opencv-python-headless` + `numpy` | 体积大，先不用 |
 | 测试 | pytest | 事实标准 |
-| 打包 | PyInstaller（先 one-dir，稳定后可选 one-file） | 生态成熟；注意杀软误报，需在文档说明加白 |
+| 打包 | PyInstaller one-dir（`packaging/build.ps1` + `LuoLuoTool.spec`，构建前强制全量测试；不做 one-file 与安装包） | 生态成熟；注意杀软误报，需在文档说明加白 |
 
 **依赖纪律**：`requirements.txt` 之外的包一律不得直接 `pip install` 使用；确需新增依赖，必须先改 `requirements.txt` 并在提交信息里说明理由。
 
@@ -288,7 +288,8 @@ LuoLuoTool/
 │   └── icons/               # 静态资源：窗口图标等（入库）
 ├── user_data/               # 运行时生成，git 忽略；config.example.json 入库
 ├── logs/                    # git 忽略
-└── packaging/               # LuoluoTool.spec、icon.ico、version_info.txt
+└── packaging/               # 打包（Phase 7）：LuoLuoTool.spec、version_info.txt、build.ps1
+                             # 产物 dist\LuoLuoTool\（one-dir，git 忽略）；资源与 exe 同级
 ```
 
 **分层铁律**：
@@ -424,6 +425,18 @@ LuoLuoTool/
 | Phase 5 | 输入通道可启停、日志完整（当时的窗口消息通道与失焦暂停已于 2026-09-16 随 Phase 5.3 收敛删除） |
 | Phase 6 | 卡订单与预留页逻辑闭环（开关 → 入队 → 日志 → 可急停），任务编排规则明确且可测，预留开关零行为 |
 | Phase 7 | exe 在干净 Windows 上冒烟通过 |
+
+### 已知问题（Phase 7 打包时发现，待修复；Phase 7 未改业务代码）
+1. **冻结 exe 的 `--measure-layout` 在 GBK 控制台崩溃**：`__main__._measure_layout` 直接 `print()` 布局报告，
+   报告里含 `✓ ✗ ·` 等 GBK 无法编码的符号 → `UnicodeEncodeError` → 退出码 1
+   （复现：`dist\LuoLuoTool\LuoLuoTool.exe --measure-layout`）。
+   开发期之所以不报错，是因为本机 CPython 处于 UTF-8 模式（`sys.flags.utf8_mode == 1`，stdout 编码 utf-8）；
+   冻结后 PyInstaller 的隔离解释器按 ANSI 代码页（cp936）初始化 stdout，且**忽略** `PYTHONIOENCODING` /
+   `PYTHONUTF8` / `chcp 65001`（四种规避方式实测均无效）。
+   影响面：仅该 CLI 子命令（`--version`/`--validate-config`/`--smoke-gui` 与 GUI 均正常；
+   日志走 stderr 的 backslashreplace 与 UTF-8 日志文件，不受影响）。
+   建议修法（任选其一，属业务代码，需在对应阶段改）：报告改用 ASCII 符号；或在打印前
+   `sys.stdout.reconfigure(errors="replace")`。
 
 ## 12. 变更管理
 
