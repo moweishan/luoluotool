@@ -566,6 +566,29 @@ powershell -ExecutionPolicy Bypass -File packaging\build.ps1
 
 ---
 
+## 增量记录（2026-09-19，用户直接指示的三项改动）
+
+用户原话要点：①所有鼠标点击必须校验点击位置在游戏窗口之内，越界则不点击并给日志提示；
+②干跑模式默认不开启（首次启动与默认配置）；③开发者调试未开启时，调试页所有选项都不生效。
+
+**做了什么**
+
+1. **点击越界校验**（`automation/input_sender.py`）：新增 `point_in_client_area(hwnd, x, y)`（客户区 `[0,width)×[0,height)`，读取失败按越界处理）与干跑用的惰性 `_dry_run_bounds()`；
+   - `RealInputSender.click_at`：**先**校验坐标，越界直接 WARNING + return（不置顶、不移动光标、不点击）；
+   - `DryRunSender`：新增 `bounds` 回调，越界点击同样跳过并写「干跑：点击坐标 … 不在游戏窗口内（…），已跳过」，`click()` 现在委托 `click_at()`；
+   - `build_channel` 干跑分支注入惰性校验（**构建时不查窗口**，保持"干跑无需游戏运行"）。覆盖所有点击入口（任务 A 的 click_points、调试页单点/连点）。
+   - 范围说明：**只覆盖点击**；滑动（drag）未纳入（有测试把这个边界固定下来，需要时再提需求）。
+2. **干跑默认关闭**：`AutomationConfig.dry_run` 默认与 `from_dict` 回落值都由 `True` 改为 `False`；`user_data/config.example.json` 与 `PROJECT_SPEC.md`（§3/§9/§11）同步。
+   - 新增 `tests/conftest.py`：autouse 夹具把 `AppConfig.default()` 的 `dry_run` 强制为 `True`，**保证单测永不进入真实模式**（红线）；断言生产默认值的测试用 `@pytest.mark.real_defaults` 例外（已注册 marker）。
+   - 未改 schema（无字段增删），已有配置里的显式 `dry_run` 值不受影响。
+3. **调试页选项门禁**：`DebugPage.set_config` 按 `developer_mode` 设置整页可用性；`_on_dry_run_toggled` 在未开启调试时**回滚勾选、不写配置**并提示；主窗口新增 `_debug_actions_allowed()`，测试/窗口诊断/布局测量三个入口都先过门禁；关闭开发者调试时中断正在运行的调试线程。
+   - ⚠️ 副作用（用户已知并选择）：干跑开关位于调试页，因此**未开启开发者调试时无法从 UI 切换干跑**（需要时可在设置页恢复一个独立开关）。
+
+**验收**：全量 **354 项测试通过**；`--validate-config` = OK；`--smoke-gui` 退出码 0；`--measure-layout` = 不改变任何高度。
+实测：生产默认 `dry_run=False`；首次生成配置 `dry_run=false`；对真实游戏窗口（客户区 1920×1052）干跑点击 (10,10) → 模拟点击、(99999,99999) → 越界跳过 + WARNING。
+
+---
+
 ## 后续阶段（先不执行，仅占位）
 
 当你有新的真实需求时（例如「收菜」「卡订单具体操作」），按下面模板新建阶段：
