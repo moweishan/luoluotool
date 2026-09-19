@@ -13,6 +13,8 @@ from collections.abc import Callable
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDoubleSpinBox,
+    QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -23,6 +25,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
+from luoluotool.automation.vision import DEFAULT_THRESHOLD as DEFAULT_VISION_THRESHOLD
 from luoluotool.config.models import AppConfig
 from luoluotool.gui.widgets import ScrollablePage
 
@@ -33,6 +36,7 @@ COORDINATE_MAX = 10000
 COUNT_RANGE = (1, 200)
 INTERVAL_RANGE_MS = (50, 5000)
 DURATION_RANGE_MS = (50, 10000)
+VISION_THRESHOLD_MIN = 0.30
 
 
 def _spin(maximum: int, minimum: int = 0, suffix: str = "") -> QSpinBox:
@@ -164,6 +168,28 @@ class DebugPage(ScrollablePage):
         self.key_button.clicked.connect(self._on_key_clicked)
         layout.addWidget(key_group)
 
+        # ---- 图像识别 ----
+        vision_group = QGroupBox("图像识别测试")
+        vision_grid = QGridLayout(vision_group)
+        self.vision_path_edit = QLineEdit()
+        self.vision_path_edit.setPlaceholderText("模板图片路径（PNG/JPG，支持中文路径）")
+        self.vision_browse_button = QPushButton("选择图片…")
+        self.vision_threshold_spin = QDoubleSpinBox()
+        self.vision_threshold_spin.setRange(VISION_THRESHOLD_MIN, 1.0)
+        self.vision_threshold_spin.setSingleStep(0.01)
+        self.vision_threshold_spin.setDecimals(2)
+        self.vision_threshold_spin.setValue(DEFAULT_VISION_THRESHOLD)
+        self.vision_button = QPushButton("识别图片")
+        vision_grid.addWidget(QLabel("图片"), 0, 0)
+        vision_grid.addWidget(self.vision_path_edit, 0, 1, 1, 2)
+        vision_grid.addWidget(self.vision_browse_button, 0, 3)
+        vision_grid.addWidget(QLabel("阈值"), 1, 0)
+        vision_grid.addWidget(self.vision_threshold_spin, 1, 1)
+        vision_grid.addWidget(self.vision_button, 1, 2, 1, 2)
+        self.vision_button.clicked.connect(self._on_vision_clicked)
+        self.vision_browse_button.clicked.connect(self._on_vision_browse_clicked)
+        layout.addWidget(vision_group)
+
         self.status_label = QLabel("就绪")
         self.status_label.setWordWrap(True)
         layout.addWidget(self.status_label)
@@ -183,7 +209,8 @@ class DebugPage(ScrollablePage):
     def set_busy(self, busy: bool) -> None:
         """执行期间禁用所有测试按钮，避免重复触发。"""
         for button in (self.single_button, self.repeat_button, self.swipe_button,
-                       self.key_button, self.diagnose_button, self.layout_measure_button):
+                       self.key_button, self.diagnose_button, self.layout_measure_button,
+                       self.vision_button, self.vision_browse_button):
             button.setEnabled(not busy)
 
     def set_status(self, message: str) -> None:
@@ -228,3 +255,16 @@ class DebugPage(ScrollablePage):
             "count": self.key_count_spin.value(),
             "interval_ms": self.key_interval_spin.value(),
         })
+
+    def _on_vision_clicked(self) -> None:
+        self.test_requested.emit("vision", {
+            "image": self.vision_path_edit.text().strip(),
+            "threshold": self.vision_threshold_spin.value(),
+        })
+
+    def _on_vision_browse_clicked(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择模板图片", "", "图片 (*.png *.jpg *.jpeg *.bmp)"
+        )
+        if path:
+            self.vision_path_edit.setText(path)

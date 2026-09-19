@@ -7,6 +7,12 @@ PySide6>=6.6,<7
 # Windows 窗口查找 / 截图
 pywin32>=306; platform_system == "Windows"
 
+# 图像识别（模板匹配，2026-09-19 用户要求启用）
+# 理由：坐标式自动化在换分辨率/换界面后易失效，需要"按图找点"；
+#       opencv-python-headless 不含 GUI 组件（比 opencv-python 小、也不引入多余 Qt 依赖），
+#       numpy 是 OpenCV Python 绑定的必要依赖。代价：打包体积增加约 60–70 MB。
+numpy>=1.26
+opencv-python-headless>=4.9
+
 # 说明：
 # - 输入模拟使用标准库 ctypes 调用 SendInput，不引入 pyautogui。
-# - 图像匹配暂不引入 opencv；确需使用时再添加 opencv-python-headless 与 numpy 并说明理由。

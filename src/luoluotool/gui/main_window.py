@@ -39,6 +39,7 @@ from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
 from luoluotool.core import debug as debug_actions
+from luoluotool.core import vision as vision_actions
 from luoluotool.gui.layout_measure import format_measure_report, measure_layout
 from luoluotool.gui.pages.daily import DailyPage
 from luoluotool.gui.pages.debug import PAGE_TITLE, DebugPage
@@ -155,6 +156,11 @@ def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
         return debug_actions.run_key(
             config, params["combo"], params["count"], params["interval_ms"], log, stop_event
         )
+    if kind == "vision":
+        # 图像识别：找窗口 → 截图 → 模板匹配 → 返回命中位置（客户区坐标）
+        return vision_actions.recognize_in_window(
+            config, params["image"], threshold=params["threshold"]
+        ).message
     raise ValueError(f"未知的调试测试类型：{kind}")
 
 

@@ -36,3 +36,25 @@ def _tests_always_run_in_dry_run(request, monkeypatch):
         return config
 
     monkeypatch.setattr(AppConfig, "default", classmethod(patched))
+
+
+@pytest.fixture(autouse=True)
+def _tests_never_query_real_desktop(monkeypatch):
+    """单测不查询真实桌面窗口：让**调用方**持有的 `find_window` 一律返回 None。
+
+    原因：干跑通道的坐标越界校验、图像识别都会在运行期查窗口；若测试命中用户真实运行的
+    游戏窗口，断言结果就会随环境变化（实测过：客户区 0x0 → 点击被判定越界跳过，
+    导致"干跑应写模拟点击日志"的用例失败）。需要窗口的测试自行 monkeypatch
+    `find_window`（会覆盖本夹具的补丁）。
+
+    注意：`automation.window.find_window` 本身是被测对象（有专属用例注入假 EnumWindows），
+    这里不动它；`window.diagnose_window` 这类调用模块内函数的路径，由各自的测试自行打补丁。
+    """
+    from luoluotool.automation import input_sender
+
+    monkeypatch.setattr(input_sender, "find_window", lambda keyword: None)
+    try:                                  # core.vision 在导入时绑定了自己的引用
+        from luoluotool.core import vision as core_vision
+    except ImportError:                   # 环境缺 numpy/opencv 时跳过（不影响其它测试）
+        return
+    monkeypatch.setattr(core_vision, "find_window", lambda keyword: None)

@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from luoluotool import __version__
+from luoluotool.automation.vision import DEFAULT_THRESHOLD as DEFAULT_VISION_THRESHOLD
 from luoluotool.config.validation import migrate, validate
 from luoluotool.gui.app import run as run_gui
 from luoluotool.utils.paths import get_user_data_dir
@@ -25,6 +26,23 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="离屏测量各页签的布局占用并打印报告（页签高度稳定规则的回归检查）",
     )
+    parser.add_argument(
+        "--recognize",
+        metavar="IMAGE",
+        help="在当前游戏窗口客户区里查找该图片（模板匹配），打印命中位置的客户区坐标",
+    )
+    parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_VISION_THRESHOLD,
+        metavar="0-1",
+        help=f"图像识别阈值（默认 {DEFAULT_VISION_THRESHOLD}，越高越严格）",
+    )
+    parser.add_argument(
+        "--no-annotate",
+        action="store_true",
+        help="图像识别时不保存带框截图（默认保存到 user_data/debug/）",
+    )
     return parser
 
 
@@ -39,6 +57,13 @@ def main(argv: list[str] | None = None) -> int:
         return _validate_config(path)
     if args.measure_layout:
         return _measure_layout(Path(args.config) if args.config else None)
+    if args.recognize:
+        return _recognize(
+            Path(args.recognize),
+            args.threshold,
+            Path(args.config) if args.config else None,
+            annotate=not args.no_annotate,
+        )
     config_path = Path(args.config) if args.config else None
     return run_gui([sys.argv[0]], smoke=args.smoke_gui, config_path=config_path)
 
@@ -110,6 +135,30 @@ def _measure_layout(config_path: Path | None) -> int:
     window.deleteLater()
     app.processEvents()
     return 0 if measure.ok else 1
+
+
+def _recognize(image_path: Path, threshold: float, config_path: Path | None, annotate: bool) -> int:
+    """命令行图像识别：在游戏窗口里查找 `image_path`，打印命中位置的客户区坐标。
+
+    退出码：0 命中；1 未命中或识别失败（便于脚本判断）；2 参数非法。
+    """
+    if not 0.0 < threshold <= 1.0:
+        _print_safe(f"阈值必须大于 0 且不超过 1：{threshold}")
+        return 2
+
+    from luoluotool.config import store
+    from luoluotool.config.models import AppConfig
+    from luoluotool.core.vision import recognize_in_window
+    from luoluotool.utils import logging_setup
+
+    logging_setup.setup_logging()
+    path = config_path or get_user_data_dir() / "config.json"
+    config = store.load(path) if path.exists() else AppConfig.default()
+    result = recognize_in_window(
+        config, image_path, threshold=threshold, annotate_result=annotate
+    )
+    _print_safe(result.message)
+    return 0 if result.found else 1
 
 
 if __name__ == "__main__":

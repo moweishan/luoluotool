@@ -673,6 +673,46 @@ def test_feature_task_run_logs_planned_message_end_to_end(window_factory, tmp_pa
     assert "order_hold" in planned[0] and "feature_3" in planned[1]
 
 
+def test_run_debug_action_dispatches_vision(monkeypatch) -> None:
+    """调试动作分发：kind="vision" 走 core.vision 识别，并把结果消息回给界面。"""
+    from luoluotool.core import vision as vision_actions
+    from luoluotool.gui import main_window as mw
+
+    calls: list[tuple] = []
+
+    class _Result:
+        message = "识别成功：命中 1 处\n  1) 客户区 中心 (60, 35) 匹配度 1.000"
+
+    def fake_recognize(config, image, threshold):
+        calls.append((image, threshold))
+        return _Result()
+
+    monkeypatch.setattr(vision_actions, "recognize_in_window", fake_recognize)
+    message = mw.run_debug_action(
+        AppConfig.default(), "vision", {"image": "a.png", "threshold": 0.8},
+        logging.getLogger("t"), None,
+    )
+    assert calls == [("a.png", 0.8)]
+    assert "识别成功" in message and "(60, 35)" in message
+
+
+def test_vision_debug_action_reports_missing_template(monkeypatch, tmp_path) -> None:
+    """端到端（不经真实截图）：模板文件不存在时，调试线程回传可读消息而不抛异常。"""
+    from luoluotool.core import vision as vision_actions
+    from luoluotool.gui import main_window as mw
+
+    monkeypatch.setattr(vision_actions, "find_window", lambda keyword: 555)
+    monkeypatch.setattr(vision_actions, "is_window_ready", lambda hwnd: True)
+    messages: list[str] = []
+    thread = mw._DebugTestThread(
+        AppConfig.default(), "vision", {"image": str(tmp_path / "缺失.png"), "threshold": 0.85},
+        logging.getLogger("t"),
+    )
+    thread.finished_message.connect(messages.append)
+    thread.run()                       # 同步执行（不等待线程）
+    assert messages and "无法读取模板图片" in messages[0]
+
+
 def test_debug_actions_are_rejected_when_developer_mode_off(window_factory, tmp_path, caplog) -> None:
     """开发者调试未开启：调试动作（测试/诊断/布局测量）一律拒绝执行并给出提示。"""
     import logging as _logging

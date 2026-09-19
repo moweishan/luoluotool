@@ -276,6 +276,41 @@ def test_debug_page_options_are_active_when_developer_mode_on() -> None:
     page.close()
 
 
+def test_debug_page_vision_group_emits_image_and_threshold() -> None:
+    """调试页「图像识别测试」：图片路径 + 阈值随请求发出（开发者调试开启时生效）。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    requests: list[tuple] = []
+    page.test_requested.connect(lambda kind, params: requests.append((kind, params)))
+
+    page.vision_path_edit.setText(r"D:\shots\按钮.png")
+    page.vision_threshold_spin.setValue(0.91)
+    page.vision_button.click()
+
+    assert requests == [("vision", {"image": r"D:\shots\按钮.png", "threshold": 0.91})]
+    assert round(page.vision_threshold_spin.minimum(), 2) == 0.30
+    assert round(page.vision_threshold_spin.maximum(), 2) == 1.00
+    page.close()
+
+
+def test_debug_page_vision_button_respects_busy_state() -> None:
+    """执行期间「识别图片 / 选择图片」按钮同样被禁用。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    page.set_busy(True)
+    assert page.vision_button.isEnabled() is False
+    assert page.vision_browse_button.isEnabled() is False
+    page.set_busy(False)
+    assert page.vision_button.isEnabled() is True
+    page.close()
+
+
 def test_debug_page_busy_disables_buttons_and_status() -> None:
     """执行期间禁用全部测试按钮，并显示状态文案。"""
     from luoluotool.gui.pages.debug import DebugPage
