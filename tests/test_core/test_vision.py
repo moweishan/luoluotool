@@ -230,3 +230,47 @@ def test_cli_recognize_rejects_bad_threshold(tmp_path, capsys) -> None:
     code = main(["--recognize", str(tmp_path / "x.png"), "--threshold", "1.5"])
     assert code == 2
     assert "阈值必须大于 0 且不超过 1" in capsys.readouterr().out
+
+
+# ------------------------------------------------- 截图给「框选生成模板」用
+
+
+def test_capture_window_returns_image(monkeypatch) -> None:
+    """正常情况：返回截图数组与空消息（不含任何输入）。"""
+    _patch_window(monkeypatch)
+    image, message = core_vision.capture_window(
+        AppConfig.default(), capture=lambda hwnd: _haystack()
+    )
+    assert image is not None and image.shape == (120, 200, 3)
+    assert message == ""
+
+
+def test_capture_window_without_window(monkeypatch) -> None:
+    """找不到窗口：不截图，返回可读消息。"""
+    monkeypatch.setattr(core_vision, "find_window", lambda keyword: None)
+
+    def forbidden(hwnd):
+        raise AssertionError("窗口不存在时不应截图")
+
+    image, message = core_vision.capture_window(AppConfig.default(), capture=forbidden)
+    assert image is None and "未找到标题含" in message
+
+
+def test_capture_window_when_minimized(monkeypatch) -> None:
+    """窗口最小化：拒绝截图并提示恢复窗口。"""
+    _patch_window(monkeypatch, ready=False)
+    image, message = core_vision.capture_window(
+        AppConfig.default(), capture=lambda hwnd: _haystack()
+    )
+    assert image is None and ("最小化" in message or "不可见" in message)
+
+
+def test_capture_window_reports_capture_failure(monkeypatch) -> None:
+    """截图抛错：转成可读消息，不向上抛。"""
+    _patch_window(monkeypatch)
+
+    def boom(hwnd):
+        raise automation_vision.VisionError("截图失败：窗口已关闭")
+
+    image, message = core_vision.capture_window(AppConfig.default(), capture=boom)
+    assert image is None and "截图失败" in message

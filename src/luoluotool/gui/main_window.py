@@ -11,6 +11,7 @@ from PySide6.QtGui import QCloseEvent, QIcon
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
+    QDialog,
     QHBoxLayout,
     QMainWindow,
     QMessageBox,
@@ -40,6 +41,7 @@ from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
 from luoluotool.core import debug as debug_actions
 from luoluotool.core import vision as vision_actions
+from luoluotool.gui.dialogs.crop_dialog import TemplateCropDialog
 from luoluotool.gui.layout_measure import format_measure_report, measure_layout
 from luoluotool.gui.pages.daily import DailyPage
 from luoluotool.gui.pages.debug import PAGE_TITLE, DebugPage
@@ -48,7 +50,7 @@ from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
 from luoluotool.gui.widgets import LogPanelHandler
-from luoluotool.utils.paths import get_debug_dir, get_icons_dir
+from luoluotool.utils.paths import get_anchors_dir, get_debug_dir, get_icons_dir
 
 logger = logging.getLogger(__name__)
 
@@ -164,8 +166,29 @@ def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
     raise ValueError(f"未知的调试测试类型：{kind}")
 
 
+class _CaptureThread(QThread):
+    """在后台线程截取游戏窗口客户区（供「框选截图生成模板」用，避免卡住界面）。"""
+
+    captured = Signal(object, object)          # (numpy 图像, (宽, 高))
+    failed_message = Signal(str)
+
+    def __init__(self, config: AppConfig, log: logging.Logger) -> None:
+        super().__init__()
+        self._config = config
+        self._log = log
+
+    def run(self) -> None:
+        image, message = vision_actions.capture_window(self._config)
+        if image is None:
+            self._log.warning("框选模板：截图失败：%s", message)
+            self.failed_message.emit(message)
+            return
+        height, width = image.shape[:2]
+        self._log.info("框选模板：已截取客户区 %dx%d", width, height)
+        self.captured.emit(image, (int(width), int(height)))
+
+
 class _DiagnoseThread(QThread):
-    """在工作线程中执行窗口诊断；结果（消息, 是否需要提权）经信号回 UI 线程。"""
 
     finished_message = Signal(str, bool)
 
@@ -225,11 +248,13 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(page, title)
         self.debug_page = DebugPage(self._config, self._mark_dirty)
         self._debug_thread: _DebugTestThread | None = None
+        self._capture_thread: _CaptureThread | None = None
         self._apply_developer_mode()          # 按配置决定是否挂载「开发者调试」页
         self.tabs.setCurrentIndex(0)  # 默认打开设置页
         self.settings_page.developer_box.toggled.connect(self._on_developer_toggled)
         self.debug_page.diagnose_requested.connect(self._on_diagnose)
         self.debug_page.layout_measure_requested.connect(self._on_measure_layout)
+        self.debug_page.crop_requested.connect(self._on_crop_requested)
         self.debug_page.test_requested.connect(self._on_debug_test)
         self.settings_page.restart_admin_button.clicked.connect(self._on_restart_admin_clicked)
         self.save_button = QPushButton("保存")
@@ -494,6 +519,42 @@ class MainWindow(QMainWindow):
         self.debug_page.set_status(report)
         for line in report.splitlines():
             logger.info("%s", line)
+
+    def _on_capture_ready(self, image, window_size) -> None:
+        """截图完成（GUI 线程）：弹出框选窗口，保存后把模板路径回填到调试页。"""
+        self.debug_page.set_status("请在弹窗里拖拽框选要识别的区域…")
+        dialog = TemplateCropDialog(image, window_size, get_anchors_dir(), self)
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+        finally:
+            dialog.deleteLater()
+        if not accepted:
+            self.debug_page.set_status("已取消框选（未生成模板）")
+            return
+        if dialog.saved_path is None:
+            self.debug_page.set_status("未选择有效区域，模板未生成（请拖出一个至少 8x8 的框）")
+            return
+        self.debug_page.vision_path_edit.setText(str(dialog.saved_path))
+        logger.info("框选模板已保存：%s", dialog.saved_path)
+        self.debug_page.set_status(
+            f"模板已保存：{dialog.saved_path.name}\n"
+            "路径已填入上方输入框，点「图片识别匹配测试」即可验证。"
+        )
+
+    def _on_capture_failed(self, message: str) -> None:
+        self.debug_page.set_status(message)
+
+    def _on_crop_requested(self) -> None:
+        """框选截图生成模板：开发者调试门禁 → 后台线程截图 → 弹窗框选。"""
+        if not self._debug_actions_allowed():
+            return
+        if self._capture_thread is not None and self._capture_thread.isRunning():
+            return
+        self.debug_page.set_status("正在截取游戏窗口…")
+        self._capture_thread = _CaptureThread(self._config, logger)
+        self._capture_thread.captured.connect(self._on_capture_ready)
+        self._capture_thread.failed_message.connect(self._on_capture_failed)
+        self._capture_thread.start()
 
     def _on_diagnose(self) -> None:
         if not self._debug_actions_allowed():

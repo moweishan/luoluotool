@@ -108,6 +108,29 @@ def recognize_in_window(
                            annotated_path=annotated_path)
 
 
+def capture_window(
+    config: AppConfig, capture: Callable[[int], np.ndarray] | None = None
+) -> tuple[np.ndarray | None, str]:
+    """截取当前游戏窗口客户区；返回 (图像, 错误消息)。成功时错误消息为空串。
+
+    供「框选截图生成模板」等入口复用：统一做窗口存在性与就绪校验，失败一律转可读消息。
+    """
+    keyword = config.automation.window_title_keyword
+    hwnd = find_window(keyword)
+    if hwnd is None:
+        return None, f"未找到标题含“{keyword}”的窗口，请确认游戏已窗口化运行"
+    if not is_window_ready(hwnd):
+        return None, "游戏窗口已最小化或不可见，请恢复窗口后重试"
+    capture_fn = capture or capture_client_bgr
+    try:
+        return capture_fn(hwnd), ""
+    except VisionError as exc:
+        return None, str(exc)
+    except Exception as exc:                       # 截图的 Win32 异常也要转成可读消息
+        logger.exception("截取游戏窗口失败")
+        return None, f"截取游戏窗口失败：{exc}"
+
+
 def _save_annotated(image: np.ndarray, matches: tuple[Match, ...]) -> Path | None:
     """保存带框截图；保存失败只记日志（识别结果本身仍然有效）。"""
     try:

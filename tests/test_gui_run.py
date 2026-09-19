@@ -713,6 +713,61 @@ def test_vision_debug_action_reports_missing_template(monkeypatch, tmp_path) -> 
     assert messages and "无法读取模板图片" in messages[0]
 
 
+def test_crop_flow_saves_template_and_fills_path(window_factory, tmp_path, monkeypatch) -> None:
+    """框选流程：主窗口把截图交给对话框，保存后把模板路径回填到调试页并提示。"""
+    import numpy as np
+
+    from luoluotool.gui import main_window as mw
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+
+    opened: list[tuple] = []
+    saved = tmp_path / "anchor_test.png"
+
+    class _FakeDialog:
+        def __init__(self, image, window_size, save_dir, parent=None):
+            opened.append((image.shape, window_size, save_dir))
+            self.saved_path = saved
+
+        def exec(self):
+            from PySide6.QtWidgets import QDialog
+
+            return QDialog.DialogCode.Accepted
+
+        def deleteLater(self):        # noqa: N802 (QObject 接口)
+            return None
+
+    monkeypatch.setattr(mw, "TemplateCropDialog", _FakeDialog)
+    window._on_capture_ready(np.zeros((50, 100, 3), dtype=np.uint8), (100, 50))
+
+    assert opened and opened[0][0] == (50, 100, 3) and opened[0][1] == (100, 50)
+    assert window.debug_page.vision_path_edit.text() == str(saved)
+    assert "模板已保存" in window.debug_page.status_label.text()
+
+
+def test_crop_request_is_rejected_when_developer_mode_off(window_factory, tmp_path, caplog) -> None:
+    """开发者调试未开启：框选截图入口同样不生效（不起线程、不弹窗）。"""
+    import logging as _logging
+
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    caplog.set_level(_logging.WARNING)
+    window.debug_page.crop_requested.emit()
+    assert window._capture_thread is None
+    assert "不生效" in window.debug_page.status_label.text()
+
+
+def test_crop_capture_failure_reports_message(window_factory, tmp_path) -> None:
+    """截图失败（窗口最小化等）：把可读消息写进调试页状态区。"""
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+    window._on_capture_failed("游戏窗口已最小化或不可见，请恢复窗口后重试")
+    assert "最小化" in window.debug_page.status_label.text()
+
+
 def test_debug_actions_are_rejected_when_developer_mode_off(window_factory, tmp_path, caplog) -> None:
     """开发者调试未开启：调试动作（测试/诊断/布局测量）一律拒绝执行并给出提示。"""
     import logging as _logging

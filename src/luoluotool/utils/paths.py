@@ -30,3 +30,13 @@ def get_debug_dir() -> Path:
     path = get_user_data_dir() / "debug"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def get_anchors_dir() -> Path:
+    """返回图像识别模板（锚点截图）目录 assets/anchors（不存在则创建）。
+
+    该目录已在 .gitignore 中排除 *.png：模板属于个人素材，不入库。
+    """
+    path = PROJECT_ROOT / "assets" / "anchors"
+    path.mkdir(parents=True, exist_ok=True)
+    return path

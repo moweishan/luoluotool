@@ -59,6 +59,7 @@ class DebugPage(ScrollablePage):
     test_requested = Signal(str, dict)
     diagnose_requested = Signal()
     layout_measure_requested = Signal()
+    crop_requested = Signal()
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
@@ -101,14 +102,21 @@ class DebugPage(ScrollablePage):
         self.vision_threshold_spin.setValue(DEFAULT_VISION_THRESHOLD)
         self.vision_threshold_spin.setToolTip("相似度阈值：越高越严格（默认 0.85）")
         self.vision_button = QPushButton("图片识别匹配测试")
+        self.crop_button = QPushButton("框选截图生成模板")
+        self.crop_button.setToolTip(
+            "截取游戏窗口后拖拽框选 → 保存成模板并自动填入上面的图片路径，\n"
+            "省去手工裁剪：框的就是识别要找的那部分像素。"
+        )
         vision_grid.addWidget(QLabel("图片"), 0, 0)
         vision_grid.addWidget(self.vision_path_edit, 0, 1, 1, 2)
         vision_grid.addWidget(self.vision_browse_button, 0, 3)
         vision_grid.addWidget(QLabel("阈值"), 1, 0)
         vision_grid.addWidget(self.vision_threshold_spin, 1, 1)
-        vision_grid.addWidget(self.vision_button, 1, 2, 1, 2)
+        vision_grid.addWidget(self.vision_button, 1, 2)
+        vision_grid.addWidget(self.crop_button, 1, 3)
         self.vision_button.clicked.connect(self._on_vision_clicked)
         self.vision_browse_button.clicked.connect(self._on_vision_browse_clicked)
+        self.crop_button.clicked.connect(self.crop_requested.emit)
         layout.addWidget(vision_group)
 
         layout.addWidget(QLabel("提示：真实模式下测试按钮会真的操作鼠标键盘；"
@@ -216,7 +224,7 @@ class DebugPage(ScrollablePage):
         """执行期间禁用所有测试按钮，避免重复触发。"""
         for button in (self.single_button, self.repeat_button, self.swipe_button,
                        self.key_button, self.diagnose_button, self.layout_measure_button,
-                       self.vision_button, self.vision_browse_button):
+                       self.vision_button, self.vision_browse_button, self.crop_button):
             button.setEnabled(not busy)
 
     def set_status(self, message: str) -> None:

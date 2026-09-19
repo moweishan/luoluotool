@@ -334,6 +334,27 @@ def test_debug_page_vision_button_respects_busy_state() -> None:
     page.close()
 
 
+def test_debug_page_crop_button_requests_capture() -> None:
+    """调试页「框选截图生成模板」按钮：发出 crop_requested；忙碌时一并禁用。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    fired: list[str] = []
+    page.crop_requested.connect(lambda: fired.append("crop"))
+
+    assert "框选" in page.crop_button.text()
+    page.crop_button.click()
+    assert fired == ["crop"]
+
+    page.set_busy(True)
+    assert page.crop_button.isEnabled() is False
+    page.set_busy(False)
+    assert page.crop_button.isEnabled() is True
+    page.close()
+
+
 def test_debug_page_busy_disables_buttons_and_status() -> None:
     """执行期间禁用全部测试按钮，并显示状态文案。"""
     from luoluotool.gui.pages.debug import DebugPage
