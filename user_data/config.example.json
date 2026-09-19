@@ -1,5 +1,5 @@
 {
-  "schema_version": 8,
+  "schema_version": 9,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -41,7 +41,8 @@
     "failsafe_hotkey": "F8",
     "ask_elevation_on_start": true,
     "restore_cursor_after_click": true,
-    "developer_mode": false
+    "developer_mode": false,
+    "save_vision_annotations": true
   },
   "logging": {
     "level": "INFO",

@@ -25,6 +25,7 @@ def test_defaults_are_safe() -> None:
     assert config.automation.window_title_keyword == "桃源深处有人家"
     assert config.automation.failsafe_hotkey == "F8"
     assert config.automation.ask_elevation_on_start is True
+    assert config.automation.save_vision_annotations is True   # 识别成功仍默认存带框截图
     assert config.logging.level == "INFO"
     assert config.logging.max_file_mb == 2
     assert config.logging.backup_count == 3
@@ -102,6 +103,7 @@ def test_to_dict_keys_match_schema_v1() -> None:
         "ask_elevation_on_start",
         "restore_cursor_after_click",
         "developer_mode",
+        "save_vision_annotations",
     }
     assert set(data["logging"]) == {"level", "max_file_mb", "backup_count"}
     task = data["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]

@@ -216,3 +216,21 @@ def test_migrate_v7_to_v8_keeps_existing_developer_mode() -> None:
     raw["schema_version"] = 7
     raw["automation"]["developer_mode"] = True
     assert migrate(raw)["automation"]["developer_mode"] is True
+
+
+def test_migrate_v8_to_v9_adds_save_vision_annotations() -> None:
+    """v8 → v9：新增 `automation.save_vision_annotations`（默认 true = 识别成功仍存带框截图）。"""
+    raw = v4_raw()
+    raw["schema_version"] = 8
+    raw["automation"].pop("save_vision_annotations", None)
+    migrated = migrate(raw)
+    assert migrated["schema_version"] == SCHEMA_VERSION
+    assert migrated["automation"]["save_vision_annotations"] is True
+
+
+def test_migrate_v8_to_v9_keeps_existing_value() -> None:
+    """用户已把带框截图关掉的配置不得被迁移覆盖回 true。"""
+    raw = v4_raw()
+    raw["schema_version"] = 8
+    raw["automation"]["save_vision_annotations"] = False
+    assert migrate(raw)["automation"]["save_vision_annotations"] is False

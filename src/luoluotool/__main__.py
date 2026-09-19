@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-annotate",
         action="store_true",
-        help="图像识别时不保存带框截图（默认保存到 user_data/debug/）",
+        help="图像识别时不保存带框截图（默认跟随配置项 automation.save_vision_annotations）",
     )
     return parser
 
@@ -141,6 +141,7 @@ def _recognize(image_path: Path, threshold: float, config_path: Path | None, ann
     """命令行图像识别：在游戏窗口里查找 `image_path`，打印命中位置的客户区坐标。
 
     退出码：0 命中；1 未命中或识别失败（便于脚本判断）；2 参数非法。
+    带框截图：传 `--no-annotate` 强制关闭；否则跟随配置 `automation.save_vision_annotations`。
     """
     if not 0.0 < threshold <= 1.0:
         _print_safe(f"阈值必须大于 0 且不超过 1：{threshold}")
@@ -155,7 +156,8 @@ def _recognize(image_path: Path, threshold: float, config_path: Path | None, ann
     path = config_path or get_user_data_dir() / "config.json"
     config = store.load(path) if path.exists() else AppConfig.default()
     result = recognize_in_window(
-        config, image_path, threshold=threshold, annotate_result=annotate
+        config, image_path, threshold=threshold,
+        annotate_result=None if annotate else False,
     )
     _print_safe(result.message)
     return 0 if result.found else 1

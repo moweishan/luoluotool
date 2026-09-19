@@ -49,15 +49,19 @@ def recognize_in_window(
     image_path: str | Path,
     threshold: float = DEFAULT_THRESHOLD,
     max_results: int = DEFAULT_MAX_RESULTS,
-    annotate_result: bool = True,
+    annotate_result: bool | None = None,
     capture: Callable[[int], np.ndarray] | None = None,
 ) -> RecognizeResult:
     """在当前游戏窗口客户区里查找 `image_path`，返回命中位置（客户区坐标）。
 
     - 窗口未找到 / 最小化 → 直接给可读结果，不截图；
     - `capture` 可注入（测试用）；默认走 `vision.capture_client_bgr`；
-    - `annotate_result=True` 时把带框截图存到 `user_data/debug/vision_<时间戳>.png` 便于人工核对。
+    - `annotate_result=None`（默认）时看配置项 `automation.save_vision_annotations`
+      （开发者调试页的「识别成功时保存带框截图」开关）；显式传 True/False 可覆盖配置。
+      开启时把带框截图存到 `user_data/debug/vision_<时间戳>.png` 便于人工核对。
     """
+    if annotate_result is None:
+        annotate_result = bool(config.automation.save_vision_annotations)
     keyword = config.automation.window_title_keyword
     hwnd = find_window(keyword)
     if hwnd is None:

@@ -1,4 +1,4 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v8（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v9（dataclass 实现）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from luoluotool.utils.keys import parse_combo
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 @dataclass
@@ -290,6 +290,8 @@ class AutomationConfig:
     restore_cursor_after_click: bool = True
     # 开发者调试：在顶部显示「开发者调试」标签页（含窗口诊断、干跑开关与 4 个输入测试）
     developer_mode: bool = False
+    # 图像识别成功后是否把带框截图存到 user_data/debug/（schema v9；开发者调试页可关）
+    save_vision_annotations: bool = True
 
     def to_dict(self) -> dict:
         return {
@@ -302,6 +304,7 @@ class AutomationConfig:
             "ask_elevation_on_start": self.ask_elevation_on_start,
             "restore_cursor_after_click": self.restore_cursor_after_click,
             "developer_mode": self.developer_mode,
+            "save_vision_annotations": self.save_vision_annotations,
         }
 
     @classmethod
@@ -316,6 +319,7 @@ class AutomationConfig:
             data.get("ask_elevation_on_start", True),
             data.get("restore_cursor_after_click", True),
             data.get("developer_mode", False),
+            data.get("save_vision_annotations", True),
         )
 
 

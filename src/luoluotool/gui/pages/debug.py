@@ -114,6 +114,13 @@ class DebugPage(ScrollablePage):
         vision_grid.addWidget(self.vision_threshold_spin, 1, 1)
         vision_grid.addWidget(self.vision_button, 1, 2)
         vision_grid.addWidget(self.crop_button, 1, 3)
+        self.vision_annotate_box = QCheckBox("识别成功时保存带框截图到 user_data\\debug（便于人工核对）")
+        self.vision_annotate_box.setToolTip(
+            "关闭后识别只给坐标、不写截图文件；\n"
+            "该选项同样需要开启设置页的「开发者调试」才生效。"
+        )
+        self.vision_annotate_box.toggled.connect(self._on_vision_annotate_toggled)
+        vision_grid.addWidget(self.vision_annotate_box, 2, 0, 1, 4)
         self.vision_button.clicked.connect(self._on_vision_clicked)
         self.vision_browse_button.clicked.connect(self._on_vision_browse_clicked)
         self.crop_button.clicked.connect(self.crop_requested.emit)
@@ -218,6 +225,9 @@ class DebugPage(ScrollablePage):
         self.dry_run_box.blockSignals(True)
         self.dry_run_box.setChecked(config.automation.dry_run)
         self.dry_run_box.blockSignals(False)
+        self.vision_annotate_box.blockSignals(True)
+        self.vision_annotate_box.setChecked(config.automation.save_vision_annotations)
+        self.vision_annotate_box.blockSignals(False)
         self.setEnabled(bool(config.automation.developer_mode))
 
     def set_busy(self, busy: bool) -> None:
@@ -242,6 +252,18 @@ class DebugPage(ScrollablePage):
             self.set_status("开发者调试未开启：本页所有选项不生效（干跑开关未修改）")
             return
         self._config.automation.dry_run = self.dry_run_box.isChecked()
+        self._on_changed()
+
+    def _on_vision_annotate_toggled(self) -> None:
+        """带框截图开关：仅在「开发者调试」开启时生效；未开启则回滚勾选、不写配置。"""
+        if not self._config.automation.developer_mode:
+            logger.warning("开发者调试未开启，忽略带框截图开关变更（本页选项不生效）")
+            self.vision_annotate_box.blockSignals(True)
+            self.vision_annotate_box.setChecked(self._config.automation.save_vision_annotations)
+            self.vision_annotate_box.blockSignals(False)
+            self.set_status("开发者调试未开启：本页所有选项不生效（带框截图开关未修改）")
+            return
+        self._config.automation.save_vision_annotations = self.vision_annotate_box.isChecked()
         self._on_changed()
 
     def _on_single_clicked(self) -> None:

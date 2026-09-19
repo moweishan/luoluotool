@@ -29,11 +29,11 @@ def test_root_must_be_dict() -> None:
 
 def test_schema_version_checks() -> None:
     raw = _default_raw()
-    raw["schema_version"] = 9
+    raw["schema_version"] = models.SCHEMA_VERSION + 1      # 未来版本：不支持（别写死数字，跟着版本走）
     assert any("schema_version" in e for e in validate(raw))
     raw["schema_version"] = 0
     assert any("schema_version" in e for e in validate(raw))
-    raw["schema_version"] = "8"
+    raw["schema_version"] = str(models.SCHEMA_VERSION)
     assert any("schema_version" in e for e in validate(raw))
     del raw["schema_version"]
     assert any("schema_version" in e for e in validate(raw))

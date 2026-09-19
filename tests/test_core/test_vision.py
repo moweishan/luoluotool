@@ -161,6 +161,65 @@ def test_recognize_finds_multiple_targets(monkeypatch, template_file, tmp_path) 
     assert "命中 2 处" in result.message
 
 
+def test_recognize_annotation_follows_config_option(monkeypatch, template_file, tmp_path) -> None:
+    """默认（annotate_result=None）时按配置 `automation.save_vision_annotations` 决定是否存带框截图。"""
+    template_path, pattern = template_file
+    canvas = _haystack()
+    canvas[30 : 30 + pattern.shape[0], 50 : 50 + pattern.shape[1]] = pattern
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    config = AppConfig.default()
+    config.automation.save_vision_annotations = True
+    result = core_vision.recognize_in_window(config, template_path, capture=lambda hwnd: canvas)
+    assert result.found is True and result.annotated_path is not None
+
+    config.automation.save_vision_annotations = False
+    result2 = core_vision.recognize_in_window(config, template_path, capture=lambda hwnd: canvas)
+    assert result2.found is True and result2.annotated_path is None
+    assert "带框截图" not in result2.message
+    assert len(list(tmp_path.glob("vision_*.png"))) == 1      # 只有第一次留下文件
+
+
+def test_recognize_explicit_annotate_overrides_config(monkeypatch, template_file, tmp_path) -> None:
+    """显式传 annotate_result 时优先于配置（CLI 的 --no-annotate 走这条）。"""
+    template_path, pattern = template_file
+    canvas = _haystack()
+    canvas[5 : 5 + pattern.shape[0], 5 : 5 + pattern.shape[1]] = pattern
+    _patch_window(monkeypatch)
+    monkeypatch.setattr(core_vision, "get_debug_dir", lambda: tmp_path)
+
+    config = AppConfig.default()
+    config.automation.save_vision_annotations = True
+    result = core_vision.recognize_in_window(
+        config, template_path, annotate_result=False, capture=lambda hwnd: canvas
+    )
+    assert result.annotated_path is None
+    assert list(tmp_path.glob("vision_*.png")) == []
+
+
+def test_cli_recognize_follows_config_annotation_option(monkeypatch, template_file, tmp_path, capsys) -> None:
+    """`--recognize` 不带 --no-annotate 时，跟随配置里的带框截图开关。"""
+    from luoluotool.__main__ import main
+    from luoluotool.config import store
+
+    template_path, pattern = template_file
+    canvas = _haystack()
+    canvas[10 : 10 + pattern.shape[0], 10 : 10 + pattern.shape[1]] = pattern
+    _patched_cli_env(monkeypatch, canvas, tmp_path)
+
+    config = AppConfig.default()
+    config.automation.save_vision_annotations = False
+    config_path = tmp_path / "config.json"
+    store.save(config, config_path)
+
+    code = main(["--recognize", str(template_path), "--config", str(config_path)])
+    out = capsys.readouterr().out
+    assert code == 0 and "识别成功" in out
+    assert "带框截图" not in out
+    assert list(tmp_path.glob("vision_*.png")) == []
+
+
 # ---------------------------------------------------------------- 命令行入口
 
 

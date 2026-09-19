@@ -319,6 +319,35 @@ def test_debug_page_vision_group_is_visible_without_scrolling() -> None:
     page.close()
 
 
+def test_debug_page_vision_annotate_switch_binds_config() -> None:
+    """开发者调试开启时：带框截图开关写入 `automation.save_vision_annotations`（默认勾选）。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    assert page.vision_annotate_box.isChecked() is True
+
+    page.vision_annotate_box.setChecked(False)
+    assert config.automation.save_vision_annotations is False
+    page.vision_annotate_box.setChecked(True)
+    assert config.automation.save_vision_annotations is True
+    page.close()
+
+
+def test_debug_page_vision_annotate_switch_inert_without_developer_mode() -> None:
+    """开发者调试未开启：该开关不生效（回滚勾选、不写配置）。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()          # developer_mode 默认 false
+    page = DebugPage(config, lambda: None)
+    page.vision_annotate_box.setChecked(False)
+    assert config.automation.save_vision_annotations is True
+    assert page.vision_annotate_box.isChecked() is True
+    assert "不生效" in page.status_label.text()
+    page.close()
+
+
 def test_debug_page_vision_button_respects_busy_state() -> None:
     """执行期间「识别图片 / 选择图片」按钮同样被禁用。"""
     from luoluotool.gui.pages.debug import DebugPage
