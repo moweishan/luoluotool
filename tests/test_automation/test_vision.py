@@ -56,6 +56,21 @@ def test_load_template_missing_file_raises_readable(tmp_path) -> None:
     assert "无法读取模板图片" in str(excinfo.value)
 
 
+def test_load_template_rejects_flat_image(tmp_path) -> None:
+    """纯色模板必须被拒绝：平坦区域会给它满分（实测纯色 260x260 刷出 20 处 1.000）。"""
+    import cv2
+
+    path = tmp_path / "flat.png"
+    ok, buffer = cv2.imencode(".png", np.full((60, 80, 3), 200, dtype=np.uint8))
+    assert ok
+    buffer.tofile(str(path))
+
+    with pytest.raises(vision.VisionError) as excinfo:
+        vision.load_template(path)
+    assert "纯色" in str(excinfo.value)
+    assert "flat.png" in str(excinfo.value)
+
+
 def test_load_template_invalid_image_raises_readable(tmp_path) -> None:
     path = tmp_path / "bad.png"
     path.write_bytes(b"not an image")
