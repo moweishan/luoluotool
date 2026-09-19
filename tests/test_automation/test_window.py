@@ -20,6 +20,24 @@ def test_get_client_rect_computes_size(monkeypatch) -> None:
     assert window.get_client_rect(123) == (1, 2, 100, 50)
 
 
+def test_client_area_offset_is_title_bar_plus_border(monkeypatch) -> None:
+    """客户区相对窗口左上角的偏移 = 标题栏高度 + 边框（实测本作 (9, 37)）。
+
+    取景必须按这个偏移抓，否则抓到的是"标题栏 + 客户区上半部分"，
+    导致坐标整体偏下"标题栏高度"（2026-09-20 用户实测 bug）。
+    """
+    monkeypatch.setattr(window.win32gui, "GetWindowRect", lambda hwnd: (86, 0, 1704, 1070))
+    monkeypatch.setattr(window.win32gui, "ClientToScreen", lambda hwnd, point: (95, 37))
+    assert window.client_area_offset(123) == (9, 37)
+
+
+def test_client_area_offset_is_zero_for_borderless_window(monkeypatch) -> None:
+    """无边框全屏窗口：客户区就在窗口左上角，偏移必须是 (0, 0)（不能凭空加偏移）。"""
+    monkeypatch.setattr(window.win32gui, "GetWindowRect", lambda hwnd: (0, 0, 1920, 1080))
+    monkeypatch.setattr(window.win32gui, "ClientToScreen", lambda hwnd, point: (0, 0))
+    assert window.client_area_offset(123) == (0, 0)
+
+
 @pytest.fixture
 def fake_enum(monkeypatch):
     """注入假 EnumWindows/GetWindowText/IsWindowVisible。"""

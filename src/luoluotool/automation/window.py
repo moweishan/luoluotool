@@ -78,6 +78,26 @@ def get_client_rect(hwnd: int) -> tuple[int, int, int, int]:
     return left, top, right - left, bottom - top
 
 
+def get_window_size(hwnd: int) -> tuple[int, int]:
+    """返回**整个窗口**（含标题栏与边框）的 (宽, 高)。"""
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    return right - left, bottom - top
+
+
+def client_area_offset(hwnd: int) -> tuple[int, int]:
+    """客户区左上角相对**窗口**左上角的偏移（即标题栏高度 + 边框宽度）。
+
+    取景/截图必须以它为原点取像素，否则抓到的第一行是标题栏、客户区底部会缺一截，
+    识别出的坐标会整体偏下"标题栏高度"。
+    实测（2026-09-20，本作窗口 1618x1070 / 客户区 1600x1024）：偏移 = (9, 37)，
+    即从窗口 DC 的 (0,0) 直接抓会让坐标整体偏下 37px —— 这正是用户报告的现象。
+    无边框（全屏）窗口该值为 (0, 0)，调用方据此自然退化为"不做偏移"。
+    """
+    window_left, window_top, _, _ = win32gui.GetWindowRect(hwnd)
+    client_screen_x, client_screen_y = win32gui.ClientToScreen(hwnd, (0, 0))
+    return client_screen_x - window_left, client_screen_y - window_top
+
+
 def screenshot_client(hwnd: int, save_path: Path) -> Path:
     """截取客户区保存为 PNG 并返回路径。
 
@@ -87,10 +107,8 @@ def screenshot_client(hwnd: int, save_path: Path) -> Path:
     """
     wx, wy, w_right, w_bottom = win32gui.GetWindowRect(hwnd)
     window_width, window_height = w_right - wx, w_bottom - wy
-    left, top, right, bottom = win32gui.GetClientRect(hwnd)
-    client_width, client_height = right - left, bottom - top
-    client_screen_x, client_screen_y = win32gui.ClientToScreen(hwnd, (0, 0))
-    offset_x, offset_y = client_screen_x - wx, client_screen_y - wy
+    _, _, client_width, client_height = get_client_rect(hwnd)
+    offset_x, offset_y = client_area_offset(hwnd)
 
     hwnd_dc = win32gui.GetWindowDC(hwnd)
     full_dc = win32ui.CreateDCFromHandle(hwnd_dc)
@@ -122,7 +140,12 @@ def screenshot_client(hwnd: int, save_path: Path) -> Path:
             client_bitmap.SaveBitmapFile(client_dc, str(save_path))
             return save_path
         logger.warning("PrintWindow(全窗口) 失败，尝试仅客户区渲染")
-        if ctypes.windll.user32.PrintWindow(hwnd, client_dc.GetSafeHdc(), PW_CLIENTONLY):
+        # 与主路径同一套几何：PrintWindow 以窗口左上角为原点，所以仍渲染到整窗位图后按偏移裁
+        if ctypes.windll.user32.PrintWindow(hwnd, full_mem_dc.GetSafeHdc(), PW_CLIENTONLY):
+            client_dc.BitBlt(
+                (0, 0), (client_width, client_height),
+                full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
+            )
             client_bitmap.SaveBitmapFile(client_dc, str(save_path))
             return save_path
         logger.warning("PrintWindow 失败，回退 BitBlt 全窗口截图")

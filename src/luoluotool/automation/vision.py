@@ -468,32 +468,63 @@ def _render_client_bits(hwnd: int) -> tuple[int, int, bytes]:
     return _render_client_bits_printwindow(hwnd, PW_RENDERFULLCONTENT)
 
 
-def _render_client_bits_printwindow(hwnd: int, flag: int) -> tuple[int, int, bytes]:
-    """用 PrintWindow 渲染客户区（flag=PW_RENDERFULLCONTENT 或 PW_CLIENTONLY）。"""
+def _print_window(hwnd: int, hdc, flag: int) -> bool:
+    """调用 User32 的 PrintWindow（抽成独立函数，便于测试注入）。"""
     import ctypes
 
+    return bool(ctypes.windll.user32.PrintWindow(hwnd, hdc, flag))
+
+
+def _render_client_bits_printwindow(hwnd: int, flag: int) -> tuple[int, int, bytes]:
+    """用 PrintWindow 渲染客户区（flag=PW_RENDERFULLCONTENT 或 PW_CLIENTONLY）。
+
+    **PrintWindow 画的是整个窗口**（含标题栏与边框），且目标 DC 的原点对应窗口左上角，
+    因此必须：按**窗口尺寸**渲染 → 再按**客户区偏移**裁出客户区。
+    直接按客户区尺寸渲染的话，抓到的第一行是标题栏、客户区底部缺"标题栏高度"那一截，
+    识别坐标会整体偏下标题栏高度（2026-09-20 实测：本作窗口 1618x1070 / 客户区 1600x1024，
+    偏移 (9, 37) —— 用户报的"坐标总是偏下"就是这个）。做法与 `window.screenshot_client` 一致。
+    """
+    import win32con
     import win32gui
     import win32ui
 
-    from luoluotool.automation.window import get_client_rect
+    from luoluotool.automation.window import client_area_offset, get_client_rect, get_window_size
 
     _, _, width, height = get_client_rect(hwnd)
-    if width <= 0 or height <= 0:
-        raise VisionError(f"窗口客户区尺寸异常（{width}x{height}），无法截图识别")
+    window_width, window_height = get_window_size(hwnd)
+    if width <= 0 or height <= 0 or window_width <= 0 or window_height <= 0:
+        raise VisionError(
+            f"窗口客户区尺寸异常（客户区 {width}x{height}，窗口 {window_width}x{window_height}），"
+            "无法截图识别"
+        )
+    offset_x, offset_y = client_area_offset(hwnd)
+    logger.info(
+        "取景(PrintWindow)：客户区在窗口内偏移 (%d, %d)（标题栏/边框），已按该偏移裁出客户区",
+        offset_x, offset_y,
+    )
 
     hwnd_dc = win32gui.GetWindowDC(hwnd)
     try:
         window_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-        memory_dc = window_dc.CreateCompatibleDC()
-        bitmap = win32ui.CreateBitmap()
-        bitmap.CreateCompatibleBitmap(window_dc, width, height)
-        memory_dc.SelectObject(bitmap)
+        full_dc = window_dc.CreateCompatibleDC()
+        full_bitmap = win32ui.CreateBitmap()
+        full_bitmap.CreateCompatibleBitmap(window_dc, window_width, window_height)
+        full_dc.SelectObject(full_bitmap)
+        client_dc = window_dc.CreateCompatibleDC()
+        client_bitmap = win32ui.CreateBitmap()
+        client_bitmap.CreateCompatibleBitmap(window_dc, width, height)
+        client_dc.SelectObject(client_bitmap)
         try:
-            ctypes.windll.user32.PrintWindow(hwnd, memory_dc.GetSafeHdc(), flag)
-            bits = bitmap.GetBitmapBits(True)
+            _print_window(hwnd, full_dc.GetSafeHdc(), flag)
+            client_dc.BitBlt(
+                (0, 0), (width, height), full_dc, (offset_x, offset_y), win32con.SRCCOPY
+            )
+            bits = client_bitmap.GetBitmapBits(True)
         finally:
-            win32gui.DeleteObject(bitmap.GetHandle())
-            memory_dc.DeleteDC()
+            win32gui.DeleteObject(client_bitmap.GetHandle())
+            win32gui.DeleteObject(full_bitmap.GetHandle())
+            client_dc.DeleteDC()
+            full_dc.DeleteDC()
             window_dc.DeleteDC()
     finally:
         win32gui.ReleaseDC(hwnd, hwnd_dc)
@@ -501,16 +532,26 @@ def _render_client_bits_printwindow(hwnd: int, flag: int) -> tuple[int, int, byt
 
 
 def _render_client_bits_bitblt(hwnd: int) -> tuple[int, int, bytes]:
-    """备用：从窗口 DC 直接 BitBlt（部分窗口 PrintWindow 失败但 BitBlt 可用）。"""
+    """备用：从窗口 DC 直接 BitBlt 客户区（部分窗口 PrintWindow 失败但 BitBlt 可用）。
+
+    窗口 DC 的原点是**窗口左上角**（含标题栏/边框），所以源点必须用客户区偏移，
+    不能写 (0, 0) —— 那会抓到"标题栏 + 客户区上半部分"，让坐标整体偏下标题栏高度
+    （2026-09-20 实测本作偏移 (9, 37)，是本作实际生效的取景路径，用户报告的 bug 就在这）。
+    """
     import win32con
     import win32gui
     import win32ui
 
-    from luoluotool.automation.window import get_client_rect
+    from luoluotool.automation.window import client_area_offset, get_client_rect
 
     _, _, width, height = get_client_rect(hwnd)
     if width <= 0 or height <= 0:
         raise VisionError(f"窗口客户区尺寸异常（{width}x{height}），无法截图识别")
+    offset_x, offset_y = client_area_offset(hwnd)
+    logger.info(
+        "取景(BitBlt 窗口DC)：从客户区左上 (%d, %d) 抓取（窗口 DC 原点在标题栏，已跳过）",
+        offset_x, offset_y,
+    )
 
     hwnd_dc = win32gui.GetWindowDC(hwnd)
     try:
@@ -520,7 +561,9 @@ def _render_client_bits_bitblt(hwnd: int) -> tuple[int, int, bytes]:
         bitmap.CreateCompatibleBitmap(window_dc, width, height)
         memory_dc.SelectObject(bitmap)
         try:
-            memory_dc.BitBlt((0, 0), (width, height), window_dc, (0, 0), win32con.SRCCOPY)
+            memory_dc.BitBlt(
+                (0, 0), (width, height), window_dc, (offset_x, offset_y), win32con.SRCCOPY
+            )
             bits = bitmap.GetBitmapBits(True)
         finally:
             win32gui.DeleteObject(bitmap.GetHandle())
@@ -537,6 +580,8 @@ def _render_client_bits_screen(hwnd: int) -> tuple[int, int, bytes]:
     GPU 独占渲染的游戏（实测本作）用 PrintWindow/BitBlt 都拿不到画面，只剩这种方式；
     但它抓的是"屏幕上的内容"，因此只有窗口确实在前台可见时才有意义
     （调用方 `_render_client_bgr_fallback` 已用前台判断做门禁）。
+    这一条**天然以客户区左上为原点**（源点取 `ClientToScreen(hwnd, (0, 0))`），
+    不需要再按窗口偏移裁剪 —— 它是"取景原点应为客户区左上"的参照实现。
     """
     import win32con
     import win32gui

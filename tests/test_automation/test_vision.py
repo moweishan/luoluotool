@@ -492,3 +492,147 @@ def test_scale_candidates_are_sorted_and_deduplicated() -> None:
     assert scales == [0.8, 1.0, 1.2]
     assert vision.scale_candidates((1.1, 0.9), 0.1) == [0.9, 1.0, 1.1]
     assert vision.scale_candidates((1.0, 1.0), 0.1) == [1.0]
+
+
+# ------------------------------------------ 取景原点必须是客户区左上（"坐标偏下"bug 回归）
+
+
+WINDOW_W, WINDOW_H = 30, 20          # 整个窗口（含标题栏/边框）
+CLIENT_W, CLIENT_H = 20, 12          # 客户区
+CLIENT_OFFSET = (5, 4)               # 客户区在窗口内的偏移（真实实测本作为 (9, 37)）
+
+
+def _window_pixels() -> np.ndarray:
+    """窗口位图内容：每个像素编码自己的坐标（B=x, G=y），便于验证裁剪位置。"""
+    pixels = np.zeros((WINDOW_H, WINDOW_W, 4), dtype=np.uint8)
+    for y in range(WINDOW_H):
+        for x in range(WINDOW_W):
+            pixels[y, x] = (x % 256, y % 256, 9, 255)
+    return pixels
+
+
+def _expected_client_pixels() -> np.ndarray:
+    """期望的客户区像素 = 窗口位图按客户区偏移裁出来的那块。"""
+    offset_x, offset_y = CLIENT_OFFSET
+    return _window_pixels()[offset_y : offset_y + CLIENT_H, offset_x : offset_x + CLIENT_W, :3]
+
+
+class _FakeBitmap:
+    """最小假位图：内部存 numpy (H, W, 4)，字节格式与 GetBitmapBits(True) 一致。"""
+
+    def __init__(self, width: int = 0, height: int = 0) -> None:
+        self.pixels = np.zeros((max(int(height), 0), max(int(width), 0), 4), dtype=np.uint8)
+
+    def CreateCompatibleBitmap(self, dc, width, height):      # noqa: N802 (pywin32 接口)
+        self.pixels = np.zeros((int(height), int(width), 4), dtype=np.uint8)
+        return self
+
+    def GetBitmapBits(self, flag):                            # noqa: N802
+        return self.pixels.tobytes()
+
+    def GetHandle(self):                                      # noqa: N802
+        return id(self)
+
+
+class _FakeDC:
+    """最小假 DC：BitBlt 真的按源坐标搬像素，用来校验取景裁剪的几何。
+
+    所有派生 DC 共享同一份调用日志（`calls`），因为 BitBlt 实际发生在内存 DC 上。
+    """
+
+    def __init__(self, bitmap: _FakeBitmap | None = None, calls: list | None = None) -> None:
+        self.bitmap = bitmap if bitmap is not None else _FakeBitmap()
+        self.calls: list[tuple] = calls if calls is not None else []
+
+    def CreateCompatibleDC(self):                             # noqa: N802
+        return _FakeDC(calls=self.calls)
+
+    def SelectObject(self, bitmap):                           # noqa: N802
+        self.bitmap = bitmap
+        return bitmap
+
+    def GetSafeHdc(self):                                     # noqa: N802
+        return self
+
+    def BitBlt(self, dest, size, source, source_point, rop):   # noqa: N802
+        self.calls.append((tuple(dest), tuple(size), tuple(source_point)))
+        dx, dy = dest
+        width, height = size
+        sx, sy = source_point
+        self.bitmap.pixels[dy : dy + height, dx : dx + width] = (
+            source.bitmap.pixels[sy : sy + height, sx : sx + width]
+        )
+
+    def DeleteDC(self):                                       # noqa: N802
+        return None
+
+
+@pytest.fixture
+def fake_gdi(monkeypatch):
+    """注入假 win32gui/win32ui + 假窗口几何，并替换掉 ctypes 的 PrintWindow。"""
+    import win32gui
+    import win32ui
+
+    from luoluotool.automation import window as window_module
+
+    window_dc = _FakeDC(_FakeBitmap())
+    window_dc.bitmap.pixels = _window_pixels()
+    print_targets: list[tuple[int, ...]] = []
+
+    monkeypatch.setattr(win32gui, "GetWindowDC", lambda hwnd: 1234)
+    monkeypatch.setattr(win32gui, "DeleteObject", lambda handle: None)
+    monkeypatch.setattr(win32gui, "ReleaseDC", lambda hwnd, dc: None)
+    monkeypatch.setattr(win32ui, "CreateDCFromHandle", lambda handle: window_dc)
+    monkeypatch.setattr(win32ui, "CreateBitmap", _FakeBitmap)
+    monkeypatch.setattr(window_module, "get_client_rect", lambda hwnd: (0, 0, CLIENT_W, CLIENT_H))
+    monkeypatch.setattr(window_module, "get_window_size", lambda hwnd: (WINDOW_W, WINDOW_H))
+    monkeypatch.setattr(window_module, "client_area_offset", lambda hwnd: CLIENT_OFFSET)
+
+    def fake_print_window(hwnd, hdc, flag):
+        print_targets.append(hdc.bitmap.pixels.shape)
+        hdc.bitmap.pixels = _window_pixels()          # PrintWindow 画的是整个窗口
+        return True
+
+    monkeypatch.setattr(vision, "_print_window", fake_print_window)
+    return window_dc.calls, print_targets        # 共享调用日志（渲染时会往里追加）
+
+
+def test_bitblt_renderer_starts_at_client_origin(fake_gdi) -> None:
+    """BitBlt(窗口DC) 必须从**客户区左上**抓，不能从窗口 DC 的 (0,0)（那是标题栏）。
+
+    回归（2026-09-20 用户实测）：从 (0,0) 抓会让画面顶部多出标题栏、底部缺一截，
+    识别坐标随之整体偏下"标题栏高度"（本作实测偏 37px）。
+    """
+    calls, _ = fake_gdi
+
+    width, height, bits = vision._render_client_bits_bitblt(4321)
+
+    assert (width, height) == (CLIENT_W, CLIENT_H)
+    assert calls, "必须真的调用了 BitBlt"
+    assert calls[-1][2] == CLIENT_OFFSET, "BitBlt 源点必须是客户区偏移，不能是 (0, 0)"
+    assert np.array_equal(vision._bits_to_bgr(width, height, bits), _expected_client_pixels())
+    assert not np.array_equal(
+        vision._bits_to_bgr(width, height, bits), _window_pixels()[:CLIENT_H, :CLIENT_W, :3]
+    ), "抓的不能是窗口左上角那块（那正是旧的错误行为）"
+
+
+def test_printwindow_renderer_crops_client_area(fake_gdi) -> None:
+    """PrintWindow 画的是整个窗口：必须先按窗口尺寸渲染，再按客户区偏移裁出客户区。"""
+    calls, print_targets = fake_gdi
+
+    width, height, bits = vision._render_client_bits_printwindow(
+        4321, vision.PW_RENDERFULLCONTENT
+    )
+
+    assert (width, height) == (CLIENT_W, CLIENT_H)
+    assert print_targets == [(WINDOW_H, WINDOW_W, 4)], "渲染目标必须是整个窗口尺寸的位图"
+    assert calls[-1] == ((0, 0), (CLIENT_W, CLIENT_H), CLIENT_OFFSET), "裁剪源点必须是客户区偏移"
+    assert np.array_equal(vision._bits_to_bgr(width, height, bits), _expected_client_pixels())
+
+
+def test_printwindow_clientonly_renderer_crops_client_area(fake_gdi) -> None:
+    """PW_CLIENTONLY 同样按窗口尺寸渲染 + 裁剪（两种 flag 走同一套几何）。"""
+    width, height, bits = vision._render_client_bits_printwindow(4321, vision.PW_CLIENTONLY)
+
+    assert (width, height) == (CLIENT_W, CLIENT_H)
+    assert np.array_equal(vision._bits_to_bgr(width, height, bits), _expected_client_pixels())
