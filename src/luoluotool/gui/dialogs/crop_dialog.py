@@ -79,6 +79,7 @@ class CropView(QWidget):
         self._start_rect: QRect | None = None
         self.setMinimumSize(360, 240)
         self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)     # 方向键微调需要键盘焦点
         self.setCursor(Qt.CursorShape.CrossCursor)
 
     # ------------------------------------------------------------- 几何换算
@@ -275,6 +276,77 @@ class CropView(QWidget):
         else:
             self.setCursor(Qt.CursorShape.CrossCursor)
 
+    # ------------------------------------------------------------- 键盘微调
+    def keyPressEvent(self, event) -> None:        # noqa: N802
+        """方向键微调选区（用户 2026-09-20 要求）：
+
+        - `←↑→↓`：整体移动 1 个**图像**像素；`Shift+方向键`＝10 像素；
+        - `Ctrl+方向键`：对应那条边**向外** 1 像素（选区变大）；
+        - `Ctrl+Shift+方向键`：同一条边**向内** 1 像素（选区变小）；
+        - 还没有选区时不做事（不会凭空造出选区）。
+
+        为什么需要它：截图是等比缩放显示的，鼠标一次只能挪 1 个**控件**像素
+        （2 倍显示时＝图像 0.5 像素，取整后时而不动、时而跳 2 像素），键盘可以稳定 ±1。
+        """
+        deltas = {
+            Qt.Key.Key_Left: (-1, 0),
+            Qt.Key.Key_Right: (1, 0),
+            Qt.Key.Key_Up: (0, -1),
+            Qt.Key.Key_Down: (0, 1),
+        }
+        if event.key() not in deltas or self._image_selection is None:
+            super().keyPressEvent(event)
+            return
+        dx, dy = deltas[event.key()]
+        modifiers = event.modifiers()
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            inward = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+            self._nudge_edge(dx, dy, inward=inward)
+        else:
+            step = 10 if modifiers & Qt.KeyboardModifier.ShiftModifier else 1
+            self._nudge_whole(dx * step, dy * step)
+        self.update()
+        self.selection_changed.emit()
+        event.accept()
+
+    def _nudge_whole(self, dx: int, dy: int) -> None:
+        """整体平移（与鼠标拖动同一套夹取规则：夹在图像内、尺寸不变）。"""
+        if self._image_selection is None:
+            return
+        rect = self._image_selection.normalized()
+        image_w, image_h = self.image_size
+        dx = max(-rect.left(), min(dx, image_w - (rect.left() + rect.width())))
+        dy = max(-rect.top(), min(dy, image_h - (rect.top() + rect.height())))
+        self._image_selection = QRect(rect.left() + dx, rect.top() + dy, rect.width(), rect.height())
+
+    def _nudge_edge(self, dx: int, dy: int, *, inward: bool) -> None:
+        """只移动一条边：`dx/dy` 指向那条边，`inward=True` 时反向（往里收）。
+
+        右/下边界仍是不含边界（与拖拽创建、拖手柄时的口径一致），并保证
+        不小于 `MIN_SELECTION_SIZE`、不越出图像。
+        """
+        if self._image_selection is None:
+            return
+        rect = self._image_selection.normalized()
+        left, top = rect.left(), rect.top()
+        right, bottom = left + rect.width(), top + rect.height()
+        image_w, image_h = self.image_size
+        if dx:
+            edge = (left if dx < 0 else right) + (-dx if inward else dx)
+            edge = max(0, min(edge, image_w))
+            if dx < 0:
+                left = max(0, min(edge, right - MIN_SELECTION_SIZE))
+            else:
+                right = min(image_w, max(edge, left + MIN_SELECTION_SIZE))
+        if dy:
+            edge = (top if dy < 0 else bottom) + (-dy if inward else dy)
+            edge = max(0, min(edge, image_h))
+            if dy < 0:
+                top = max(0, min(edge, bottom - MIN_SELECTION_SIZE))
+            else:
+                bottom = min(image_h, max(edge, top + MIN_SELECTION_SIZE))
+        self._image_selection = QRect(left, top, right - left, bottom - top)
+
     def paintEvent(self, event) -> None:           # noqa: N802
         painter = QPainter(self)
         painter.fillRect(self.rect(), BACKGROUND_COLOR)
@@ -315,10 +387,13 @@ class TemplateCropDialog(QDialog):
             f"在下面的截图里按住左键拖出要识别的区域（截图＝游戏客户区 {width}x{height}）。\n"
             "框好之后还能改：**拖选区内部＝整体移动**，**拖四角/四边的小方块＝改大小**，"
             "在选区外重新拖＝重新框选。\n"
+            "差一两个像素时用键盘（点一下图再按）：**方向键移动 1 像素**、**Shift+方向键移动 10 像素**、"
+            "**Ctrl+方向键把那条边向外 1 像素**、**Ctrl+Shift+方向键把那条边向内 1 像素**。\n"
             "建议框选画面中**不会变化**的局部（数字、倒计时等变动区域会让匹配不稳定）。"
         ))
         self.view = CropView(image_bgr)
         self.crop_view = self.view            # 语义化别名
+        self.view.setFocus()                  # 打开弹窗就把键盘焦点给框选图（方向键立刻可用）
         self.info_label = QLabel("尚未选择区域")
         self.view.selection_changed.connect(self._refresh_info)
         layout.addWidget(self.view, 1)

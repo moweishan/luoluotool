@@ -323,6 +323,132 @@ def test_saved_template_uses_the_modified_selection(tmp_path) -> None:
     dialog.deleteLater()
 
 
+# ------------------------------------------- 方向键微调（用户 2026-09-20：A+B 都要）
+
+
+def _press(view: CropView, key, modifier=None) -> None:
+    """给框选图发一次按键（模拟键盘微调）。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    QTest.keyClick(view, key, modifier or Qt.KeyboardModifier.NoModifier)
+    _APP.processEvents()
+
+
+def test_arrow_keys_nudge_whole_selection_by_one_image_pixel() -> None:
+    """方案 A：方向键整体移动 1 个**图像**像素（不是控件像素）。"""
+    from PySide6.QtCore import Qt
+
+    view = _scaled_view((200, 200))                  # 2 倍显示
+    view.set_selection_in_image(50, 50, 40, 30)
+
+    _press(view, Qt.Key.Key_Right)
+    assert view.selection_in_image() == (51, 50, 40, 30)
+
+    _press(view, Qt.Key.Key_Down)
+    assert view.selection_in_image() == (51, 51, 40, 30)
+
+    _press(view, Qt.Key.Key_Left)
+    _press(view, Qt.Key.Key_Up)
+    assert view.selection_in_image() == (50, 50, 40, 30)
+    view.deleteLater()
+
+
+def test_shift_arrow_keys_nudge_by_ten_pixels() -> None:
+    """Shift+方向键 = 一次 10 像素（大范围微调用）。"""
+    from PySide6.QtCore import Qt
+
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+
+    _press(view, Qt.Key.Key_Right, Qt.KeyboardModifier.ShiftModifier)
+    assert view.selection_in_image() == (60, 50, 40, 30)
+
+    _press(view, Qt.Key.Key_Down, Qt.KeyboardModifier.ShiftModifier)
+    assert view.selection_in_image() == (60, 60, 40, 30)
+    view.deleteLater()
+
+
+def test_ctrl_arrow_moves_the_matching_edge_outward() -> None:
+    """方案 B：Ctrl+方向键 = 对应那条边向外 1 像素（选区变大，另一边不动）。"""
+    from PySide6.QtCore import Qt
+
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+
+    _press(view, Qt.Key.Key_Right, Qt.KeyboardModifier.ControlModifier)     # 右边框右移
+    assert view.selection_in_image() == (50, 50, 41, 30)
+
+    _press(view, Qt.Key.Key_Left, Qt.KeyboardModifier.ControlModifier)      # 左边框左移
+    assert view.selection_in_image() == (49, 50, 42, 30)
+
+    _press(view, Qt.Key.Key_Down, Qt.KeyboardModifier.ControlModifier)      # 下边框下移
+    assert view.selection_in_image() == (49, 50, 42, 31)
+
+    _press(view, Qt.Key.Key_Up, Qt.KeyboardModifier.ControlModifier)        # 上边框上移
+    assert view.selection_in_image() == (49, 49, 42, 32)
+    view.deleteLater()
+
+
+def test_ctrl_shift_arrow_moves_the_edge_inward() -> None:
+    """Ctrl+Shift+方向键 = 同一条边向内 1 像素（选区变小）。"""
+    from PySide6.QtCore import Qt
+
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+
+    both = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+
+    _press(view, Qt.Key.Key_Right, both)                                    # 右边框左移
+    assert view.selection_in_image() == (50, 50, 39, 30)
+
+    _press(view, Qt.Key.Key_Up, both)                                       # 上边框下移
+    assert view.selection_in_image() == (50, 51, 39, 29)
+    view.deleteLater()
+
+
+def test_nudge_is_clamped_to_image_and_minimum_size() -> None:
+    """微调同样受"不越界 + 不小于 MIN_SELECTION_SIZE"约束。"""
+    from PySide6.QtCore import Qt
+
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(0, 0, MIN_SELECTION_SIZE, MIN_SELECTION_SIZE)
+
+    _press(view, Qt.Key.Key_Left)                                           # 已经在左上角
+    _press(view, Qt.Key.Key_Up)
+    assert view.selection_in_image() == (0, 0, MIN_SELECTION_SIZE, MIN_SELECTION_SIZE)
+
+    both = Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+    _press(view, Qt.Key.Key_Right, both)                                    # 再收就小于最小尺寸
+    _press(view, Qt.Key.Key_Down, both)
+    assert view.selection_in_image() == (0, 0, MIN_SELECTION_SIZE, MIN_SELECTION_SIZE)
+    view.deleteLater()
+
+
+def test_arrow_keys_do_nothing_without_selection() -> None:
+    """还没框选时按方向键：不崩、也不会凭空造出选区。"""
+    from PySide6.QtCore import Qt
+
+    view = _scaled_view((200, 200))
+    _press(view, Qt.Key.Key_Right)
+    _press(view, Qt.Key.Key_Down, Qt.KeyboardModifier.ControlModifier)
+    assert view.selection_in_image() is None
+    view.deleteLater()
+
+
+def test_crop_view_takes_keyboard_focus() -> None:
+    """框选图必须能拿到键盘焦点，否则方向键根本送不到它。"""
+    from PySide6.QtCore import Qt
+
+    dialog = TemplateCropDialog(_image(200, 100), (200, 100), save_dir=None)
+    assert dialog.view.focusPolicy() == Qt.FocusPolicy.StrongFocus
+    dialog.show()
+    _APP.processEvents()
+    assert dialog.focusWidget() is dialog.view          # 打开弹窗焦点就在图上，方向键立刻可用
+    dialog.close()
+    dialog.deleteLater()
+
+
 # ------------------------------------------- 「保存为模板」按钮（回归：按钮以前只关窗口不保存）
 
 
