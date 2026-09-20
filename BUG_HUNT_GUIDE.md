@@ -140,7 +140,7 @@ print('layer check violations =', bad)
 ### 主链路 A：图像识别（框选模板 → 识别 → 坐标）
 
 ```
-调试页「图片识别匹配测试」          gui/pages/debug.py:380   _on_vision_clicked()
+调试页「图片识别匹配测试」          gui/pages/debug.py:408   _on_vision_clicked()
   → 发信号 test_requested("vision", {images, threshold, max_results})
 主窗口分发                          gui/main_window.py:495  _on_debug_test()
   后台线程 _DebugTestThread.run     gui/main_window.py:116  （不阻塞 GUI）
@@ -157,7 +157,7 @@ print('layer check violations =', bad)
 **框选生成模板**链路：
 
 ```
-调试页「框选截图生成模板」          gui/pages/debug.py:133   crop_button → crop_requested 信号
+调试页「框选截图生成模板」          gui/pages/debug.py:146   crop_button → crop_requested 信号
 主窗口门禁 + 后台截图               gui/main_window.py:556   _on_crop_requested()
   截图线程                          gui/main_window.py:175   _CaptureThread → core/vision.py:212 capture_window()
   弹框（GUI 线程）                  gui/main_window.py:529   _on_capture_ready() → TemplateCropDialog
@@ -169,8 +169,8 @@ print('layer check violations =', bad)
 ### 主链路 C：鼠标单点 / 连点（含"点击时长"）
 
 ```
-调试页「鼠标单点测试」              gui/pages/debug.py:170   single_hold_spin（点击时长，ms）
-调试页「鼠标连点测试」              gui/pages/debug.py:197   repeat_hold_spin（连点每次都用它）
+调试页「鼠标单点测试」              gui/pages/debug.py:183   single_hold_spin（点击时长，ms）
+调试页「鼠标连点测试」              gui/pages/debug.py:210   repeat_hold_spin（连点每次都用它）
   → _on_single_clicked / _on_repeat_clicked 发信号 test_requested(kind, {...})
     载荷：single {x, y, hold_ms}｜repeat {x, y, count, interval_ms, hold_ms}
 主窗口分发                          gui/main_window.py:144   run_debug_action
@@ -362,7 +362,8 @@ capture_client_bgr (vision.py:393)
 13. **"某页点不动"仍在跟进（2026-09-20）**：日志已证明输入完全正确（光标偏差 0px、前台、置顶、
     命中窗口就是游戏），但不保证游戏一定处理这次点击。已按"输入时间线"加固（见 ④ 5d：
     两步移动 / 置前后 200ms / 松手后 350ms 才还原光标）。若加固后仍不生效，下一步该做的实验是：
-    ① 关掉设置页的「点击后还原光标」再试（隔离还原时机的影响）；
+    ① 关掉**开发者调试页**的「点击/滑动后把真实鼠标移回原位置」（2026-09-20 从设置页移入本页）再试
+    （隔离还原时机的影响）；
     ② 用"点击点带标注的截图"确认那个坐标真的是目标控件；③ 在同一页面换一个明显的控件试点击。
 
 ---
@@ -577,7 +578,9 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `window_under_point` / `describe_window` | `automation/real_input.py:157` / `:175` | 命中测试与窗口描述（诊断"点击落在谁身上"） |
 | `run_single_click` | `core/debug.py:80` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
 | `_validate_click_hold` | `core/debug.py:55` | 点击时长校验（0–5000 ms，整数、非布尔） |
-| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:170` / `:197` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
+| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:183` / `:210` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
+| `restore_cursor_box` | `gui/pages/debug.py:89` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
+| `settings_page.developer_box` | `gui/pages/settings.py:44` | 设置页「开发者调试」开关（决定调试页是否挂载/生效） |
 | `run_repeat_click` | `core/debug.py:106` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待） |
 | `ensure_window_front` | `automation/real_input.py:228` | 每次输入前置顶置前 + 复核 |
 | `client_to_screen` | `automation/real_input.py:148` | 客户区→屏幕换算（点击路径） |

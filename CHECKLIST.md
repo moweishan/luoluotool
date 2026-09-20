@@ -9,6 +9,7 @@
 ## 1. 配置
 
 - [ ] 出厂默认值安全：所有开关默认关，**`dry_run` 默认关（2026-09-19 用户要求：首次启动即真实模式，靠启动确认弹窗 + F8 急停 + 点击越界校验兜底）**；测试里恒为干跑（`tests/conftest.py` 强制）。
+- [ ] ⚠️ 还原光标开关位于**开发者调试页**（2026-09-20 按用户要求从设置页移入；设置页不再有该控件），并受开发者调试门禁约束：未开启时改动不写配置并回滚勾选。回归测试：`test_settings_page_no_longer_has_restore_cursor_switch`、`test_debug_page_binds_restore_cursor_switch`、`test_debug_page_restore_cursor_switch_inert_without_developer_mode`。
 - [ ] ⚠️ 输入时间线：光标**两步移动**（中途点 → 目标，间隔 30ms）→ 按下前等 80ms → 置前/置顶后等 200ms → **松手后等 350ms 才还原光标**（`restore_cursor_after_click` 开启时尤其关键：立刻跳回会让游戏那一帧"指针不在窗口内"→ 点击被丢弃）。回归测试：`test_click_moves_cursor_in_two_steps_before_press`、`test_click_skips_intermediate_move_when_already_at_target`、`test_click_waits_before_restoring_cursor`、`test_focus_settle_is_long_enough_for_the_game`、`test_activate_sleeps_for_the_focus_settle`。
 - [ ] ⚠️ 点击前核对事实：`RealInputSender.click_at` 必须调 `_verify_before_press` 记录"客户区尺寸 / 目标屏幕点 / 实测光标与偏差 / 光标处窗口 / 前台 / 置顶 / 光标处是否本窗口"；光标偏差 > `CLICK_CURSOR_TOLERANCE_PX`(4px) 时**跳过点击**并 WARNING；命中窗口不是本窗口时 WARNING 但仍点击；读光标失败只 WARNING 继续。回归测试：`test_real_sender_logs_click_context_before_press`、`test_real_sender_skips_click_when_cursor_did_not_move`、`test_real_sender_logs_warning_when_hit_test_is_other_window`。
 - [ ] ⚠️ 点击越界：任何鼠标点击前必须校验坐标在游戏窗口客户区 `[0,w)×[0,h)` 内；越界或读不到客户区时**不点击**并写 WARNING（真实通道 `RealInputSender.click_at` + 干跑通道 `DryRunSender` 的 `bounds` 回调）。
