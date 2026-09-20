@@ -1,35 +1,13 @@
-"""功能四预留配置页：启用开关 + 规划中说明。"""
+"""功能四预留配置页：启用开关 + 规划中说明（共用基类见 planned_feature）。"""
 
-from collections.abc import Callable
-
-from PySide6.QtWidgets import QCheckBox, QLabel, QVBoxLayout
-
-from luoluotool.config.models import AppConfig
-from luoluotool.gui.widgets import ScrollablePage
+from luoluotool.config.models import AppConfig, FeatureConfig
+from luoluotool.gui.pages.planned_feature import PlannedFeaturePage
 
 
-class Feature4Page(ScrollablePage):
+class Feature4Page(PlannedFeaturePage):
     """绑定 features.feature_4.enabled。"""
 
-    def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
-        super().__init__()
-        self._config = config
-        self._on_changed = on_changed
-        layout = QVBoxLayout(self.content)
-        self.enabled_box = QCheckBox("启用功能四")
-        layout.addWidget(self.enabled_box)
-        layout.addWidget(QLabel("功能规划中"))
-        layout.addStretch(1)
-        self.enabled_box.toggled.connect(self._on_toggled)
-        self.set_config(config)
+    title = "功能四"
 
-    def set_config(self, config: AppConfig) -> None:
-        """重新绑定配置并刷新控件（不触发脏标记）。"""
-        self._config = config
-        self.enabled_box.blockSignals(True)
-        self.enabled_box.setChecked(config.features.feature_4.enabled)
-        self.enabled_box.blockSignals(False)
-
-    def _on_toggled(self) -> None:
-        self._config.features.feature_4.enabled = self.enabled_box.isChecked()
-        self._on_changed()
+    def _feature(self, config: AppConfig) -> FeatureConfig:
+        return config.features.feature_4

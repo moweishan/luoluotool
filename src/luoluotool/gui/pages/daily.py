@@ -1,5 +1,6 @@
 """日常任务配置页：启用、占位任务 A、按键序列、滑动序列、循环开关与间隔。"""
 
+import logging
 from collections.abc import Callable
 
 from PySide6.QtWidgets import (
@@ -20,6 +21,8 @@ from luoluotool.config.models import (
     parse_keys_text,
     parse_swipes_text,
 )
+
+logger = logging.getLogger(__name__)
 from luoluotool.gui.widgets import ScrollablePage
 
 LOOP_MIN_SECONDS = 1
@@ -122,14 +125,14 @@ class DailyPage(ScrollablePage):
         return format_swipes_text(self._params().swipes)
 
     def _on_swipes_edited(self) -> None:
-        """把滑动输入框写回配置；格式非法则回退显示（不写坏配置）。"""
+        """把滑动输入框写回配置；格式非法则回退显示（不写坏配置），并说明被丢弃的原因。"""
         text = self.swipes_edit.text()
         try:
             steps = parse_swipes_text(text, self._params().wait_after_ms)
-        except ValueError:
-            self.swipes_edit.blockSignals(True)
-            self.swipes_edit.setText(self._swipes_text())
-            self.swipes_edit.blockSignals(False)
+        except ValueError as exc:
+            # 评审 P3-2：静默回退违反"不许吞异常"，必须写日志 + 给出可读提示
+            logger.warning("滑动步骤输入被丢弃（保留原值）：%s（输入：%r）", exc, text)
+            self._rollback_swipes()
             return
         task = self._config.features.daily_tasks.tasks.setdefault("placeholder_task_a", TaskConfig())
         params = PlaceholderTaskParams.from_dict(task.params)
@@ -137,12 +140,18 @@ class DailyPage(ScrollablePage):
         task.params = params.to_dict()
         self._on_changed()
 
+    def _rollback_swipes(self) -> None:
+        self.swipes_edit.blockSignals(True)
+        self.swipes_edit.setText(self._swipes_text())
+        self.swipes_edit.blockSignals(False)
+
     def _on_keys_edited(self) -> None:
-        """把输入框文本写回配置；格式非法则回退显示（不写坏配置）。"""
+        """把输入框文本写回配置；格式非法则回退显示（不写坏配置），并说明被丢弃的原因。"""
         text = self.keys_edit.text()
         try:
             steps = parse_keys_text(text, self._params().wait_after_ms)
-        except ValueError:
+        except ValueError as exc:
+            logger.warning("按键序列输入被丢弃（保留原值）：%s（输入：%r）", exc, text)
             self.keys_edit.blockSignals(True)
             self.keys_edit.setText(self._keys_text())
             self.keys_edit.blockSignals(False)

@@ -257,15 +257,17 @@ class TemplateCropDialog(QDialog):
             return None
         x, y, width, height = selection
         crop = self._image[y : y + height, x : x + width]
-        self._save_dir.mkdir(parents=True, exist_ok=True)
         path = self._save_dir / f"anchor_{datetime.now():%Y%m%d_%H%M%S}.png"
         try:
+            # 评审 P2-8：mkdir 必须在 try 内 —— 目录不可写时旧实现直接冒 OSError 进 Qt 槽，
+            # 调用方那句"保存失败：请检查模板目录是否可写"永远走不到。
+            self._save_dir.mkdir(parents=True, exist_ok=True)
             self.saved_path = save_image(path, crop)
             logger.info(
                 "模板已保存：%s（只保存框选区域 %dx%d，客户区左上 (%d, %d)）",
                 path, width, height, x, y,
             )
-        except Exception as exc:                 # 磁盘/编码异常 → 记录并返回 None
+        except Exception as exc:                 # 磁盘/编码/权限异常 → 记录并返回 None
             logger.exception("保存模板失败：%s", exc)
             self.saved_path = None
         return self.saved_path

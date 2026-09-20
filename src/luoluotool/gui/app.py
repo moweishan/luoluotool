@@ -50,6 +50,16 @@ def run(
     app.setWindowIcon(load_window_icon())
     path = Path(config_path) if config_path else get_user_data_dir() / "config.json"
     config = store.load(path)
+    # 评审 P2-2：先把配置读出来，再让 logging 的三项配置真正生效（加载期日志仍按默认写入）
+    logging_setup.setup_logging(
+        level=logging.getLevelName(config.logging.level.upper()),
+        max_file_mb=config.logging.max_file_mb,
+        backup_count=config.logging.backup_count,
+    )
+    logger.info(
+        "日志配置生效：level=%s max_file_mb=%d backup_count=%d",
+        config.logging.level, config.logging.max_file_mb, config.logging.backup_count,
+    )
     window = MainWindow(config, path, auto_elevate=not smoke)
     window.show()
     if smoke:

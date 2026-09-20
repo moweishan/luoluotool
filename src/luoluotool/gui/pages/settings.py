@@ -41,6 +41,10 @@ class SettingsPage(ScrollablePage):
         self.elevation_hint_label = QLabel()
         self.elevation_hint_label.setWordWrap(True)
         self.elevation_hint_label.setVisible(False)
+        self.hotkey_hint_label = QLabel()
+        self.hotkey_hint_label.setWordWrap(True)
+        self.hotkey_hint_label.setVisible(False)
+        self.hotkey_hint_label.setStyleSheet("color: #b00;")     # 急停不可用属于风险提示，标红
         self.developer_box = QCheckBox("开发者调试（在顶部显示「开发者调试」标签页）")
         self.developer_box.setToolTip(
             "勾选后顶部会出现「开发者调试」标签页：窗口诊断、干跑开关、还原光标开关，以及鼠标单点/连点、"
@@ -70,6 +74,7 @@ class SettingsPage(ScrollablePage):
         layout.addLayout(failures_row)
         layout.addLayout(hotkey_row)
         layout.addWidget(self.ask_elevation_box)
+        layout.addWidget(self.hotkey_hint_label)
         layout.addWidget(self.elevation_hint_label)
         layout.addWidget(self.developer_box)
         layout.addWidget(self.restart_admin_button)
@@ -80,6 +85,14 @@ class SettingsPage(ScrollablePage):
         self.hotkey_combo.currentTextChanged.connect(self._on_hotkey_changed)
         self.developer_box.toggled.connect(self._on_developer_toggled)
         self.set_config(config)
+
+    def show_hotkey_hint(self, message: str) -> None:
+        """显示急停热键不可用的显著提示（评审 P3-9）。
+
+        没有急停键时"停止按钮"是唯一的中断手段，用户必须知道，不能只写日志。
+        """
+        self.hotkey_hint_label.setText(message)
+        self.hotkey_hint_label.setVisible(True)
 
     def set_config(self, config: AppConfig) -> None:
         """重新绑定配置并刷新控件（不触发脏标记）。"""

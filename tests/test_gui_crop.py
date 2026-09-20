@@ -100,6 +100,35 @@ def test_save_selection_without_region_returns_none(tmp_path) -> None:
     dialog.deleteLater()
 
 
+def test_save_selection_reports_unwritable_dir(tmp_path, monkeypatch, caplog) -> None:
+    """回归（评审 P2-8）：模板目录不可写时给可读失败路径（旧实现 mkdir 在 try 外，直接冒 OSError）。
+
+    `save_selection()` 必须返回 None 且不抛异常，调用方的"保存失败：请检查模板目录是否可写"
+    才有机会执行；对话框也要保持打开（不能假装保存成功）。
+    """
+    import logging
+    from pathlib import Path
+
+    from PySide6.QtWidgets import QDialog
+
+    caplog.set_level(logging.ERROR)
+
+    def boom(self, parents=False, exist_ok=False):
+        raise PermissionError("模拟目录不可写")
+
+    monkeypatch.setattr(Path, "mkdir", boom)
+    dialog = TemplateCropDialog(_image(200, 100), (200, 100), save_dir=tmp_path / "anchors")
+    dialog.set_selection_in_image(30, 20, 50, 40)
+
+    assert dialog.save_selection() is None                 # 不抛异常
+    assert dialog.saved_path is None
+
+    dialog.save_button.click()                             # 点保存：不关窗、给提示
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert "保存失败" in dialog.info_label.text()
+    dialog.deleteLater()
+
+
 def test_selection_description_uses_client_coordinates() -> None:
     """界面提示用客户区坐标（与点击/滑动/识别结果同一坐标系）。"""
     dialog = TemplateCropDialog(_image(400, 300), (400, 300), save_dir=None)

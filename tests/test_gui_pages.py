@@ -150,6 +150,50 @@ def test_debug_page_restore_cursor_switch_inert_without_developer_mode() -> None
     page.close()
 
 
+def test_daily_page_rejects_over_limit_keys_text(caplog) -> None:
+    """回归（评审 P1-2 + P3-2）：超过步数上限的输入被拒绝，保留原值并记日志（不写坏配置）。"""
+    import logging
+
+    from luoluotool.config.models import MAX_KEY_STEPS
+    from luoluotool.gui.pages.daily import DailyPage
+
+    caplog.set_level(logging.WARNING)
+    config = AppConfig.default()
+    page = DailyPage(config, lambda: None)
+
+    too_many = ", ".join(["a"] * (MAX_KEY_STEPS + 5))
+    page.keys_edit.setText(too_many)
+    page.keys_edit.editingFinished.emit()
+
+    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["keys"]
+    assert stored == []                                  # 配置未被写坏
+    assert page.keys_edit.text() == ""                   # 输入被回退
+    assert "按键序列输入被丢弃" in caplog.text            # 不再静默回退
+    page.close()
+
+
+def test_daily_page_rejects_over_limit_swipes_text(caplog) -> None:
+    """回归（评审 P1-2 + P3-2）：滑动步骤超限同样被拒绝并记日志。"""
+    import logging
+
+    from luoluotool.config.models import MAX_SWIPE_STEPS
+    from luoluotool.gui.pages.daily import DailyPage
+
+    caplog.set_level(logging.WARNING)
+    config = AppConfig.default()
+    page = DailyPage(config, lambda: None)
+
+    too_many = "; ".join([f"{i},{i} > {i + 1},{i + 1}" for i in range(MAX_SWIPE_STEPS + 3)])
+    page.swipes_edit.setText(too_many)
+    page.swipes_edit.editingFinished.emit()
+
+    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["swipes"]
+    assert stored == []
+    assert page.swipes_edit.text() == ""
+    assert "滑动步骤输入被丢弃" in caplog.text
+    page.close()
+
+
 def test_daily_page_binds_keys_text() -> None:
     """日常任务页「按键序列」输入框：文本 ↔ params.keys 双向绑定，非法输入回退不写坏配置。"""
     from luoluotool.gui.pages.daily import DailyPage

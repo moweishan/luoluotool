@@ -300,7 +300,7 @@ class MainWindow(QMainWindow):
         )
         # 必须注册到本窗口句柄：hwnd=0 的线程消息不会被 Qt 派发
         self._hotkey_hwnd = int(self.winId())
-        self._hotkey.register(self._hotkey_hwnd)
+        self._register_hotkey_or_hint()
         # 用窗口子对象的定时器：窗口销毁后回调自动失效（避免悬空调用）
         self._startup_timer = QTimer(self)
         self._startup_timer.setSingleShot(True)
@@ -323,11 +323,38 @@ class MainWindow(QMainWindow):
     def closeEvent(self, event: QCloseEvent) -> None:
         self._startup_timer.stop()  # 窗口关闭后不再执行启动逻辑
         self._stop()
-        if self._diagnose_thread is not None and self._diagnose_thread.isRunning():
-            self._diagnose_thread.wait(THREAD_WAIT_TIMEOUT_MS)
+        self._wait_for_threads()
         self._hotkey.unregister(self._hotkey_hwnd)
         logging.getLogger().removeHandler(self._log_handler)
         super().closeEvent(event)
+
+    def _long_job_running(self) -> bool:
+        """是否有长任务在跑（任务 / 调试测试 / 截图 / 诊断）。"""
+        return any(
+            thread is not None and thread.isRunning()
+            for thread in (self._thread, self._debug_thread, self._capture_thread, self._diagnose_thread)
+        )
+
+    def _wait_for_threads(self) -> None:
+        """关闭前等待所有后台线程退出（评审 P2-6）。
+
+        不等待会触发 Qt 的 `QThread: Destroyed while thread is still running`（致命），
+        而且进程退出会跳过 finally 里的左键/按键释放。等待超时必须记日志 —— 不能装作没事。
+        """
+        for name, thread in (
+            ("运行", self._thread),
+            ("调试测试", self._debug_thread),
+            ("截图", self._capture_thread),
+            ("窗口诊断", self._diagnose_thread),
+        ):
+            if thread is not None and thread.isRunning():
+                if thread.wait(THREAD_WAIT_TIMEOUT_MS):
+                    logger.info("%s线程已退出", name)
+                else:
+                    logger.error(
+                        "%s线程在 %d ms 内未退出（可能有未释放的输入状态），仍继续关闭窗口",
+                        name, THREAD_WAIT_TIMEOUT_MS,
+                    )
 
     def _mark_dirty(self) -> None:
         self._dirty = True
@@ -337,12 +364,36 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"{WINDOW_TITLE} *" if self._dirty else WINDOW_TITLE)
 
     def _save(self) -> None:
-        store.save(self._config, self._config_path)
+        try:
+            store.save(self._config, self._config_path)
+        except store.ConfigSaveError as exc:
+            # 评审 P1-2：拒绝写出"读不回来"的配置，并在界面上说清原因（旧文件保持不动）
+            logger.error("配置未保存：%s", exc)
+            self.statusBar().showMessage(f"配置未保存：{exc}")
+            QMessageBox.warning(self, "配置未保存", f"{exc}\n\n磁盘上的旧配置未被改动。")
+            return
         self._dirty = False
         self._refresh_title()
         logger.info("配置已保存：%s", self._config_path)
         self.statusBar().showMessage(f"配置已保存：{self._config_path}")
         self._apply_hotkey_config()
+
+    def _register_hotkey_or_hint(self) -> None:
+        """注册急停热键；失败时**在界面显著提示**（评审 P3-9）。
+
+        热键注册失败在本机是常态（F8 被占用）。旧实现只写一行 ERROR 日志，用户看不到；
+        而没有急停键时"停止按钮"就是唯一退路 —— 所以必须让用户知道（状态栏 + 设置页提示）。
+        """
+        if self._hotkey.register(self._hotkey_hwnd):
+            return
+        hint = (
+            f"急停热键 {self._hotkey_name} 注册失败（可能被其它程序占用）："
+            "请改用界面「停止」按钮中断（调试测试的输入较长时尤其注意）"
+        )
+        logger.error("%s", hint)
+        # 追加到现有状态文本（保留版本号等信息），不整条覆盖
+        self.statusBar().showMessage(f"{self._idle_status} ｜ {hint}")
+        self.settings_page.show_hotkey_hint(hint)
 
     def _apply_hotkey_config(self) -> None:
         """保存后使急停键配置生效（热键变更时重新注册）。"""
@@ -355,17 +406,19 @@ class MainWindow(QMainWindow):
             return
         self._hotkey.unregister(self._hotkey_hwnd)
         self._hotkey = HotkeyRegistrar(vk=vk, name=name)
-        self._hotkey.register(self._hotkey_hwnd)
         self._hotkey_name = name
         logger.info("急停热键已更新为 %s", name)
+        self._register_hotkey_or_hint()      # 注册失败也要在界面显著提示（评审 P3-9）
 
     def _reload(self) -> None:
         self._config = store.load(self._config_path)
         self._apply_config()
+        self._apply_hotkey_config()      # 评审 P3-9：重载后配置里的新急停键立即生效
 
     def _reset(self) -> None:
         self._config = AppConfig.default()
         self._apply_config()
+        self._apply_hotkey_config()      # 评审 P3-9：恢复默认后立即重新注册急停键
         self._mark_dirty()
         logger.info("已恢复默认配置（尚未保存，点击「保存」后写入文件）")
         self.statusBar().showMessage("已恢复默认配置（点击「保存」后生效）")
@@ -386,6 +439,11 @@ class MainWindow(QMainWindow):
 
     def _start(self) -> None:
         if self._thread is not None and self._thread.isRunning():
+            return
+        if self._debug_thread is not None and self._debug_thread.isRunning():
+            # 评审 P2-5：任务与调试测试互斥 —— 两路真实输入交错会破坏"每次输入前置顶"的前提
+            self.statusBar().showMessage("调试测试正在运行，请先等待完成或点击「停止」再启动任务")
+            logger.warning("启动被拒绝：调试测试仍在运行（避免两路真实输入交错）")
             return
         self._save()  # 启动前先把当前配置落盘，避免“改了没保存就运行”
         dry_run = self._config.automation.dry_run
@@ -439,12 +497,13 @@ class MainWindow(QMainWindow):
             self._thread.wait(THREAD_WAIT_TIMEOUT_MS)
 
     def _on_stop_clicked(self) -> None:
-        """停止按钮：给出日志与状态栏反馈。"""
-        if self._runner is None:
-            logger.info("停止：当前没有运行中的任务")
-            self.statusBar().showMessage("当前没有运行中的任务")
+        """停止按钮：给出日志与状态栏反馈（评审 P2-4：调试测试/截图在跑时同样能停）。"""
+        if not self._long_job_running():
+            logger.info("停止：当前没有运行中的任务或测试")
+            self.statusBar().showMessage("当前没有运行中的任务或测试")
+            self.stop_button.setEnabled(False)
             return
-        logger.info("已请求停止任务")
+        logger.info("已请求停止（任务/测试/截图之一正在运行）")
         self.statusBar().showMessage("已请求停止…")
         self._stop()
 
@@ -499,7 +558,13 @@ class MainWindow(QMainWindow):
         if self._debug_thread is not None and self._debug_thread.isRunning():
             self.debug_page.set_status("上一个测试仍在执行，请先等待完成或点击「停止」")
             return
+        if self._thread is not None and self._thread.isRunning():
+            # 评审 P2-5：任务运行期间不接受调试输入测试（两路真实输入交错无法保证安全前提）
+            self.debug_page.set_status("任务正在运行：请先停止任务再做输入测试（避免两路真实输入交错）")
+            logger.warning("调试测试被拒绝：任务仍在运行")
+            return
         self.debug_page.set_busy(True)
+        self.stop_button.setEnabled(True)      # 评审 P2-4：从未点过「启动」时也能用「停止」中断测试
         mode = "干跑（只写日志）" if self._config.automation.dry_run else "真实输入"
         self.debug_page.set_status(f"执行中…（{mode}）")
         self._debug_thread = _DebugTestThread(self._config, kind, dict(params), logger)
@@ -516,6 +581,7 @@ class MainWindow(QMainWindow):
 
     def _on_debug_thread_finished(self) -> None:
         self.debug_page.set_busy(False)
+        self.stop_button.setEnabled(self._long_job_running())   # 任务仍在跑时保持可用
 
     def _on_measure_layout(self) -> None:
         """布局测量（开发者调试页入口）：纯几何计算，同步执行、无输入、不改配置。"""

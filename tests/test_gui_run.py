@@ -236,6 +236,140 @@ def test_start_without_tasks_logs_hint(window_factory, tmp_path) -> None:
     assert "未选择任何任务" in window.log_panel.toPlainText()
 
 
+# --------------------------- 评审 P2-4 / P2-5 / P2-6 / P3-9 的回归
+
+
+class _StubThread:
+    """最小 QThread 替身：可控制 isRunning / wait 结果，并记录请求。"""
+
+    def __init__(self, running: bool = True, wait_result: bool = True) -> None:
+        self.running = running
+        self.wait_result = wait_result
+        self.events: list[str] = []
+
+    def isRunning(self) -> bool:            # noqa: N802 (QThread 命名)
+        return self.running
+
+    def request_stop(self) -> None:
+        self.events.append("request_stop")
+
+    def wait(self, timeout=None) -> bool:   # noqa: N802
+        self.events.append(f"wait:{timeout}")
+        return self.wait_result
+
+
+def test_stop_button_works_for_debug_test_without_ever_starting_task(window_factory, tmp_path) -> None:
+    """回归（评审 P2-4）：只有调试测试在跑（从未点过「启动」）时，「停止」必须可用并真的请求停止。
+
+    注意：这里不启动真实 `_DebugTestThread`（那样会被替身顶掉、触发 Qt 的
+    "QThread: Destroyed while thread is still running" 而让测试进程 abort —— 正是 P2-6 那类崩溃）。
+    """
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+
+    stub = _StubThread(running=True)
+    window._debug_thread = stub
+    window._on_debug_thread_finished()      # 测试结束回调：按"是否还有长任务"决定按钮状态
+
+    assert window.stop_button.isEnabled() is True      # 旧实现这里会是灰的
+
+    window._on_stop_clicked()
+    assert "request_stop" in stub.events
+    assert "已请求停止" in window.statusBar().currentMessage()
+    window._debug_thread = None
+    window.stop_button.setEnabled(False)
+
+
+def test_stop_without_any_job_reports_idle(window_factory, tmp_path) -> None:
+    """没有任务/测试在跑时点「停止」：只提示，不报错。"""
+    window = window_factory(tmp_path / "config.json", AppConfig.default())
+    window._on_stop_clicked()
+    assert "没有运行中的任务" in window.statusBar().currentMessage()
+
+
+def test_debug_test_rejected_while_task_is_running(window_factory, tmp_path) -> None:
+    """回归（评审 P2-5）：任务运行期间不接受调试输入测试（避免两路真实输入交错）。"""
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+
+    window._thread = _StubThread(running=True)          # 假装任务在跑
+    window._on_debug_test("single_click", {"x": 1, "y": 2, "hold_ms": 40})
+
+    assert window._debug_thread is None
+    assert "任务正在运行" in window.debug_page.status_label.text()
+    window._thread = None
+
+
+def test_start_rejected_while_debug_test_is_running(window_factory, tmp_path) -> None:
+    """回归（评审 P2-5）：调试测试运行期间拒绝启动任务。"""
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    window = window_factory(tmp_path / "config.json", config)
+
+    window._debug_thread = _StubThread(running=True)
+    window._start()
+
+    assert window._thread is None                       # 没有启动运行线程
+    assert "调试测试正在运行" in window.statusBar().currentMessage()
+    window._debug_thread = None
+
+
+def test_close_event_waits_for_all_background_threads(window_factory, tmp_path, caplog) -> None:
+    """回归（评审 P2-6）：关闭窗口时等待**全部**后台线程退出，超时要记 ERROR。"""
+    window = window_factory(tmp_path / "config.json", AppConfig.default())
+    running = {name: _StubThread(running=True) for name in ("_thread", "_debug_thread", "_capture_thread", "_diagnose_thread")}
+    for name, stub in running.items():
+        setattr(window, name, stub)
+
+    window.close()
+
+    for name, stub in running.items():
+        assert any(event.startswith("wait:") for event in stub.events), f"{name} 未被等待"
+
+
+def test_close_event_logs_error_when_thread_does_not_exit(window_factory, tmp_path, caplog) -> None:
+    """线程等待超时必须记 ERROR（不能装作没事）。"""
+    window = window_factory(tmp_path / "config.json", AppConfig.default())
+    window._debug_thread = _StubThread(running=True, wait_result=False)
+    caplog.set_level(logging.ERROR)
+
+    window.close()
+
+    assert "未退出" in caplog.text
+    window._debug_thread = None
+
+
+def test_reload_and_reset_reapply_hotkey(window_factory, tmp_path, monkeypatch) -> None:
+    """回归（评审 P3-9）：重载 / 恢复默认后，配置里的急停键立即重新注册。"""
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+    applied: list[str] = []
+    monkeypatch.setattr(window, "_apply_hotkey_config", lambda: applied.append("apply"))
+
+    window._reload()
+    window._reset()
+
+    assert applied == ["apply", "apply"]
+
+
+def test_hotkey_failure_is_visible_in_ui(window_factory, tmp_path, monkeypatch) -> None:
+    """回归（评审 P3-9）：热键注册失败时必须让用户看得见（状态栏 + 设置页提示），不能只写日志。
+
+    本机 F8 常被占用 → 此时「停止」按钮是唯一中断手段。
+    """
+    window = window_factory(tmp_path / "config.json", AppConfig.default())
+    monkeypatch.setattr(window._hotkey, "register", lambda hwnd=0: False)
+
+    window._register_hotkey_or_hint()
+
+    label = window.settings_page.hotkey_hint_label
+    assert "急停热键" in window.statusBar().currentMessage()
+    assert label.isHidden() is False
+    assert "停止" in label.text()
+
+
 def test_hotkey_registered_with_window_hwnd(window_factory, tmp_path, monkeypatch) -> None:
     """热键必须注册到主窗口句柄（hwnd=0 时 Qt 过滤器收不到 WM_HOTKEY）。"""
     from luoluotool.gui import main_window as mw
@@ -865,6 +999,10 @@ def test_turning_developer_mode_off_stops_running_debug_action(window_factory, t
 
         def request_stop(self) -> None:
             stopped.append("stop")
+
+        def wait(self, timeout=None) -> bool:      # 与 QThread 接口一致（关闭窗口时会等待线程退出）
+            stopped.append("wait")
+            return True
 
     window._debug_thread = _FakeDebugThread()
     window.settings_page.developer_box.setChecked(False)
