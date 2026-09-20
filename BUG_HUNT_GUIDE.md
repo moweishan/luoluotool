@@ -94,7 +94,7 @@ src/luoluotool/
     pages/planned_feature.py  51  功能三/四公共基类（占位页）
     pages/feature3.py,4.py    13  功能三/四页（占位子类）
     pages/about.py           213  「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断/打开目录）
-    dialogs/crop_dialog.py   273  框选截图生成模板（CropView + TemplateCropDialog）
+    dialogs/crop_dialog.py   479  框选截图生成模板（CropView + TemplateCropDialog）
     layout_measure.py        283  --measure-layout 的测量与报告（ASCII 安全）
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
     app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
@@ -170,10 +170,12 @@ print('layer check violations =', bad)
 主窗口门禁 + 后台截图               gui/main_window.py:497   _on_crop_requested()
   截图线程                          gui/workers.py:100   _CaptureThread → core/vision.py:212 capture_window()
   弹框（GUI 线程）                  gui/main_window.py:470   _on_capture_ready() → TemplateCropDialog
-  拖拽框选                          gui/dialogs/crop_dialog.py:62   CropView（选区外＝新框选）
-  改选区（2026-09-20 新增）         gui/dialogs/crop_dialog.py:150  hit_test() → _apply_move() / _apply_resize()
+  拖拽框选                          gui/dialogs/crop_dialog.py:58   CropView（选区外＝新框选）
+  改选区（2026-09-20 新增）         gui/dialogs/crop_dialog.py:179  hit_test() → _apply_move() / _apply_resize()
                                     选区内部＝整体移动；四角/四边 8 个手柄＝改大小（对角固定、≥MIN_SELECTION_SIZE=8）
-  保存（**只存选区**）              gui/dialogs/crop_dialog.py:233  _on_save_clicked() → save_selection():249
+  键盘微调（2026-09-20 新增）       gui/dialogs/crop_dialog.py:280  keyPressEvent → _nudge_whole() / _nudge_edge()
+                                    方向键＝整体 1 图像像素（Shift=10）；Ctrl+方向＝该边外扩 1；Ctrl+Shift＝该边内收 1
+  保存（**只存选区**）              gui/dialogs/crop_dialog.py:439  _on_save_clicked() → save_selection():455
   加入模板列表                      gui/main_window.py:484   debug_page.add_vision_template()
 ```
 
@@ -664,8 +666,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `client_to_screen` | `automation/real_input.py:157` | 客户区→屏幕换算（点击路径） |
 | `build_drag_path` | `automation/drag_path.py:49` | 缓出曲线 + 末尾静止帧 |
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
-| `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
-| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
+| `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:58` / `:368` | 框选几何与保存 |
+| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:439` / `:455` | **只保存选区** |
 | `DebugPage` | `gui/pages/debug.py:67` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `AboutPage` | `gui/pages/about.py:67` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
 | `diagnostics_text` | `gui/pages/about.py:193` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
