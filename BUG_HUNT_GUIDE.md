@@ -170,7 +170,9 @@ print('layer check violations =', bad)
 主窗口门禁 + 后台截图               gui/main_window.py:497   _on_crop_requested()
   截图线程                          gui/workers.py:100   _CaptureThread → core/vision.py:212 capture_window()
   弹框（GUI 线程）                  gui/main_window.py:470   _on_capture_ready() → TemplateCropDialog
-  拖拽框选                          gui/dialogs/crop_dialog.py:45   CropView
+  拖拽框选                          gui/dialogs/crop_dialog.py:62   CropView（选区外＝新框选）
+  改选区（2026-09-20 新增）         gui/dialogs/crop_dialog.py:150  hit_test() → _apply_move() / _apply_resize()
+                                    选区内部＝整体移动；四角/四边 8 个手柄＝改大小（对角固定、≥MIN_SELECTION_SIZE=8）
   保存（**只存选区**）              gui/dialogs/crop_dialog.py:233  _on_save_clicked() → save_selection():249
   加入模板列表                      gui/main_window.py:484   debug_page.add_vision_template()
 ```
@@ -363,6 +365,7 @@ capture_client_bgr (vision.py:393)
 | 25 | （**潜在**）"以后把按键步数上限调大"时，界面上能存下 25 步的配置，**下次启动却判它损坏并整份恢复默认** | `validation.py` 先 `from ...models import MAX_KEY_STEPS`，第 15 行又写了 `MAX_KEY_STEPS = 20` —— **同名赋值遮蔽了 import**；写入路径用 models 的、校验路径用本地的，两边今天都是 20 所以没暴露 | 删掉那行遮蔽（保留 import），上限只留 `config/models.py` 一份；并新增仓库级守卫：**任何模块级 import 都不得被同名赋值遮蔽** | `tests/test_source_guards.py::test_no_module_level_import_is_shadowed` / `a07b42a` |
 | 26 | （**潜在**）调试页允许填的坐标/间隔/次数与校验器各走各的，填进去了却在执行时被拒 | 同一组业务常量在两处各定义一份：`PW_*` 在 `vision.py` 与 `window.py` 各一份（后者是**死常量**）；`COORDINATE_MAX`/`INTERVAL_RANGE_MS`/`DURATION_RANGE_MS` 在 `core/debug.py` 与 `gui/pages/debug.py` 各一份 | 删掉 `window.py` 的死常量；调试页改为从 `core.debug` **导入**这些范围（`COUNT_RANGE` 由 `MAX_REPEAT` 推导）；守卫测试锁住"只允许定义一处 / 必须是同一个对象" | `test_printwindow_flags_are_defined_once`、`test_debug_page_limits_come_from_core_debug`、`test_sources_stay_under_line_limit` / `a07b42a` |
 | 27 | 三处"小而真"的债：接口表写了不存在的参数、共享夹具抽了但旧文件仍各有副本（三份行为已分歧）、跨模块 `from ... import _prepare` 引用私有名 | 拆分时只搬了代码，没顺手收敛"文档/夹具/私有名"这三类**隐形重复** | 接口表改成真实签名 `capture_client_bgr(hwnd)`；`test_gui_config/test_gui_layout/test_gui_smoke` 改用 `gui_helpers.window_factory`（并给它补 `tmp_path`/`developer_mode` 支持，全仓库只剩一份夹具）；`_prepare` → 公开名 `prepare_for_match` 并写进 §8 接口表 | 三个测试文件全绿（116 passed）；`gui_helpers.window_factory` 唯一副本 / `a07b42a`、`00a348b` |
+| 28 | 框选完发现**差一点**（多框/少框一截），只能**整块重新拖**（用户 2026-09-20 报告） | `CropView` 只有"按下→拖→松手"这一种交互：每次按下都从头开始新建选区，没有"改已有选区"的概念 | 加命中判定与三种拖拽模式：**选区内部**＝整体移动（`_apply_move`，夹在图像内）、**四角/四边 8 个手柄**＝改大小（`_apply_resize`：被拖的边跟手、对角固定、不小于 `MIN_SELECTION_SIZE`）、**选区外**＝重新框选；悬停给指针形状（缩放箭头/移动/十字），手柄画成 8 个方块；改完的选区就是保存用的选区 | `tests/test_gui_crop.py` 的 `test_drag_inside_selection_moves_it`、`test_drag_corner_handle_resizes_both_dimensions`、`test_drag_edge_handle_resizes_one_dimension`、`test_moving_selection_is_clamped_inside_image`、`test_resizing_cannot_shrink_below_minimum_size`、`test_drag_outside_selection_starts_a_new_one`、`test_cursor_hints_match_handle_and_inside`、`test_saved_template_uses_the_modified_selection` / 本条提交 |
 
 ---
 
