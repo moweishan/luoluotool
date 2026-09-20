@@ -16,7 +16,7 @@
 - [ ] ⚠️ 点击时长：点击＝按下→保持 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查 `stop_event`（可急停），**任何退出路径都必须在 `finally` 抬起左键**；**单点与连点测试都已接入**（连点每次点击同一时长，间隔＝点击之后的等待）；调试页「点击时长」0–5000 ms 默认 40 ms；`hold_ms=None` 与 `hold_ms=0` 语义不同（各有测试）。回归测试：`test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_repeat_click_passes_click_hold`、`test_repeat_click_rejects_bad_hold`、`test_debug_page_single_click_hold_bounds_and_default`、`test_run_debug_action_passes_click_hold`。
 - [ ] ⚠️ 滑动越界：拖拽的**起点与终点**都必须校验（任一端越界则整段跳过 + WARNING），判定共用 `check_points_in_bounds`。
 - [ ] ⚠️ 图像识别（2026-09-19）：模板匹配坐标必须是**客户区坐标**；读图用 `np.fromfile`+`cv2.imdecode`（中文路径）；模板比截图大、文件不可读、窗口最小化都要给可读错误；识别**不产生任何输入**；`automation/vision.py` 不 import PySide6；依赖已在 `requirements.txt` 声明（numpy + opencv-python-headless）。
-- [ ] ⚠️ 框选生成模板：截图必须走后台线程；框选选区以图像像素坐标为准（Qt QRect 右下角包含式，须按左上+宽高构造）；模板存 `assets/screenshots/`（用工具的截图与框选产物，**不入库**）并回填图片路径；无有效选区时不写文件。
+- [ ] ⚠️ 框选生成模板：截图必须走后台线程；框选选区以图像像素坐标为准（Qt QRect 右下角包含式，须按左上+宽高构造）；框选产物存 `assets/anchors/`（**不入库**）并回填图片路径；无有效选区时不写文件。
 - [ ] ⚠️ 开发者调试未开启时，调试页所有选项不生效：整页禁用、干跑开关不写配置（回滚勾选）、主窗口拒绝测试/诊断/布局测量请求、关闭开关时中断调试线程。
 - [ ] 配置文件损坏时：程序能启动、提示并恢复默认（验证：手工写入非法 JSON 后启动）。
 - [ ] 配置保存原子化：写入时先临时文件再 `os.replace`（看 `store.py` 代码 + 断电模拟测试）。
@@ -49,7 +49,7 @@
 ## 4. 缓存与临时数据
 
 - [ ] 诊断截图写入 `user_data/debug/`，有清理说明（旧截图会积累，需手动或后续加清理）。
-- [ ] 两个图片目录按用户要求分工（2026-09-20）：`assets/screenshots/`（用 LuoLuoTool 截图/框选产出的图片，`.gitignore` 排除 `*.{png,jpg,jpeg,bmp,webp}`，**不得入库**）与 `assets/templates/`（用户自己整理的识别图片，**必须入库**，`git add` 漏了就红）；目录靠 `.gitkeep` 入库；守卫测试 `tests/test_paths.py` 同时锁住这两条相反方向的规则。
+- [ ] 三个图片目录按用户要求分工（2026-09-20）：`assets/templates/`（自己整理的识别图片，**必须入库**，漏 `git add` 就红）｜`assets/screenshots/`（**识别底图**：用工具自带截图功能截的画面，**不入库**）｜`assets/anchors/`（开发者调试页框选产物，**不入库**）。`.gitignore` 排除 anchors 与 screenshots 下的图片、**不排除 templates**；目录都靠 `.gitkeep` 入库；守卫测试 `tests/test_paths.py` 同时锁住这两条相反方向的规则。
 - [ ] 构建产物 `build/`、`dist/` 不入库。
 - [ ] 程序不写注册表、不写系统临时敏感位置。
 

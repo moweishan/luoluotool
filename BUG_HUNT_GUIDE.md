@@ -98,7 +98,7 @@ src/luoluotool/
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
     app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
   utils/                         keys.py(72) paths.py(63) logging_setup.py(53)
-assets/                          icons/（入库）；templates/（自己整理的识别图片，**入库**）与 screenshots/（工具截图/框选产物，不入库）
+assets/                          icons/（入库）、templates/（自己整理的识别图片，**入库**）、screenshots/（识别底图，不入库）、anchors/（框选产物，不入库）
 tests/                           与 src 同构；conftest.py 全局夹具；gui_helpers.py 共享 GUI 夹具；test_packaging.py / test_source_guards.py / test_paths.py 是仓库级守卫
 packaging/                       build.ps1（UTF-8 **带 BOM**）、LuoLuoTool.spec、rthook_windowed_stdio.py
 ```
@@ -397,16 +397,17 @@ capture_client_bgr (vision.py:393)
    实测条纹模板缩到 0.5x 对另一张模板的亮块区拿到 0.883（默认阈值 0.85 就中了）。
    缓解手段：提高阈值、模板更有辨识度，或改成"全部试完取最高分"（未做）。
 4. **极小模板（<40px）+ 小缩放的缩放判断不稳**（信息量不足，模板匹配固有限制）。
-4b. **「用手动截图当识别底图」尚未实现（用户 2026-09-20 实测提出的需求）**：有的页面信息太多，
-   工具自己截客户区的图不好识别 —— 需求是让用户先截好一张画面（用工具或系统截图），再用**这张图**做匹配底图。
-   目前**只建了目录**：`assets/screenshots/`（用户 2026-09-20 明确的用途：**用 LuoLuoTool 的截图与框选功能产出的图片**，
-   即「框选截图生成模板」落盘的 `anchor_<时间戳>.png`；原始素材不入库，守卫见 `tests/test_paths.py`；
-   `utils.paths.get_screenshots_dir()` 已就位），**但"拿它当识别底图"的功能还没做**，调试页也没有"选择底图"的入口。
+4b. **「用识别底图做匹配」尚未实现（用户 2026-09-20 实测提出的需求）**：有的页面信息太多，
+   工具自己截客户区的图不好识别 —— 需求是**先用工具自带的截图功能截一张画面**，再用**这张图**做匹配底图。
+   目前**只建了目录**：`assets/screenshots/`（用户 2026-09-20 明确的用途：**识别底图**，来源＝工具自带截图功能；
+   `utils.paths.get_screenshots_dir()` 已就位，原始素材不入库，守卫见 `tests/test_paths.py`），
+   **但"截底图"和"拿底图识别"两个功能都还没做**，调试页也没有相应入口
+   （注意区分：框选产物在 `assets/anchors/`，那是**模板**不是底图）。
    **下一步接口设计要点**（接功能时按这个方向，别重新发明）：
    - `core.vision.recognize_in_window(...)` 已经有 `capture=...` 注入缝（见 ⑦），
      加一个"底图路径"参数即可复用整条编排（多模板/多区域/多尺度/纯色拒绝全部不用改）；
-   - 坐标语义要写清楚：截图可能是**整屏**（含标题栏/任务栏）或**被缩放过**的图，
-     与"客户区坐标"不再一一对应 —— 必须要求用户截**客户区**或用窗口尺寸校准，否则坐标会偏（参见 ③ 与第 1 条 bug）；
+   - 坐标语义要写清楚：底图必须是**客户区尺寸**（工具自带截图天然满足）——若用户塞进一张整屏截图
+     （含标题栏/任务栏）或被缩放过的图，坐标就不再等于客户区坐标，必须先校准（参见 ③ 与第 1 条 bug）；
    - 纯色/黑帧检测（`is_blank_frame`）与"模板比底图大"的报错照旧生效。
 5. ~~窗口诊断截图可能存成纯黑图~~ **已修（评审 P2-9，`082468b`）**：改为复用 `capture_client_bgr`
    的完整回退链（真 PNG + 黑帧检测），全失败时报可读错误而不是给你一张黑图。剩余限制：窗口不在前台时
@@ -598,8 +599,9 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | 日志 | `user_data/logs/luoluotool.log` |
 | 识别带框截图 | `user_data/debug/vision_<时间戳>.png`（整屏 + 画框，每处命中一个编号） |
 | 窗口诊断截图 | `user_data/debug/window_<时间戳>.png` |
-| 框选产物/截图 | `assets/screenshots/anchor_<时间戳>.png`（用工具截图与框选产出的图片，**不入库**） |
+| 框选产物 | `assets/anchors/anchor_<时间戳>.png`（开发者调试页框选生成，**不入库**） |
 | 识别图片 | `assets/templates/*.png`（用户自己整理，**入库**；调试页「添加图片…」默认打开它） |
+| 识别底图 | `assets/screenshots/*.png`（用工具自带截图功能截的画面，**不入库**；"用底图识别"功能待实现） |
 | 配置 | `user_data/config.json`（schema v9；损坏会自动恢复并在日志说明） |
 
 ---
@@ -673,7 +675,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
 | `migrate` / `validate` | `config/validation.py:309` / `:339` | 迁移链（每步独立 try，绝不崩）与校验 |
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
-| `get_templates_dir` / `get_screenshots_dir` | `utils/paths.py:55` / `:45` | 识别图片目录：`assets/templates`（自己整理的，**入库**）/ `assets/screenshots`（工具截图与框选产物，不入库） |
+| `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:55` / `:65` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
 | `prepare_for_match` | `automation/template_match.py:104` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
 | `_on_vision_add_clicked` | `gui/pages/debug.py:425` | 「添加图片…」对话框默认打开 `assets/templates` |
 | `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |

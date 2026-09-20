@@ -45,7 +45,8 @@ LuoLuoTool/
 ├── tests/                    # pytest 测试
 ├── assets/
 │   ├── templates/            # 识别图片：我自己整理/命名的模板（入库）
-│   ├── screenshots/          # 用本工具的截图/框选功能产出的图片（不入库）
+│   ├── screenshots/          # 识别底图：用本工具自带截图功能截的画面（不入库）
+│   ├── anchors/              # 开发者调试页「框选」生成的图（不入库）
 │   └── icons/                # 窗口图标等静态资源（入库）
 ├── user_data/                # 运行时用户数据（不入库）
 │   ├── debug/                # 诊断截图输出目录
