@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -20,6 +20,7 @@ from luoluotool.automation.vision import (
     DEFAULT_MAX_RESULTS,
     DEFAULT_SCALE_RANGE,
     DEFAULT_THRESHOLD,
+    MIN_TEMPLATE_SIDE,
     Match,
     VisionError,
     annotate,
@@ -241,3 +242,121 @@ def _save_annotated(image: np.ndarray, matches: tuple[Match, ...]) -> Path | Non
     except Exception as exc:
         logger.warning("保存识别结果截图失败：%s", exc)
         return None
+
+
+# ------------------------------------------------- 「在本图试识别」（D1：框选弹窗自检）
+
+PROBE_MAX_LISTED = 5          # 消息里最多列出几处位置（其余写"等 N 处"，图上的框全画）
+
+
+@dataclass(frozen=True)
+class TemplateProbeResult:
+    """「把这块选区当模板、在同一张图上试识别」的结论。
+
+    - `matches` 含**自己那一处**（模板就是从这张图裁的，分数必然接近 1.0），`self_index` 标出它的下标；
+    - `duplicates`＝除自己以外的命中数 —— **这才是给用户看的数字**：0 表示这块区域在画面里独一无二，
+      >0 表示还有别处长一样，真识别时可能选错地方；
+    - `truncated` 表示触到了 `max_results` 上限（可能还有更多）。
+    """
+
+    region: tuple[int, int, int, int]
+    matches: tuple[Match, ...]
+    self_index: int
+    threshold: float
+    truncated: bool
+    message: str
+
+    @property
+    def self_match(self) -> Match | None:
+        """自己那一处（正常情况必有；异常时为 None）。"""
+        if 0 <= self.self_index < len(self.matches):
+            return self.matches[self.self_index]
+        return None
+
+    @property
+    def others(self) -> tuple[Match, ...]:
+        """除自己以外的命中（画在图上、列在消息里的就是这些）。"""
+        return tuple(
+            match for index, match in enumerate(self.matches) if index != self.self_index
+        )
+
+    @property
+    def duplicates(self) -> int:
+        return len(self.others)
+
+
+def probe_region_on_image(
+    image_bgr: np.ndarray,
+    region: tuple[int, int, int, int],
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    max_results: int = DEFAULT_MAX_RESULTS,
+) -> TemplateProbeResult:
+    """把 `region` 那块当模板，在**同一张图**上匹配一次（用户 2026-09-20 勾选的 D1）。
+
+    为什么需要它：光看截图，用户没法判断"这块区域在画面里是不是独一无二"；等到真识别时
+    才发现有几处长得一样，就只能靠猜坐标。这里当场给出答案。
+
+    只做 **1:1 匹配**：模板就是从这张图裁下来的，缩放搜索没有意义，还慢好几倍。
+    选区非法（越界/太小）时抛可读 `VisionError`（调用方转成提示），绝不返回假结论。
+    """
+    image_height, image_width = image_bgr.shape[:2]
+    x, y, width, height = (int(value) for value in region)
+    if width < MIN_TEMPLATE_SIDE or height < MIN_TEMPLATE_SIDE:
+        raise VisionError(
+            f"选区太小（{width}x{height}），至少 {MIN_TEMPLATE_SIDE}x{MIN_TEMPLATE_SIDE} 像素才能试识别"
+        )
+    if x < 0 or y < 0 or x + width > image_width or y + height > image_height:
+        raise VisionError(
+            f"选区 ({x}, {y}, {width}, {height}) 超出截图范围（{image_width}x{image_height}）"
+        )
+    template = image_bgr[y : y + height, x : x + width]
+    max_results = max(int(max_results), 1)
+    matches = tuple(locate_all(image_bgr, template, threshold=threshold, max_results=max_results))
+
+    self_index = -1
+    for index, match in enumerate(matches):
+        if abs(match.left - x) <= 1 and abs(match.top - y) <= 1:
+            self_index = index
+            break
+    result = TemplateProbeResult(
+        region=(x, y, width, height), matches=matches, self_index=self_index,
+        threshold=float(threshold), truncated=len(matches) >= max_results, message="",
+    )
+    logger.info(
+        "框选自检：选区 (%d, %d, %d, %d) 在 %dx%d 的画面上命中 %d 处（除自己 %d 处）",
+        x, y, width, height, image_width, image_height, len(matches), result.duplicates,
+    )
+    return replace(result, message=_probe_message(result))
+
+
+def _probe_message(result: TemplateProbeResult, max_listed: int = PROBE_MAX_LISTED) -> str:
+    """组织「在本图试识别」的人读结论（分成：独一无二 / 有多处 / 异常零命中）。"""
+    if not result.matches:
+        return (
+            "试识别异常：连你框的这块都没找到（模板就是从这张图裁下来的，正常情况下必然命中）——"
+            "请把这次操作和日志一并反馈"
+        )
+    self_match = result.self_match
+    best_score = self_match.score if self_match is not None else result.matches[0].score
+    if result.duplicates == 0:
+        return (
+            f"试识别：本图只命中你框的这一处（匹配度 {best_score:.3f}）——"
+            f"这块区域在画面里是独一无二的，存成模板后识别不会认错"
+        )
+    listed = "、".join(
+        f"({match.center[0]}, {match.center[1]})" for match in result.others[:max_listed]
+    )
+    head = (
+        f"试识别：本图共 {len(result.matches)} 处相似（阈值 {result.threshold:.2f}），"
+        f"除你框的还有 {result.duplicates} 处：{listed}"
+    )
+    if result.duplicates > max_listed:
+        head += f" 等 {result.duplicates} 处"
+    lines = [
+        head,
+        "⚠ 识别时可能选中其中任意一处：建议把选区改小到只包含独特细节（例如数字/图标），或改用更靠得住的特征",
+    ]
+    if result.truncated:
+        lines.append(f"注意：已达上限 {len(result.matches)} 处，可能还有更多")
+    return "\n".join(lines)

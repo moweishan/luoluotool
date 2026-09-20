@@ -135,3 +135,37 @@ class _DiagnoseThread(QThread):
         except Exception:
             logger.exception("窗口诊断失败")
             self.finished_message.emit("窗口诊断失败，详见日志", False)
+
+
+class TemplateProbeThread(QThread):
+    """在后台线程做「在本图试识别」（框选弹窗自检，D1）。
+
+    为什么必须放线程里：模板匹配是 CPU 密集的，全屏截图配大模板要 1–2 秒，
+    放 GUI 线程会把弹窗卡住（AGENTS §2：长任务一律放工作线程）。
+
+    公共名字（无下划线）：它被 `gui/dialogs/crop_dialog.py` 使用，
+    跨模块共用私有名是明令禁止的（AGENTS §2「同一件事只允许有一份」第 ③ 条）。
+    """
+
+    finished_probe = Signal(object)            # TemplateProbeResult
+    failed_message = Signal(str)
+
+    def __init__(self, image, region: tuple[int, int, int, int], threshold: float,
+                 max_results: int) -> None:
+        super().__init__()
+        self._image = image
+        self._region = region
+        self._threshold = threshold
+        self._max_results = max_results
+
+    def run(self) -> None:
+        try:
+            result = vision_actions.probe_region_on_image(
+                self._image, self._region,
+                threshold=self._threshold, max_results=self._max_results,
+            )
+        except Exception as exc:   # 越界/太小/匹配异常都转成可读提示，不抛给 GUI
+            logger.exception("框选自检失败：%s", exc)
+            self.failed_message.emit(f"{type(exc).__name__}: {exc}")
+        else:
+            self.finished_probe.emit(result)

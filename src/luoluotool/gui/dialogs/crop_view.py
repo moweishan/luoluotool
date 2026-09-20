@@ -41,6 +41,7 @@ HANDLE_SIZE_PX = 10             # 手柄命中范围（控件像素）：缩放�
 DIM_COLOR = QColor(0, 0, 0, 120)        # 选区外遮罩（让选中的那块跳出来，用户 2026-09-20 要求）
 BUBBLE_COLOR = QColor(0, 0, 0, 200)     # 拖拽时的尺寸气泡底色
 BUBBLE_PADDING_PX = 6
+PROBE_COLOR = QColor(255, 152, 0)       # 「在本图试识别」命中的**其它**位置（D1，橙色框）
 
 
 # 八个手柄（四角 + 四边）与它们的指针形状：拖动它们改选区大小（用户 2026-09-20 要求）
@@ -96,6 +97,7 @@ class CropView(ZoomPanMixin, QWidget):
         self._pan_origin: QPoint | None = None              # 平移起点（控件坐标）
         self._pan_start = QPoint(0, 0)
         self._magnifier_enabled = True                      # 放大镜（默认开，截图工具习惯）
+        self._probe_rects: list[QRect] = []                 # 试识别命中的其它位置（D1，橙色框）
         self.setMinimumSize(360, 240)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)     # 方向键微调需要键盘焦点
@@ -523,7 +525,42 @@ class CropView(ZoomPanMixin, QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(bubble, Qt.AlignmentFlag.AlignCenter, self.drag_bubble_text())
             painter.setBrush(Qt.BrushStyle.NoBrush)
+        self._paint_probe_rects(painter)          # 「在本图试识别」命中的其它位置
         self._paint_magnifier(painter)
+
+    # ------------------------------------------------- 试识别命中的其它位置（D1）
+    def set_probe_rects(self, rects: list[QRect] | None) -> None:
+        """标出「在本图试识别」里"不是你框的那几处"（图像像素坐标）；传空则清掉。
+
+        用户 2026-09-20 勾选的 D1：光看文字"还有 2 处"还是得自己找，直接画在图上最直观。
+        """
+        self._probe_rects = [QRect(rect) for rect in (rects or [])]
+        self.update()
+
+    def probe_rects(self) -> list[QRect]:
+        """当前标出的试识别命中位置（图像像素坐标）。"""
+        return [QRect(rect) for rect in self._probe_rects]
+
+    def _paint_probe_rects(self, painter: QPainter) -> None:
+        """把试识别命中的其它位置画成橙色框 + 序号（自己那处就是选区本身，不重复画）。"""
+        if not self._probe_rects:
+            return
+        display = self.image_rect()
+        scale = self._scale() or 1.0
+        painter.setPen(QPen(PROBE_COLOR, 2))
+        for number, rect in enumerate(self._probe_rects, start=1):
+            target = QRect(
+                display.x() + int(round(rect.left() * scale)),
+                display.y() + int(round(rect.top() * scale)),
+                max(1, int(round(rect.width() * scale))),
+                max(1, int(round(rect.height() * scale))),
+            ).intersected(display)
+            if target.isEmpty():
+                continue
+            painter.drawRect(target)
+            painter.drawText(target.adjusted(2, 0, -2, -2),
+                             Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignRight,
+                             f"{number}")
 
     def _paint_dim_mask(self, painter: QPainter, selection: QRect) -> None:
         """把选区以外的区域压暗（四个矩形拼起来，避免动到选区内的像素）。"""

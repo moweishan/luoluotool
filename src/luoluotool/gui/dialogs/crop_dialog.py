@@ -18,7 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QRect, Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -29,7 +29,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from luoluotool.automation.template_match import RegionQuality, assess_region_quality
+from luoluotool.automation.template_match import (
+    DEFAULT_MAX_RESULTS,
+    DEFAULT_THRESHOLD,
+    RegionQuality,
+    assess_region_quality,
+)
 from luoluotool.automation.vision import save_image
 from luoluotool.gui.dialogs.crop_view import (      # 再导出：旧导入路径不变
     BACKGROUND_COLOR,
@@ -43,10 +48,13 @@ from luoluotool.gui.dialogs.crop_view import (      # 再导出：旧导入路�
     CropView,
     to_qimage,
 )
+from luoluotool.gui.workers import TemplateProbeThread
 
 logger = logging.getLogger(__name__)
 
 NEAR_FULL_RATIO = 0.95          # 选区面积 ≥ 整屏的该比例时提示"几乎等于整屏"
+PROBE_IDLE_TEXT = "尚未试识别（点左边按钮，把当前选区在本图上匹配一次）"
+PROBE_WAIT_MS = 10000           # 关窗口时最多等试识别线程多久（全屏大模板实测 1–2 秒）
 
 
 class TemplateCropDialog(QDialog):
@@ -76,6 +84,8 @@ class TemplateCropDialog(QDialog):
             "Ctrl+Shift+方向键向内 1 像素。\n"
             "**看细节**：滚轮＝以鼠标为中心缩放、中键拖拽 或 空格+拖拽＝平移画面、"
             "下面两个按钮＝「适配窗口」/「1:1 显示」；鼠标旁的放大镜显示当前像素与坐标。\n"
+            "**拿不准就点「在本图试识别」**：把当前选区当模板，在这张截图上匹配一次，"
+            "当场告诉你这块区域在画面里是不是独一无二。\n"
             "建议框选画面中**不会变化**的局部（数字、倒计时等变动区域会让匹配不稳定）。"
         ))
         self.view = CropView(image_bgr)
@@ -83,8 +93,6 @@ class TemplateCropDialog(QDialog):
         self.view.setFocus()                  # 打开弹窗就把键盘焦点给框选图（方向键立刻可用）
         self.info_label = QLabel("尚未选择区域")
         self.info_label.setWordWrap(True)
-        self.view.selection_changed.connect(self._refresh_info)
-        self.view.view_changed.connect(self._refresh_info)
 
         zoom_row = QHBoxLayout()
         self.zoom_fit_button = QPushButton("适配窗口")
@@ -99,9 +107,30 @@ class TemplateCropDialog(QDialog):
         zoom_row.addWidget(self.zoom_actual_button)
         zoom_row.addWidget(self.zoom_hint_label, 1)
 
+        # 「在本图试识别」（D1）：把当前选区当模板，在同一张截图上匹配一次
+        self.probe_button = QPushButton("在本图试识别")
+        self.probe_button.setToolTip(
+            "把当前选区当模板，在这张截图上匹配一次：看画面里有没有别处长一样（不保存文件、不产生任何输入）"
+        )
+        self.probe_button.setEnabled(False)           # 没框选就没得测
+        self.probe_button.clicked.connect(self.run_probe)
+        self.probe_hint_label = QLabel(
+            "「在本图试识别」＝当场试一次：只命中你框的这块＝独一无二；还有别处＝识别时可能选错地方。"
+        )
+        self.probe_hint_label.setWordWrap(True)
+        self.probe_result_label = QLabel(PROBE_IDLE_TEXT)
+        self.probe_result_label.setWordWrap(True)
+        probe_row = QHBoxLayout()
+        probe_row.addWidget(self.probe_button)
+        probe_row.addWidget(self.probe_hint_label, 1)
+        self._probe_thread: TemplateProbeThread | None = None
+        self._probe_region: tuple[int, int, int, int] | None = None
+
         layout.addWidget(self.view, 1)
         layout.addLayout(zoom_row)
         layout.addWidget(self.info_label)
+        layout.addLayout(probe_row)
+        layout.addWidget(self.probe_result_label)
 
         buttons = QDialogButtonBox()
         self.save_button = QPushButton("保存为模板")
@@ -114,6 +143,10 @@ class TemplateCropDialog(QDialog):
         self.save_button.clicked.connect(self._on_save_clicked)
         self.cancel_button.clicked.connect(self.reject)
         layout.addWidget(buttons)
+
+        # 信号连接放在最后：`_refresh_info` 会用试识别的按钮与结果标签（要等它们建好）
+        self.view.selection_changed.connect(self._refresh_info)
+        self.view.view_changed.connect(self._refresh_info)
 
         self.resize(900, 640)
 
@@ -152,8 +185,90 @@ class TemplateCropDialog(QDialog):
         return text
 
     def _refresh_info(self) -> None:
-        """信息行 = 选区描述 + 视图状态（缩放倍率 + 鼠标处客户区坐标）。"""
+        """信息行 = 选区描述 + 视图状态（缩放倍率 + 鼠标处客户区坐标）。
+
+        顺带维护「在本图试识别」的状态：选区一变，上一次的结论就不再适用（否则用户会拿着
+        上一块区域的结论判断这一块），按钮可用性也跟着选区走。
+        """
         self.info_label.setText(f"{self.selection_text()}　｜　{self.view_status_text()}")
+        selection = self.selection()
+        self.probe_button.setEnabled(selection is not None and not self._probe_running())
+        if self._probe_region is not None and selection != self._probe_region:
+            self._clear_probe_result()
+
+    # ------------------------------------------- 「在本图试识别」（D1 自检）
+    @property
+    def probe_thread(self) -> TemplateProbeThread | None:
+        """当前正在跑的试识别线程（没有则为 None）；关窗路径与测试用它确认线程已收干净。"""
+        return self._probe_thread
+
+    def _probe_running(self) -> bool:
+        return bool(self._probe_thread is not None and self._probe_thread.isRunning())
+
+    def run_probe(self) -> None:
+        """把当前选区当模板，在同一张截图上试一次匹配（后台线程，不卡界面）。
+
+        纯色/几乎没有细节的选区分明没有意义（匹配会满屏飘），直接提示换一块、不浪费时间。
+        """
+        selection = self.selection()
+        if selection is None:
+            self.probe_result_label.setText("请先框选要测试的区域")
+            return
+        if self._probe_running():
+            return
+        quality = self.selection_quality()
+        if quality is not None and not quality.is_usable:
+            self.probe_result_label.setText(
+                f"这块区域{quality.message}，试识别只会满屏「命中」、看不出有没有用："
+                "请换一块有纹理/数字/图标的区域（或把选区框大一点）"
+            )
+            return
+        self._clear_probe_result()
+        self._probe_region = selection
+        self.probe_result_label.setText("正在本图试识别…")
+        self.probe_button.setEnabled(False)
+        self._probe_thread = TemplateProbeThread(
+            self._image, selection, DEFAULT_THRESHOLD, DEFAULT_MAX_RESULTS
+        )
+        self._probe_thread.finished_probe.connect(self._on_probe_finished)
+        self._probe_thread.failed_message.connect(self._on_probe_failed)
+        self._probe_thread.finished.connect(self._on_probe_thread_finished)
+        self._probe_thread.start()
+
+    def _on_probe_finished(self, result) -> None:
+        """试识别成功：写结论 + 把"别的那些位置"画在图上（自己那处＝选区本身，不重复画）。"""
+        self.probe_result_label.setText(result.message)
+        others = [
+            QRect(match.left, match.top, match.width, match.height) for match in result.others
+        ]
+        self.view.set_probe_rects(others)
+
+    def _on_probe_failed(self, message: str) -> None:
+        self.probe_result_label.setText(f"试识别失败：{message}")
+        self.view.set_probe_rects([])
+
+    def _on_probe_thread_finished(self) -> None:
+        self._probe_thread = None
+        self.probe_button.setEnabled(self.selection() is not None)
+
+    def _clear_probe_result(self) -> None:
+        """清掉试识别的结论与图上的标记（选区变了 / 要重新测时调用）。"""
+        self._probe_region = None
+        self.view.set_probe_rects([])
+        self.probe_result_label.setText(PROBE_IDLE_TEXT)
+
+    def _wait_for_probe_thread(self) -> None:
+        """关窗口前等后台线程结束（丢下正在跑的 QThread 会崩）。"""
+        thread = self._probe_thread
+        if thread is None or not thread.isRunning():
+            return
+        if not thread.wait(PROBE_WAIT_MS):
+            logger.error("框选自检线程在 %d ms 内没有结束（关窗口时不再等）", PROBE_WAIT_MS)
+
+    def done(self, result: int) -> None:
+        """accept / reject / close 都会走到这里：先等试识别线程，再关。"""
+        self._wait_for_probe_thread()
+        super().done(result)
 
     def view_status_text(self) -> str:
         """视图状态：缩放倍率与鼠标处的客户区坐标（鼠标还没进图时只给缩放）。"""
