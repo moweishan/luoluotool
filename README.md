@@ -18,6 +18,7 @@
 | `DATA_API_PREP.md` | 外部服务/API/密钥/本地资源准备清单 | 人 | 开始开发前先看完 |
 | `PHASE_PROMPTS.md` | 分阶段提示词（一段一段复制给 AI） | 人 → 复制给 AI | 每完成一阶段后 |
 | `CHECKLIST.md` | 遗漏项检查表（配置/日志/安全/合规等） | 人 + AI | 每个阶段收尾时逐项核对 |
+| `BUG_HUNT_GUIDE.md` | 排查手册：架构/数据流/线程模型、三套坐标系、21 条可验证不变量、15 条历史 bug 档案（症状/根因/修法/回归测试）、已知薄弱点、测试注入缝、实机探针脚本 | 人 + 另一个排查会话 | **接手排查 bug / 交接给别人找 bug 时先读** |
 
 ## 2. 目录结构（已创建，空目录用 `.gitkeep` 占位）
 
@@ -29,6 +30,7 @@ LuoLuoTool/
 ├── DATA_API_PREP.md          # 外部服务/本地资源准备清单
 ├── PHASE_PROMPTS.md          # 分阶段提示词
 ├── CHECKLIST.md              # 遗漏项检查表
+├── BUG_HUNT_GUIDE.md         # 排查手册（不变量/历史 bug 档案/实机探针）
 ├── .gitignore                # 忽略 venv/构建产物/本地配置/截图
 ├── requirements.txt          # 运行时依赖
 ├── requirements-dev.txt      # 开发/测试/打包依赖
