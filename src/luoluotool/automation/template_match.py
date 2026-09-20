@@ -28,6 +28,15 @@ BLANK_MIN_PIXELS = 64            # 少于该像素数不做"纯色帧"判断（1
 BLANK_STD_THRESHOLD = 2.0        # 标准差低于该值视为纯色/黑帧
 MIN_TEMPLATE_SIDE = 4            # 缩放后模板每边至少这么多像素（再小没有匹配意义）
 
+# 模板区域质量（用户 2026-09-21 要求：保存前质量检查 + 可辨识度提示）。
+# 阈值拿真实素材标定：`assets/templates/` 的人工模板与可用的框选产物，对比度 ≥ 11.3、边缘占比 ≥ 0.065；
+# 而纯色/轻噪声是 ≤ 2.7 / 0.000 —— 两组之间留了很宽的安全带。
+QUALITY_SAMPLE_PX = 128          # 评估取样边长（大图按步长抽样：GUI 里每移动一次鼠标都要算）
+QUALITY_LOW_STD = 8.0            # 灰度标准差低于该值 → 对比度不足
+QUALITY_LOW_EDGE_RATIO = 0.01    # 边缘像素占比低于该值 → 几乎没有结构
+QUALITY_CANNY_LOW = 60           # 结构检测用的 Canny 阈值（与标定实测同一套）
+QUALITY_CANNY_HIGH = 160
+
 
 class VisionError(RuntimeError):
     """图像识别失败（模板读取失败、模板比截图大、截图渲染失败等）。"""
@@ -70,6 +79,67 @@ def is_blank_frame(image: np.ndarray) -> bool:
     if image.size == 0 or image.shape[0] * image.shape[1] < BLANK_MIN_PIXELS:
         return False
     return float(image.std()) < BLANK_STD_THRESHOLD
+
+
+@dataclass(frozen=True)
+class RegionQuality:
+    """一块画面当模板的"可辨识度"评估结果（保存前检查与界面提示共用）。"""
+
+    width: int
+    height: int
+    std: float                   # 灰度对比度（标准差）
+    edge_ratio: float            # 边缘像素占比（0–1，衡量"结构"）
+    level: str                   # "ok" / "low" / "flat"
+    message: str                 # 人读说明（界面直接显示）
+
+    @property
+    def is_usable(self) -> bool:
+        """是否允许当模板保存（只有 `flat` 会被拦下）。"""
+        return self.level != "flat"
+
+
+def assess_region_quality(image_bgr: np.ndarray) -> RegionQuality:
+    """评估一块画面当模板的可辨识度：**对比度**（灰度标准差）+ **结构**（边缘占比）。
+
+    三个档位的取舍（用户 2026-09-21 要求的是"阻止存下没用的模板"，不是"替用户挑模板"）：
+
+    - `flat`：几乎是纯色（直接复用 `is_blank_frame`，与 `load_template` 同一套判据）——
+      这种图**存下来也读不进来**（`load_template` 会拒绝），必然白框一次，所以**不许保存**；
+      实测一张纯色 260x260 曾在真实画面上刷出 20 处"匹配度 1.000"。
+    - `low`：**只是提示**，允许保存。两个信号都弱时（既没对比度又没结构）说明"几乎没有可辨识的细节"，
+      只有一个信号弱时说明"辨识度偏低"（例如平滑渐变：对比度够、结构几乎没有）。
+      不在这里硬拦的原因：低对比度有时是用户有意为之（例如大块深色面板上的浅字），
+      而它至少还能被 `load_template` 读进来，拦住反而挡了用户的路。
+    - `ok`：可用。
+
+    取样：边长超过 `QUALITY_SAMPLE_PX` 时按**步长抽样**而不是整图计算 —— 界面上拖动选区时
+    每移动一次鼠标都会调用它，整图算一次 800x478 要 ~10ms，抽样是 ~1ms（1600x1024 实测 1.4ms），
+    而"纯色/噪声仍然是平的、纹理仍然有边缘"这两个性质在抽样后不变。
+    """
+    height, width = image_bgr.shape[:2]
+    step = max(1, -(-max(height, width) // QUALITY_SAMPLE_PX))     # 向上取整的整数步长
+    sample = np.ascontiguousarray(image_bgr[::step, ::step])
+    gray = cv2.cvtColor(sample, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    std = float(gray.std())
+    edges = cv2.Canny(sample, QUALITY_CANNY_LOW, QUALITY_CANNY_HIGH)
+    edge_ratio = float(edges.mean()) / 255.0
+
+    weak_contrast = std < QUALITY_LOW_STD
+    weak_structure = edge_ratio < QUALITY_LOW_EDGE_RATIO
+    metrics = f"对比度 {std:.1f}、边缘 {edge_ratio:.1%}"
+    if is_blank_frame(sample):
+        level = "flat"
+        message = f"几乎没有可辨识的细节（{metrics}，几乎是纯色）"
+    elif weak_contrast and weak_structure:
+        level = "low"
+        message = f"几乎没有可辨识的细节（{metrics}）"
+    elif weak_contrast or weak_structure:
+        level = "low"
+        message = f"辨识度偏低（{metrics}）"
+    else:
+        level = "ok"
+        message = f"辨识度良好（{metrics}）"
+    return RegionQuality(width, height, std, edge_ratio, level, message)
 
 
 # ---------------------------------------------------------------- 模板与匹配

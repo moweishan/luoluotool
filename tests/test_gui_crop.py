@@ -251,3 +251,85 @@ def test_save_button_flags_near_full_screen_selection(tmp_path) -> None:
     dialog.set_selection_in_image(10, 10, 60, 40)
     assert "几乎等于整屏" not in dialog.selection_text()
     dialog.deleteLater()
+
+
+# ------------------------------------------------ 保存前质量检查 + 可辨识度提示（批 3）
+
+
+def _flat_image(width: int = 200, height: int = 150, value: int = 120) -> np.ndarray:
+    """纯色画布：模拟"框到了一大块没有任何细节的背景"。"""
+    return np.full((height, width, 3), value, dtype=np.uint8)
+
+
+def test_selection_quality_reports_recognizability(tmp_path) -> None:
+    """D2：选区一改，信息行就给出可辨识度（良好 / 偏低 / 几乎没有）。"""
+    smooth = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=tmp_path)
+    assert smooth.selection_quality() is None                 # 还没选区就没得评估
+    smooth.set_selection_in_image(20, 20, 60, 60)
+    assert smooth.selection_quality().level == "low"          # 平滑渐变：对比度够、结构太少
+    assert "辨识度偏低" in smooth.selection_text()
+
+    noise = np.random.default_rng(0).integers(0, 255, (200, 200, 3), dtype=np.uint8)
+    textured = TemplateCropDialog(noise, (200, 200), save_dir=tmp_path)
+    textured.set_selection_in_image(20, 20, 60, 60)
+    assert textured.selection_quality().level == "ok"
+    assert "辨识度良好" in textured.selection_text()
+
+    flat = TemplateCropDialog(_flat_image(), (200, 150), save_dir=tmp_path)
+    flat.set_selection_in_image(10, 10, 80, 60)
+    assert flat.selection_quality().level == "flat"
+    assert "几乎没有" in flat.info_label.text()
+    for dialog in (smooth, textured, flat):
+        dialog.deleteLater()
+
+
+def test_save_button_refuses_a_featureless_selection(tmp_path, caplog) -> None:
+    """C3：纯色选区分明"存下来也没法用"，保存按钮必须拒绝：不写文件、不关窗口、给出原因。"""
+    import logging as _logging
+
+    caplog.set_level(_logging.WARNING)
+    image = _flat_image()
+    dialog = TemplateCropDialog(image, (200, 150), save_dir=tmp_path)
+    dialog.set_selection_in_image(10, 10, 80, 60)
+
+    dialog.save_button.click()
+
+    assert list(tmp_path.glob("anchor_*.png")) == []            # 一个文件都没写
+    assert dialog.result() == 0                                # 窗口没关（还能继续框）
+    assert dialog.saved_path is None
+    assert "几乎没有" in dialog.info_label.text()
+    assert "换" in dialog.info_label.text()                     # 告诉用户怎么办
+    assert any("辨识度" in record.message for record in caplog.records)
+    dialog.deleteLater()
+
+
+def test_save_selection_refuses_a_featureless_region(tmp_path, caplog) -> None:
+    """程序化调用 `save_selection()` 同样拦住纯色区域（不只靠按钮那一层）。"""
+    import logging as _logging
+
+    caplog.set_level(_logging.WARNING)
+    image = _flat_image()
+    dialog = TemplateCropDialog(image, (200, 150), save_dir=tmp_path)
+    dialog.set_selection_in_image(10, 10, 80, 60)
+
+    assert dialog.save_selection() is None
+    assert list(tmp_path.glob("anchor_*.png")) == []
+    assert any("辨识度" in record.message for record in caplog.records)
+    dialog.deleteLater()
+
+
+def test_low_recognizability_selection_can_still_be_saved(tmp_path) -> None:
+    """"偏低"只提示、不拦：平滑渐变仍可保存（用户自己判断），只是信息行写明偏低。"""
+    image = _flat_image()
+    gradient = np.linspace(20, 235, image.shape[1]).astype(np.uint8)
+    image[:, :, :] = gradient[None, :, None]                  # 三通道一起渐变 → 灰度对比度够
+    dialog = TemplateCropDialog(image, (200, 150), save_dir=tmp_path)
+
+    dialog.set_selection_in_image(10, 10, 80, 60)
+    assert dialog.selection_quality().level == "low"
+    assert "辨识度偏低" in dialog.selection_text()
+
+    dialog.save_button.click()
+    assert dialog.saved_path is not None
+    assert len(list(tmp_path.glob("anchor_*.png"))) == 1
+    dialog.deleteLater()

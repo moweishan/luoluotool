@@ -676,6 +676,22 @@ Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--smoke-gui' -Wait
 > `crop_view` 再导出常量）、`tests/test_gui_crop.py` 740→253、`tests/test_gui_crop_edit.py` 763→562
 > （拆出 `test_gui_crop_zoom.py`）。
 
+> **追加（2026-09-21，同一批勾选的第 3 组：C3 保存前模板质量检查 + D2 可辨识度提示）**：
+> 新增 `automation/template_match.assess_region_quality(img) -> RegionQuality` —— **对比度**（灰度标准差）+
+> **结构**（Canny 边缘占比），大图按步长抽样到 ≤128px（拖动选区时每次鼠标移动都会算：整图 800x478 ~10ms →
+> 抽样 1.4ms/1600x1024）。三档：`flat`（几乎是纯色，判据**复用 `is_blank_frame`**，与 `load_template` 同一套）
+> **拒绝保存**、`low` **只提示**（两个信号都弱 → "几乎没有可辨识的细节"，只有一个弱 → "辨识度偏低"）、`ok`。
+> 界面：信息行常驻「辨识度…」，保存按钮与 `save_selection()` **双层拦截**（纯色时不写文件、不关窗口，说明原因）。
+> 阈值拿真实素材标定：`assets/templates/` 的两张模板与可用的框选产物 ≥ 11.3 / 6.5%，纯色与轻噪声 ≤ 2.7 / 0.0% →
+> 取 `QUALITY_LOW_STD`=8.0、`QUALITY_LOW_EDGE_RATIO`=0.01，并加守卫测试 `test_real_templates_are_all_rated_usable`。
+> **设计取舍（已和用户说明）**：只有"几乎是纯色"才硬拦 —— 低对比度有时是用户有意为之（深色面板上的浅字），
+> 而且它至少还能被 `load_template` 读进来，硬拦反而挡路；实测 `anchor_20260919_223827.png`（对比度 2.7、边缘 0.1%）
+> 会被提示成"几乎没有可辨识的细节"，而两张人工模板判为"辨识度良好"。
+> 新增 13 条用例（`tests/test_automation/test_template_quality.py` 9 条 + `tests/test_gui_crop.py` 4 条），
+> 全量 **599 项测试通过**；四条验收命令全 0。
+> 另：顺手把 `tools/check_guide_index.py` 升级成也能核对"多符号行"（`` `A` / `B` | `path:12` / `:34` ``）——
+> 升级前它只认单符号行，附录里 62 条多符号行等于**没被检查**；升级后核对 104 条、并修掉 11 条早已漂移的行号。
+
 ---
 
 ## 后续阶段（先不执行，仅占位）
