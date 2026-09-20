@@ -23,6 +23,7 @@ from luoluotool.config.models import AppConfig
 logger = logging.getLogger(__name__)
 
 READINESS_POLL_SECONDS = 0.2
+CLICK_CURSOR_TOLERANCE_PX = 4        # 点击前允许的光标落点偏差；超过就跳过本次点击
 
 
 class WindowUnavailableError(RuntimeError):
@@ -164,6 +165,8 @@ class RealInputSender:
             screen = real_input.client_to_screen(self.hwnd, (x, y))
             real_input.move_cursor_absolute(*screen)
             self._sleep(real_input.INPUT_SETTLE_SECONDS)
+            if not self._verify_before_press(x, y, screen):
+                return
             if not real_input.send_left_click(
                 self._sleep, hold_seconds=hold_seconds, stop_event=self._stop_event
             ):
@@ -177,6 +180,48 @@ class RealInputSender:
             if self.restore_cursor and saved is not None:
                 real_input.set_cursor_pos(*saved)
             self._release_topmost_if_needed(front)
+
+    def _verify_before_press(self, x: int, y: int, screen: tuple[int, int]) -> bool:
+        """按下左键前核对"事实"，返回是否继续点击。
+
+        为什么需要（2026-09-20 实测）：用户报"同一坐标在某个页面能点、另一个页面点不动"，而日志两边
+        都只写"完成" —— 真实输入"成功"只代表 `SendInput` 被系统接受，不代表游戏真的收到并处理了。
+        这里把可核对的事实一次记全，下一次就能一眼区分"没送到"与"送对了但游戏不认"：
+        客户区尺寸（窗口是否被改过大小）、目标屏幕点、**实测光标位置**、前台/置顶状态、光标处窗口。
+
+        `SendInput` 被接受但光标没到位（例如被系统/权限钳制）时**不点击**：那样会点到别的控件上，
+        在游戏里可能误触其它按钮 —— 宁可跳过并写 WARNING。
+        """
+        try:
+            _, _, width, height = get_client_rect(self.hwnd)
+        except Exception:
+            width = height = -1
+        try:
+            actual = real_input.get_cursor_pos()
+        except Exception as exc:                       # 读不到就只记日志，不据此拒绝点击
+            self._logger.warning("点击前核对：读不到当前光标位置（%s），按原样继续", exc)
+            actual = screen
+        drift = max(abs(actual[0] - screen[0]), abs(actual[1] - screen[1]))
+        under = real_input.window_under_point(*screen)
+        self._logger.info(
+            "点击前核对：客户区 %dx%d，目标客户区 (%d, %d) → 屏幕 %s，实测光标 %s（偏差 %dpx），"
+            "前台是否本窗口 %s，置顶 %s，光标处窗口 %s，光标处就是本窗口 %s",
+            width, height, x, y, screen, actual, drift,
+            real_input.is_foreground(self.hwnd), real_input.is_topmost(self.hwnd),
+            real_input.describe_window(under), under == self.hwnd,
+        )
+        if drift > CLICK_CURSOR_TOLERANCE_PX:
+            self._logger.warning(
+                "光标实测 (%d, %d) 未到达目标 %s（偏差 %d px），已跳过本次点击（宁可跳过也不用错误位置点击）",
+                actual[0], actual[1], screen, drift,
+            )
+            return False
+        if under and under != self.hwnd:
+            self._logger.warning(
+                "光标处窗口不是本窗口（%s）：若游戏收不到点击，多半是这里被别的窗口挡住",
+                real_input.describe_window(under),
+            )
+        return True
 
     def key_tap(self, vk: int) -> None:
         front = self._ensure_front_or_raise("按键")

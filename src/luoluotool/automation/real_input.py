@@ -151,6 +151,40 @@ def client_to_screen(hwnd: int, point: tuple[int, int]) -> tuple[int, int]:
     return int(x), int(y)
 
 
+GA_ROOT = 2
+
+
+def window_under_point(x: int, y: int) -> int:
+    """屏幕点 (x, y) 处的**顶层**窗口 hwnd（只读；用于核对"点击到底会落在谁身上"）。
+
+    返回 0 表示命中测试失败/无窗口（调用方按"未知"处理，不据此拒绝输入）。
+    """
+    try:
+        hwnd = int(user32.WindowFromPoint(wintypes.POINT(int(x), int(y))) or 0)
+    except Exception as exc:
+        logger.warning("命中测试失败（点 (%s, %s)）：%s", x, y, exc)
+        return 0
+    if not hwnd:
+        return 0
+    try:
+        return int(user32.GetAncestor(hwnd, GA_ROOT) or hwnd)
+    except Exception:
+        return hwnd
+
+
+def describe_window(hwnd: int) -> str:
+    """窗口的人读描述（hwnd / pid / 类名 / 标题），供日志核对。"""
+    if not hwnd:
+        return "(无窗口)"
+    try:
+        title = win32gui.GetWindowText(hwnd)
+        cls = win32gui.GetClassName(hwnd)
+        pid = int(user32.GetWindowThreadProcessId(hwnd, None) or 0)
+    except Exception as exc:
+        return f"hwnd={hwnd}（读取信息失败：{exc}）"
+    return f"hwnd={hwnd} pid={pid} class={cls!r} title={title!r}"
+
+
 def release_topmost(hwnd: int) -> bool:
     """取消 TOPMOST（仅当当前确实置顶）；返回是否真的做了取消操作。"""
     if not is_topmost(hwnd):

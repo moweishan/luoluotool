@@ -411,6 +411,50 @@ def test_real_sender_click_hold_reaches_stop_event(recording) -> None:
     assert recording.click_stop_events == [stop]
 
 
+# ------------------------------------------------ 点击前的事实核对（区分"没送到"与"送对了但游戏不认"）
+
+
+def test_real_sender_logs_click_context_before_press(recording, caplog) -> None:
+    """点击前把可核对的事实写进日志：客户区尺寸、目标屏幕点、实测光标、前台/置顶、光标处窗口。
+
+    背景（2026-09-20 实测）：玩家报"同一坐标在某页能点、另一页点不动"，而日志两边都只写"完成"，
+    无法区分是输入没送出去还是游戏不认 —— 这几条事实能一眼定位。
+    """
+    caplog.set_level(logging.INFO)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80)
+
+    assert "点击前核对" in caplog.text
+    assert "客户区 1920x1080" in caplog.text          # recording 夹具的假客户区
+    assert "屏幕 (130, 100)" in caplog.text            # 假 client_to_screen 是 +10/+20
+    assert "实测光标 (130, 100)" in caplog.text
+    assert "前台是否本窗口 True" in caplog.text
+    assert "UnityWndClass" in caplog.text
+    assert "光标处就是本窗口 True" in caplog.text
+
+
+def test_real_sender_skips_click_when_cursor_did_not_move(recording, monkeypatch, caplog) -> None:
+    """光标没移到目标位置时**不点击**：宁可跳过，也不能点到别的位置（游戏里可能误触）。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(real_input, "move_cursor_absolute", lambda x, y: True)   # 移动"无效"
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80)
+
+    assert ("click",) not in recording.events
+    assert "未到达目标" in caplog.text and "已跳过本次点击" in caplog.text
+
+
+def test_real_sender_logs_warning_when_hit_test_is_other_window(recording, monkeypatch, caplog) -> None:
+    """光标处窗口不是游戏窗口时给 WARNING（但仍点击：可能只是子窗口/别名 hwnd）。"""
+    caplog.set_level(logging.WARNING)
+    monkeypatch.setattr(real_input, "window_under_point", lambda x, y: 999)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80)
+
+    assert ("click",) in recording.events          # 仍然点击（不因命中测试不同就拒绝）
+    assert "光标处窗口不是本窗口" in caplog.text
+
+
 # ------------------------------------------------ 点击越界校验（必须在窗口内）
 
 
@@ -437,7 +481,7 @@ def test_real_sender_click_bounds_are_exclusive(recording, monkeypatch, caplog) 
 
 
 def test_real_sender_clicks_inside_window(recording, monkeypatch) -> None:
-    """范围内的点击照常执行（顺序与不带校验时一致）。"""
+    """范围内的点击照常执行（顺序与不带校验时一致，只是多了一次"点击前核对"的光标回读）。"""
     monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 200, 100))
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.click_at(120, 80)
@@ -445,6 +489,7 @@ def test_real_sender_clicks_inside_window(recording, monkeypatch) -> None:
         ("ensure_front", 555),
         ("get_cursor_pos",),
         ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
+        ("get_cursor_pos",),         # 点击前核对：实测光标是否到位
         ("click",),
         ("restore_cursor", 800, 600),
         ("release_topmost", 555),
@@ -535,6 +580,7 @@ class _RecordingRealInput:
         self.front_results: list[bool] = []
         self.front_ok = front_ok
         self.cursor_to_restore = (800, 600)
+        self.cursor_pos = (800, 600)                    # 当前光标位置（随移动/还原更新）
         self.hold_result = (True, False)
         self.drag_result = (True, False)
         self.click_holds: list[float | None] = []       # 每次点击带的"点击时长"（秒）
@@ -551,11 +597,29 @@ class _RecordingRealInput:
             self.click_stop_events.append(stop_event)
             return True
 
+        def fake_get_cursor_pos():
+            self.events.append(("get_cursor_pos",))
+            return self.cursor_pos
+
+        def fake_move_cursor_absolute(x, y):
+            self.events.append(("move_cursor", x, y))
+            self.cursor_pos = (int(x), int(y))          # 真实移动会改变光标位置
+            return True
+
+        def fake_set_cursor_pos(x, y):
+            self.events.append(("restore_cursor", x, y))
+            self.cursor_pos = (int(x), int(y))
+            return True
+
         monkeypatch.setattr(real_input, "ensure_window_front", ensure_front)
-        monkeypatch.setattr(real_input, "get_cursor_pos",
-                            lambda: (self.events.append(("get_cursor_pos",)), self.cursor_to_restore)[1])
-        monkeypatch.setattr(real_input, "move_cursor_absolute",
-                            lambda x, y: self.events.append(("move_cursor", x, y)))
+        monkeypatch.setattr(real_input, "get_cursor_pos", fake_get_cursor_pos)
+        monkeypatch.setattr(real_input, "move_cursor_absolute", fake_move_cursor_absolute)
+        monkeypatch.setattr(real_input, "window_under_point", lambda x, y: 555)
+        monkeypatch.setattr(real_input, "describe_window",
+                            lambda hwnd: f"hwnd={hwnd} class='UnityWndClass' title='测试游戏'")
+        # 置前校验（ensure_window_front）返回 ok=True 就意味着"已在前台且已置顶"，这里让读数一致
+        monkeypatch.setattr(real_input, "is_foreground", lambda hwnd: True)
+        monkeypatch.setattr(real_input, "is_topmost", lambda hwnd: True)
         monkeypatch.setattr(real_input, "send_left_click", fake_send_left_click)
         monkeypatch.setattr(real_input, "send_key_tap",
                             lambda vk, sleep=None: self.events.append(("key", vk)) or True)
@@ -589,13 +653,14 @@ def recording(monkeypatch):
 
 
 def test_real_sender_moves_cursor_clicks_and_restores(recording) -> None:
-    """点击顺序：校验/置顶 → 记录光标 → 移动光标 → 点击 → 还原光标 → 取消置顶。"""
+    """点击顺序：校验/置顶 → 记录光标 → 移动光标 → **核对光标已到位** → 点击 → 还原光标 → 取消置顶。"""
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.click_at(120, 80)
     assert recording.events == [
         ("ensure_front", 555),
-        ("get_cursor_pos",),
+        ("get_cursor_pos",),         # 记下原位置（点击后要还原）
         ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
+        ("get_cursor_pos",),         # 点击前核对：实测光标是否到位
         ("click",),
         ("restore_cursor", 800, 600),
         ("release_topmost", 555),
