@@ -98,7 +98,7 @@ src/luoluotool/
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
     app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
   utils/                         keys.py(72) paths.py(63) logging_setup.py(53)
-assets/                          icons/（入库）；anchors/（框选生成模板）与 templates/（自己整理的识别图片）放图片，个人素材不入库
+assets/                          icons/（入库）；anchors/、templates/、screenshots/ 放图片（个人素材，不入库；screenshots 的功能待实现）
 tests/                           与 src 同构；conftest.py 全局夹具；gui_helpers.py 共享 GUI 夹具；test_packaging.py / test_source_guards.py / test_paths.py 是仓库级守卫
 packaging/                       build.ps1（UTF-8 **带 BOM**）、LuoLuoTool.spec、rthook_windowed_stdio.py
 ```
@@ -397,6 +397,16 @@ capture_client_bgr (vision.py:393)
    实测条纹模板缩到 0.5x 对另一张模板的亮块区拿到 0.883（默认阈值 0.85 就中了）。
    缓解手段：提高阈值、模板更有辨识度，或改成"全部试完取最高分"（未做）。
 4. **极小模板（<40px）+ 小缩放的缩放判断不稳**（信息量不足，模板匹配固有限制）。
+4b. **「用手动截图当识别底图」尚未实现（用户 2026-09-20 实测提出的需求）**：有的页面信息太多，
+   工具自己截客户区的图不好识别 —— 需求是让用户用系统截图工具手动截一张画面，再用**这张图**做匹配底图。
+   目前**只有目录与文档**：`assets/screenshots/`（用户手动截图，个人素材不入库，守卫见 `tests/test_paths.py`），
+   `utils/paths.py` 里**还没有** `get_screenshots_dir()`，调试页也没有"选择底图"的入口。
+   **下一步接口设计要点**（接功能时按这个方向，别重新发明）：
+   - `core.vision.recognize_in_window(...)` 已经有 `capture=...` 注入缝（见 ⑦），
+     加一个"底图路径"参数即可复用整条编排（多模板/多区域/多尺度/纯色拒绝全部不用改）；
+   - 坐标语义要写清楚：手动截图可能是**整屏**（含标题栏/任务栏）或**被缩放过**的图，
+     与"客户区坐标"不再一一对应 —— 必须要求用户截**客户区**或用窗口尺寸校准，否则坐标会偏（参见 ③ 与第 1 条 bug）；
+   - 纯色/黑帧检测（`is_blank_frame`）与"模板比底图大"的报错照旧生效。
 5. ~~窗口诊断截图可能存成纯黑图~~ **已修（评审 P2-9，`082468b`）**：改为复用 `capture_client_bgr`
    的完整回退链（真 PNG + 黑帧检测），全失败时报可读错误而不是给你一张黑图。剩余限制：窗口不在前台时
    屏幕 BitBlt 不可用，此时诊断会**失败**（可读原因），这是环境限制。
