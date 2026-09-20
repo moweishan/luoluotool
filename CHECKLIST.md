@@ -10,6 +10,7 @@
 
 - [ ] 出厂默认值安全：所有开关默认关，**`dry_run` 默认关（2026-09-19 用户要求：首次启动即真实模式，靠启动确认弹窗 + F8 急停 + 点击越界校验兜底）**；测试里恒为干跑（`tests/conftest.py` 强制）。
 - [ ] ⚠️ 点击越界：任何鼠标点击前必须校验坐标在游戏窗口客户区 `[0,w)×[0,h)` 内；越界或读不到客户区时**不点击**并写 WARNING（真实通道 `RealInputSender.click_at` + 干跑通道 `DryRunSender` 的 `bounds` 回调）。
+- [ ] ⚠️ 点击时长：点击＝按下→保持 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查 `stop_event`（可急停），**任何退出路径都必须在 `finally` 抬起左键**；调试页「点击时长」0–5000 ms 默认 40 ms；`hold_ms=None` 与 `hold_ms=0` 语义不同（各有测试）。回归测试：`test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_debug_page_single_click_hold_bounds_and_default`。
 - [ ] ⚠️ 滑动越界：拖拽的**起点与终点**都必须校验（任一端越界则整段跳过 + WARNING），判定共用 `check_points_in_bounds`。
 - [ ] ⚠️ 图像识别（2026-09-19）：模板匹配坐标必须是**客户区坐标**；读图用 `np.fromfile`+`cv2.imdecode`（中文路径）；模板比截图大、文件不可读、窗口最小化都要给可读错误；识别**不产生任何输入**；`automation/vision.py` 不 import PySide6；依赖已在 `requirements.txt` 声明（numpy + opencv-python-headless）。
 - [ ] ⚠️ 框选生成模板：截图必须走后台线程；框选选区以图像像素坐标为准（Qt QRect 右下角包含式，须按左上+宽高构造）；模板存 `assets/anchors/`（*.png 不入库）并回填图片路径；无有效选区时不写文件。

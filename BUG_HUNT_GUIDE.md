@@ -6,6 +6,7 @@
 > **基线**：`git HEAD = 9aea9a9`（2026-09-20），全量测试 468 passed，工作区干净。
 > 本文件自身的提交**不改任何代码**，因此下面所有 `文件:行` 对当前 `src/**` 依然有效。
 > **行号会漂移**：代码改动后用**符号名**搜索定位（第 ⑩ 节的索引表可直接搜符号）。
+> 改完代码请顺手跑 `.venv\Scripts\python tools\check_guide_index.py` 自检索引是否还准。
 > **维护约定**：改了代码就回来更新对应小节（尤其是第 ③④⑤ 节），否则本文档会变成误导。
 >
 > 配套文档：`AGENTS.md`（开发规范/红线，**必读**）、`PROJECT_SPEC.md`（边界与功能表）、
@@ -139,9 +140,9 @@ print('layer check violations =', bad)
 ### 主链路 A：图像识别（框选模板 → 识别 → 坐标）
 
 ```
-调试页「图片识别匹配测试」          gui/pages/debug.py:354   _on_vision_clicked()
+调试页「图片识别匹配测试」          gui/pages/debug.py:370   _on_vision_clicked()
   → 发信号 test_requested("vision", {images, threshold, max_results})
-主窗口分发                          gui/main_window.py:491  _on_debug_test()
+主窗口分发                          gui/main_window.py:494  _on_debug_test()
   后台线程 _DebugTestThread.run     gui/main_window.py:116  （不阻塞 GUI）
   动作映射                          gui/main_window.py:144  run_debug_action(kind="vision")
 业务编排                            core/vision.py:67       recognize_in_window()
@@ -156,32 +157,46 @@ print('layer check violations =', bad)
 **框选生成模板**链路：
 
 ```
-调试页「框选截图生成模板」          gui/pages/debug.py:127   crop_button → crop_requested 信号
-主窗口门禁 + 后台截图               gui/main_window.py:552   _on_crop_requested()
-  截图线程                          gui/main_window.py:171   _CaptureThread → core/vision.py:212 capture_window()
-  弹框（GUI 线程）                  gui/main_window.py:525   _on_capture_ready() → TemplateCropDialog
+调试页「框选截图生成模板」          gui/pages/debug.py:133   crop_button → crop_requested 信号
+主窗口门禁 + 后台截图               gui/main_window.py:555   _on_crop_requested()
+  截图线程                          gui/main_window.py:174   _CaptureThread → core/vision.py:212 capture_window()
+  弹框（GUI 线程）                  gui/main_window.py:528   _on_capture_ready() → TemplateCropDialog
   拖拽框选                          gui/dialogs/crop_dialog.py:45   CropView
   保存（**只存选区**）              gui/dialogs/crop_dialog.py:233  _on_save_clicked() → save_selection():249
-  加入模板列表                      gui/main_window.py:539   debug_page.add_vision_template()
+  加入模板列表                      gui/main_window.py:542   debug_page.add_vision_template()
+```
+
+### 主链路 C：鼠标单点（含"点击时长"）
+
+```
+调试页「鼠标单点测试」              gui/pages/debug.py:170   single_hold_spin（点击时长，ms）
+  → _on_single_clicked 发信号       gui/pages/debug.py:...   test_requested("single_click", {x, y, hold_ms})
+主窗口分发                          gui/main_window.py:144   run_debug_action → run_single_click(hold_ms=...)
+业务编排                            core/debug.py:80         run_single_click()（_validate_click_hold 校验 0–5000 ms）
+通道（干跑/真实）                   automation/input_sender.py:425 build_channel
+  点击                              input_sender.py:146      RealInputSender.click_at(x, y, hold_seconds)
+                                    input_sender.py:84       DryRunSender.click_at（只写日志，同样校验越界）
+底层原语                            automation/real_input.py:301 send_left_click(sleep, hold_seconds, stop_event)
+  按下 → 按住（CLICK_SLICE_SECONDS=50ms 切片查急停）→ **finally 抬起左键**
 ```
 
 ### 主链路 B：任务执行与输入注入
 
 ```
 日常任务页/卡订单页勾选 → 任务进队列（core/registry.py 注册表）
-主窗口「启动」                      gui/main_window.py:383   _start()
-  真实模式确认弹窗                  gui/main_window.py:405   _real_mode_warning_text()/_confirm_real_mode()
+主窗口「启动」                      gui/main_window.py:386   _start()
+  真实模式确认弹窗                  gui/main_window.py:408   _real_mode_warning_text()/_confirm_real_mode()
   运行线程 _RunnerThread            gui/main_window.py:102
   Runner 顺序执行                   core/runner.py:28        Runner.start()
     每个任务拿到 TaskContext（含 sender）core/task.py:15
-    输入通道构建                    automation/input_sender.py:411 build_channel()
+    输入通道构建                    automation/input_sender.py:425 build_channel()
       ├─ 干跑：DryRunSender（:50，只写日志，**同样做越界校验**）
-      └─ 真实：WindowReadinessGate(:304) → RealInputSender(:109)
-           点击/滑动前校验              input_sender.py:352/367 point_in_client_area / check_points_in_bounds
-           每次输入前置顶/置前并复核    automation/real_input.py:193 ensure_window_front()
-           客户端→屏幕换算              automation/real_input.py:147 client_to_screen()
-           实际注入                     automation/real_input.py:256 _send()（SendInput）
-    停止/F8 急停                     gui/main_window.py:428/454 _stop()/_on_failsafe() → stop_event
+      └─ 真实：WindowReadinessGate(:318) → RealInputSender(:114)
+           点击/滑动前校验              input_sender.py:366/381 point_in_client_area / check_points_in_bounds
+           每次输入前置顶/置前并复核    automation/real_input.py:194 ensure_window_front()
+           客户端→屏幕换算              automation/real_input.py:148 client_to_screen()
+           实际注入                     automation/real_input.py:257 _send()（SendInput）
+    停止/F8 急停                     gui/main_window.py:431/457 _stop()/_on_failsafe() → stop_event
 ```
 
 ### 线程模型（bug 高发区）
@@ -257,6 +272,7 @@ capture_client_bgr (vision.py:393)
 | 3 | 点击坐标必须在客户区内；**读不到客户区按越界处理**（宁可不点） | 点到窗口外/别的程序上 | `test_point_in_client_area_boundaries`、`test_real_sender_click_bounds_are_exclusive`、`test_real_sender_skips_click_when_bounds_unreadable` |
 | 4 | 滑动**起点与终点**都必须在客户区，任一端越界整段跳过 | 拖到标题栏/窗口外，画面乱飘 | `test_real_sender_skips_drag_when_{start,end,both}_outside_window` |
 | 5 | 滑动任何退出路径都释放左键；松手后复查 `VK_LBUTTON`；长按不卡键 | 鼠标卡在按下状态、游戏一直拖 | `test_send_left_drag_releases_button_on_exception`、`test_drag_reports_failure_when_button_cannot_be_released`、`test_send_left_drag_aborts_on_stop_and_releases_button` |
+| 5b | **点击时长**：点击＝按下→按住 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查急停，**任何退出路径都抬起左键** | 长按被急停后左键卡住；瞬时点击被游戏吞掉；「不传时长」被误当成 0 ms | `test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_single_click_zero_hold_means_instant` |
 | 6 | 滑动结束后**延迟 + 分帧**还原光标，禁止一次 `SetCursorPos` 跳回 | 画面继续乱飘（残留拖拽状态被算成大位移） | `test_real_sender_drag_waits_before_restoring_cursor`、`test_restore_cursor_smooth_moves_in_small_steps` |
 | 7 | 每次真实输入前置顶/置前并回读复核；无法确保则**绝不输入** | 输入打到别的窗口 | `test_ensure_window_front_*`、`test_real_sender_refuses_input_when_window_cannot_be_focused` |
 | 8 | **取景原点必须是客户区左上**（BitBlt 源点用 `client_area_offset`，PrintWindow 整窗渲染后裁剪） | 坐标整体偏下"标题栏高度"（实测 37px） | `test_bitblt_renderer_starts_at_client_origin`、`test_printwindow_renderer_crops_client_area`、`test_client_area_offset_is_title_bar_plus_border` |
@@ -327,6 +343,8 @@ capture_client_bgr (vision.py:393)
 10. **识别参数不落配置**（模板列表/阈值/最多列出条数都是界面态，重启即丢）。
 11. **`tests/test_core/test_vision.py` 589 行、`tests/test_automation/test_vision.py` 638 行**
     也在往硬线靠（测试文件同样适用长度建议）。
+12. **连点测试（`run_repeat_click`）暂未接入点击时长**：它走 `sender.click_at(x, y)`（不传 hold）
+    → 用引擎默认 40 ms。需要"连点也带时长"时按单点同一路径扩展（`repeat_click` 载荷加 `hold_ms`）。
 
 ---
 
@@ -348,10 +366,10 @@ capture_client_bgr (vision.py:393)
 | `_render_client_bits` | `automation/vision.py:466` | 主取景方式注入（黑帧/正常帧/抛错） |
 | `_print_window` | `automation/vision.py:471` | 替换 ctypes 调用（假 GDI 测试用） |
 | 假 GDI | `tests/test_automation/test_vision.py:520-599`（`_FakeBitmap`:520 / `_FakeDC`:537 / `fake_gdi`:571） | **验证取景几何**：位图里存真实像素，断言 BitBlt 源点、裁剪结果像素 |
-| `build_channel` / 假 sender | `automation/input_sender.py:411`、`tests/test_automation/test_real_input.py` 的 `recording` 夹具 | 断言输入调用序列，零真实输入 |
+| `build_channel` / 假 sender | `automation/input_sender.py:425`、`tests/test_automation/test_real_input.py` 的 `recording` 夹具 | 断言输入调用序列，零真实输入 |
 | 假 `user32` | `tests/test_automation/test_real_input.py` 的 `user32` 夹具 | 断言 `SendInput`/`SetCursorPos` 序列、置顶/还原行为 |
 | `get_debug_dir` | `core/vision.py` 导入处 | 带框截图写进 tmp |
-| `TemplateCropDialog` | `gui/main_window.py:525` 调用处 | 替换对话框或子类化 `exec()` 模拟"框选 + 保存" |
+| `TemplateCropDialog` | `gui/main_window.py:528` 调用处 | 替换对话框或子类化 `exec()` 模拟"框选 + 保存" |
 
 ### 写"几何 bug"测试的模板（本次用的手法）
 
@@ -530,22 +548,30 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `_render_client_bits_bitblt` | `automation/vision.py:534` | **BitBlt 路径（源点必须客户区偏移）** |
 | `_render_client_bits_printwindow` | `automation/vision.py:478` | PrintWindow（整窗渲染 + 裁剪） |
 | `client_area_offset` | `automation/window.py:87` | 客户区在窗口内的偏移（唯一真源） |
-| `build_channel` | `automation/input_sender.py:411` | 干跑/真实通道选择 |
-| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:352` / `:367` | 越界校验 |
-| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:141` / `:176` | 真实输入的校验与还原策略 |
-| `ensure_window_front` | `automation/real_input.py:193` | 每次输入前置顶置前 + 复核 |
-| `client_to_screen` | `automation/real_input.py:147` | 客户区→屏幕换算（点击路径） |
-| `build_drag_path` | `automation/real_input.py:359` | 缓出曲线 + 末尾静止帧 |
-| `restore_cursor_smooth` | `automation/real_input.py:379` | 分帧还原光标 |
+| `build_channel` | `automation/input_sender.py:425` | 干跑/真实通道选择 |
+| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:366` / `:381` | 越界校验 |
+| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:146` / `:190` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
+| `send_left_click` | `automation/real_input.py:301` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
+| `run_single_click` | `core/debug.py:80` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
+| `_validate_click_hold` | `core/debug.py:55` | 点击时长校验（0–5000 ms，整数、非布尔） |
+| `single_hold_spin` | `gui/pages/debug.py:170` | 调试页「点击时长」控件（默认 40 ms，经 `hold_ms` 下发） |
+| `ensure_window_front` | `automation/real_input.py:194` | 每次输入前置顶置前 + 复核 |
+| `client_to_screen` | `automation/real_input.py:148` | 客户区→屏幕换算（点击路径） |
+| `build_drag_path` | `automation/real_input.py:381` | 缓出曲线 + 末尾静止帧 |
+| `restore_cursor_smooth` | `automation/real_input.py:401` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
-| `DebugPage` | `gui/pages/debug.py:56` | 调试页（识别入口/模板列表/干跑/测试按钮） |
-| `run_debug_action` | `gui/main_window.py:144` | 调试动作分发 |
-| `_on_capture_ready` | `gui/main_window.py:525` | 框选保存后回填模板列表 |
-| `_debug_actions_allowed` | `gui/main_window.py:483` | 开发者调试门禁 |
+| `DebugPage` | `gui/pages/debug.py:62` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
+| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:494` / `:144` | 调试请求接收 / 动作分发（含 `hold_ms`） |
+| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:528` / `:555` | 框选回填 / 框选入口（门禁 + 后台截图） |
+| `_debug_actions_allowed` | `gui/main_window.py:486` | 开发者调试门禁 |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:169` / `:237` | 布局测量与报告 |
-| `Runner.start` | `core/runner.py:28` | 任务顺序执行/循环/失败计数 |
+| `Runner.start` | `core/runner.py:65` | 任务顺序执行/循环/失败计数 |
 | `migrate` / `validate` | `config/validation.py:301` / `:325` | 迁移链与校验 |
+
+> **索引自检**：改完代码后跑 `.venv\Scripts\python tools\check_guide_index.py` —— 它会逐条核对本表
+> 的"符号 → 文件:行"是否还指得准（漂移会打印 `[DRIFT] 符号 文件:行 当前指向…` 并以退出码 1 结束）。
+> 行号漂移的索引比没有索引更误导人，所以改代码后顺手跑一下。
 
 ---
 
