@@ -9,6 +9,7 @@
 ## 1. 配置
 
 - [ ] 出厂默认值安全：所有开关默认关，**`dry_run` 默认关（2026-09-19 用户要求：首次启动即真实模式，靠启动确认弹窗 + F8 急停 + 点击越界校验兜底）**；测试里恒为干跑（`tests/conftest.py` 强制）。
+- [ ] ⚠️ 点击前核对事实：`RealInputSender.click_at` 必须调 `_verify_before_press` 记录"客户区尺寸 / 目标屏幕点 / 实测光标与偏差 / 光标处窗口 / 前台 / 置顶 / 光标处是否本窗口"；光标偏差 > `CLICK_CURSOR_TOLERANCE_PX`(4px) 时**跳过点击**并 WARNING；命中窗口不是本窗口时 WARNING 但仍点击；读光标失败只 WARNING 继续。回归测试：`test_real_sender_logs_click_context_before_press`、`test_real_sender_skips_click_when_cursor_did_not_move`、`test_real_sender_logs_warning_when_hit_test_is_other_window`。
 - [ ] ⚠️ 点击越界：任何鼠标点击前必须校验坐标在游戏窗口客户区 `[0,w)×[0,h)` 内；越界或读不到客户区时**不点击**并写 WARNING（真实通道 `RealInputSender.click_at` + 干跑通道 `DryRunSender` 的 `bounds` 回调）。
 - [ ] ⚠️ 点击时长：点击＝按下→保持 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查 `stop_event`（可急停），**任何退出路径都必须在 `finally` 抬起左键**；**单点与连点测试都已接入**（连点每次点击同一时长，间隔＝点击之后的等待）；调试页「点击时长」0–5000 ms 默认 40 ms；`hold_ms=None` 与 `hold_ms=0` 语义不同（各有测试）。回归测试：`test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_repeat_click_passes_click_hold`、`test_repeat_click_rejects_bad_hold`、`test_debug_page_single_click_hold_bounds_and_default`、`test_run_debug_action_passes_click_hold`。
 - [ ] ⚠️ 滑动越界：拖拽的**起点与终点**都必须校验（任一端越界则整段跳过 + WARNING），判定共用 `check_points_in_bounds`。

@@ -177,11 +177,13 @@ print('layer check violations =', bad)
 业务编排（单点）                    core/debug.py:80         run_single_click(hold_ms=...)
 业务编排（连点）                    core/debug.py:106        run_repeat_click(..., hold_ms=...)（间隔＝点击之后的等待）
 校验                                core/debug.py:55         _validate_click_hold（0–5000 ms 整数）
-通道（干跑/真实）                   automation/input_sender.py:425 build_channel
-  点击                              input_sender.py:146      RealInputSender.click_at(x, y, hold_seconds)
+通道（干跑/真实）                   automation/input_sender.py:470 build_channel
+  点击                              input_sender.py:155      RealInputSender.click_at(x, y, hold_seconds)
+  **点击前核对事实**                input_sender.py:184      _verify_before_press（光标落点/命中窗口/前台/置顶；漂移>4px 跳过）
                                     input_sender.py:84       DryRunSender.click_at（只写日志，同样校验越界）
-底层原语                            automation/real_input.py:301 send_left_click(sleep, hold_seconds, stop_event)
+底层原语                            automation/real_input.py:335 send_left_click(sleep, hold_seconds, stop_event)
   按下 → 按住（CLICK_SLICE_SECONDS=50ms 切片查急停）→ **finally 抬起左键**
+  命中测试/窗口描述                 automation/real_input.py:157/175 window_under_point / describe_window
 ```
 
 ### 主链路 B：任务执行与输入注入
@@ -193,13 +195,13 @@ print('layer check violations =', bad)
   运行线程 _RunnerThread            gui/main_window.py:102
   Runner 顺序执行                   core/runner.py:65        Runner.start()
     每个任务拿到 TaskContext（含 sender）core/task.py:15
-    输入通道构建                    automation/input_sender.py:425 build_channel()
+    输入通道构建                    automation/input_sender.py:470 build_channel()
       ├─ 干跑：DryRunSender（:50，只写日志，**同样做越界校验**）
-      └─ 真实：WindowReadinessGate(:318) → RealInputSender(:114)
-           点击/滑动前校验              input_sender.py:366/381 point_in_client_area / check_points_in_bounds
-           每次输入前置顶/置前并复核    automation/real_input.py:194 ensure_window_front()
+      └─ 真实：WindowReadinessGate(:318) → RealInputSender(:115)
+           点击/滑动前校验              input_sender.py:411/426 point_in_client_area / check_points_in_bounds
+           每次输入前置顶/置前并复核    automation/real_input.py:228 ensure_window_front()
            客户端→屏幕换算              automation/real_input.py:148 client_to_screen()
-           实际注入                     automation/real_input.py:257 _send()（SendInput）
+           实际注入                     automation/real_input.py:291 _send()（SendInput）
     停止/F8 急停                     gui/main_window.py:432/458 _stop()/_on_failsafe() → stop_event
 ```
 
@@ -277,6 +279,7 @@ capture_client_bgr (vision.py:393)
 | 4 | 滑动**起点与终点**都必须在客户区，任一端越界整段跳过 | 拖到标题栏/窗口外，画面乱飘 | `test_real_sender_skips_drag_when_{start,end,both}_outside_window` |
 | 5 | 滑动任何退出路径都释放左键；松手后复查 `VK_LBUTTON`；长按不卡键 | 鼠标卡在按下状态、游戏一直拖 | `test_send_left_drag_releases_button_on_exception`、`test_drag_reports_failure_when_button_cannot_be_released`、`test_send_left_drag_aborts_on_stop_and_releases_button` |
 | 5b | **点击时长**：点击＝按下→按住 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查急停，**任何退出路径都抬起左键** | 长按被急停后左键卡住；瞬时点击被游戏吞掉；「不传时长」被误当成 0 ms | `test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_single_click_zero_hold_means_instant` |
+| 5c | **点击前必须核对事实**：实测光标是否到达目标（偏差 >`CLICK_CURSOR_TOLERANCE_PX`=4px 就**跳过点击**）、光标处顶层窗口、前台/置顶状态、客户区尺寸，全部写进日志 | 日志写"点击完成"但游戏没反应时无法区分"没送到"与"送到了游戏不认"；光标被钳制时会点到别的控件 | `test_real_sender_logs_click_context_before_press`、`test_real_sender_skips_click_when_cursor_did_not_move`、`test_real_sender_logs_warning_when_hit_test_is_other_window` |
 | 6 | 滑动结束后**延迟 + 分帧**还原光标，禁止一次 `SetCursorPos` 跳回 | 画面继续乱飘（残留拖拽状态被算成大位移） | `test_real_sender_drag_waits_before_restoring_cursor`、`test_restore_cursor_smooth_moves_in_small_steps` |
 | 7 | 每次真实输入前置顶/置前并回读复核；无法确保则**绝不输入** | 输入打到别的窗口 | `test_ensure_window_front_*`、`test_real_sender_refuses_input_when_window_cannot_be_focused` |
 | 8 | **取景原点必须是客户区左上**（BitBlt 源点用 `client_area_offset`，PrintWindow 整窗渲染后裁剪） | 坐标整体偏下"标题栏高度"（实测 37px） | `test_bitblt_renderer_starts_at_client_origin`、`test_printwindow_renderer_crops_client_area`、`test_client_area_offset_is_title_bar_plus_border` |
@@ -555,18 +558,21 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `_render_client_bits_bitblt` | `automation/vision.py:534` | **BitBlt 路径（源点必须客户区偏移）** |
 | `_render_client_bits_printwindow` | `automation/vision.py:478` | PrintWindow（整窗渲染 + 裁剪） |
 | `client_area_offset` | `automation/window.py:87` | 客户区在窗口内的偏移（唯一真源） |
-| `build_channel` | `automation/input_sender.py:425` | 干跑/真实通道选择 |
-| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:366` / `:381` | 越界校验 |
-| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:146` / `:190` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
-| `send_left_click` | `automation/real_input.py:301` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
+| `build_channel` | `automation/input_sender.py:470` | 干跑/真实通道选择 |
+| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:411` / `:426` | 越界校验 |
+| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:155` / `:225` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
+| `_verify_before_press` | `automation/input_sender.py:184` | 点击前核对事实（光标落点/命中窗口/前台/置顶），漂移 >4px 就跳过 |
+| `CLICK_CURSOR_TOLERANCE_PX` | `automation/input_sender.py:26` | 允许的光标落点偏差（4px） |
+| `send_left_click` | `automation/real_input.py:335` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
+| `window_under_point` / `describe_window` | `automation/real_input.py:157` / `:175` | 命中测试与窗口描述（诊断"点击落在谁身上"） |
 | `run_single_click` | `core/debug.py:80` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
 | `_validate_click_hold` | `core/debug.py:55` | 点击时长校验（0–5000 ms，整数、非布尔） |
 | `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:170` / `:197` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
 | `run_repeat_click` | `core/debug.py:106` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待） |
-| `ensure_window_front` | `automation/real_input.py:194` | 每次输入前置顶置前 + 复核 |
+| `ensure_window_front` | `automation/real_input.py:228` | 每次输入前置顶置前 + 复核 |
 | `client_to_screen` | `automation/real_input.py:148` | 客户区→屏幕换算（点击路径） |
-| `build_drag_path` | `automation/real_input.py:381` | 缓出曲线 + 末尾静止帧 |
-| `restore_cursor_smooth` | `automation/real_input.py:401` | 分帧还原光标 |
+| `build_drag_path` | `automation/real_input.py:415` | 缓出曲线 + 末尾静止帧 |
+| `restore_cursor_smooth` | `automation/real_input.py:435` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
 | `DebugPage` | `gui/pages/debug.py:62` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
