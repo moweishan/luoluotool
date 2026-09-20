@@ -8,6 +8,11 @@ from luoluotool.utils.keys import parse_combo
 
 SCHEMA_VERSION = 9
 
+# 写入路径与校验路径共用的上限（评审 P1-2/P3-5：GUI 不得存下"自己读不回来"的配置）
+MAX_KEY_STEPS = 20      # 一个任务的按键步骤上限（validation 也用它）
+MAX_SWIPE_STEPS = 20    # 一个任务的滑动步骤上限
+MAX_CLICK_POINTS = 20   # 一个任务的点击点上限
+
 
 @dataclass
 class TaskConfig:
@@ -89,17 +94,29 @@ class KeyStepParams:
 
 
 def parse_keys_text(text: str, wait_after_ms: int = 500) -> list[KeyStepParams]:
-    """把 `"ctrl+s, w*800, enter"` 解析为按键步骤列表（分隔符支持中英文逗号与换行）。"""
+    """把 `"ctrl+s, w*800, enter"` 解析为按键步骤列表（分隔符支持中英文逗号与换行）。
+
+    超过 `MAX_KEY_STEPS` 步直接抛可读 `ValueError`：**写入路径必须与校验路径同一套上限**，
+    否则 GUI 能存下"自己读不回来"的配置 —— 下次启动判定损坏、备份后整份恢复默认（评审 P1-2）。
+    """
     steps: list[KeyStepParams] = []
     for chunk in (text or "").replace("，", ",").replace("\n", ",").split(","):
         if chunk.strip():
             steps.append(KeyStepParams.from_text(chunk, wait_after_ms))
+            if len(steps) > MAX_KEY_STEPS:
+                raise ValueError(f"按键步骤最多 {MAX_KEY_STEPS} 步（已输入 {len(steps)} 步）")
     return steps
 
 
 def format_keys_text(steps: list[KeyStepParams]) -> str:
     """把按键步骤列表格式化回单行文本（与 `parse_keys_text` 互逆）。"""
     return ", ".join(step.to_text() for step in steps)
+
+
+def check_swipe_count(count: int) -> None:
+    """滑动步数上限校验（写入路径与 `validation` 共用同一套上限）。"""
+    if count > MAX_SWIPE_STEPS:
+        raise ValueError(f"滑动步骤最多 {MAX_SWIPE_STEPS} 步（已输入 {count} 步）")
 
 
 @dataclass
@@ -170,11 +187,15 @@ def _parse_point(text: str, origin: str) -> list[int]:
 
 
 def parse_swipes_text(text: str, wait_after_ms: int = 500) -> list[SwipeStepParams]:
-    """把 `"100,200 > 400,600, 10,10 > 20,20*800"` 解析为滑动步骤列表。"""
+    """把 `"100,200 > 400,600, 10,10 > 20,20*800"` 解析为滑动步骤列表。
+
+    与 `parse_keys_text` 一样在写入路径就挡住超限（`MAX_SWIPE_STEPS`），避免存下读不回来的配置。
+    """
     steps: list[SwipeStepParams] = []
     for chunk in (text or "").replace("，", ",").replace("\n", ";").replace(", ", ";").split(";"):
         if chunk.strip():
             steps.append(SwipeStepParams.from_text(chunk, wait_after_ms))
+            check_swipe_count(len(steps))
     return steps
 
 

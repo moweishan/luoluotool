@@ -109,7 +109,7 @@ def test_replace_failure_keeps_original(tmp_path, monkeypatch) -> None:
     original = models.AppConfig.default()
     store.save(original, path)
     broken = models.AppConfig.default()
-    broken.automation.click_interval_ms = 5555
+    broken.automation.click_interval_ms = 4555      # 合法值（保存前的校验通过），只是写盘会失败
 
     def fake_replace(src, dst):
         raise OSError("模拟磁盘满")
@@ -147,3 +147,76 @@ def test_backup_failure_then_recover(tmp_path, monkeypatch) -> None:
     config = store.load(path)
     assert config.to_dict() == models.AppConfig.default().to_dict()
     assert len(list(tmp_path.glob("config.json.bak-*"))) == 1
+
+
+# ------------------------------------------- 评审修复：迁移崩溃 / 自毁 / 高版本（P1-1、P1-2、P2-1）
+
+
+def test_load_survives_malformed_params_during_migration(tmp_path) -> None:
+    """回归（评审 P1-1）：迁移遇到畸形 `params`（list 等合法 JSON）必须走损坏恢复，不能崩溃。
+
+    旧实现里 `dict(item.get("params") or {})` 会抛 TypeError，而 `store.load` 只把 JSON 解析包在
+    try 内 → 异常直冒到 GUI，进程启动即崩溃。
+    """
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps({
+            "schema_version": 5,
+            "automation": {"dry_run": False},
+            "features": {"daily_tasks": {"tasks": {"placeholder_task_a": {"params": [1, 2]}}}},
+        }, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    config = store.load(path)                      # 不得抛异常
+
+    assert config.to_dict() == models.AppConfig.default().to_dict()
+    assert len(list(tmp_path.glob("config.json.bak-*"))) == 1
+
+
+def test_save_refuses_invalid_config_and_keeps_old_file(tmp_path) -> None:
+    """回归（评审 P1-2）：不合法配置**拒绝保存**并抛可读错误，旧文件保持不变。
+
+    旧行为：GUI 能存下"自己读不回来"的配置，下次启动判损坏 → 备份后整份恢复默认（用户设置全丢）。
+    """
+    path = tmp_path / "config.json"
+    good = models.AppConfig.default()
+    store.save(good, path)
+
+    broken = models.AppConfig.default()
+    broken.automation.click_interval_ms = 1                  # 越界（校验要求 100–5000）
+
+    with pytest.raises(store.ConfigSaveError, match="click_interval_ms"):
+        store.save(broken, path)
+
+    assert store.load(path).to_dict() == good.to_dict()      # 磁盘上仍是好的那份
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_load_keeps_newer_version_file_untouched(tmp_path) -> None:
+    """回归（评审 P2-1）：文件版本高于本程序时只读返回默认值，**不改动文件**、不生成 .bak。"""
+    path = tmp_path / "config.json"
+    raw = models.AppConfig.default().to_dict()
+    raw["schema_version"] = models.SCHEMA_VERSION + 1
+    raw["automation"]["click_interval_ms"] = 4321
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    config = store.load(path)
+
+    assert config.to_dict() == models.AppConfig.default().to_dict()
+    assert json.loads(path.read_text(encoding="utf-8"))["automation"]["click_interval_ms"] == 4321
+    assert not list(tmp_path.glob("config.json.bak-*"))
+
+
+def test_save_backs_up_newer_version_file_before_overwriting(tmp_path) -> None:
+    """降级运行时若用户主动保存：先把更高版本的文件备份出来，再写本程序版本。"""
+    path = tmp_path / "config.json"
+    raw = models.AppConfig.default().to_dict()
+    raw["schema_version"] = models.SCHEMA_VERSION + 1
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    store.save(models.AppConfig.default(), path)
+
+    backups = list(tmp_path.glob("config.json.bak-v*-*"))
+    assert len(backups) == 1
+    assert json.loads(backups[0].read_text(encoding="utf-8"))["schema_version"] == models.SCHEMA_VERSION + 1

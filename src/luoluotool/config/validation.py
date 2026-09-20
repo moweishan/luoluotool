@@ -2,7 +2,12 @@
 
 import logging
 
-from luoluotool.config.models import SCHEMA_VERSION
+from luoluotool.config.models import (
+    MAX_CLICK_POINTS,
+    MAX_KEY_STEPS,
+    MAX_SWIPE_STEPS,
+    SCHEMA_VERSION,
+)
 from luoluotool.utils.keys import parse_combo
 
 logger = logging.getLogger(__name__)
@@ -130,8 +135,8 @@ def _validate_swipes(prefix: str, swipes: object, errors: list[str]) -> None:
     if not isinstance(swipes, list):
         errors.append(f"{prefix}.swipes 必须是数组")
         return
-    if len(swipes) > MAX_KEY_STEPS:
-        errors.append(f"{prefix}.swipes 最多 {MAX_KEY_STEPS} 步")
+    if len(swipes) > MAX_SWIPE_STEPS:
+        errors.append(f"{prefix}.swipes 最多 {MAX_SWIPE_STEPS} 步")
     for index, step in enumerate(swipes):
         item_prefix = f"{prefix}.swipes[{index}]"
         if not isinstance(step, dict):
@@ -156,6 +161,8 @@ def _validate_task_params(task_id: str, params: object, errors: list[str]) -> No
     points = params.get("click_points", [])
     if not isinstance(points, list) or not all(_is_point(point) for point in points):
         errors.append(f"{prefix}.click_points 必须是 [[x, y], ...] 形式的非负整数坐标数组")
+    elif len(points) > MAX_CLICK_POINTS:          # 评审 P3-5：与 keys/swipes 一样要有上限
+        errors.append(f"{prefix}.click_points 最多 {MAX_CLICK_POINTS} 个点（实际 {len(points)}）")
     _validate_key_steps(prefix, params.get("keys", []), errors)
     _validate_swipes(prefix, params.get("swipes", []), errors)
     wait = params.get("wait_after_ms", 500)
@@ -177,7 +184,8 @@ def _validate_tasks(raw: dict, errors: list[str]) -> None:
         order = task.get("order")
         if isinstance(order, bool) or not isinstance(order, int) or not (1 <= order <= 999):
             errors.append(f"features.daily_tasks.tasks.{task_id}.order 必须是 1–999 之间的整数")
-        _validate_task_params(task_id, task.get("params"), errors)
+        # 评审 P3-3：`params` 缺省是合法的（models.TaskConfig.from_dict 也这么容忍），不能判损坏
+        _validate_task_params(task_id, task.get("params", {}), errors)
 
 
 def _migrate_v1_to_v2(raw: dict) -> dict:
@@ -315,7 +323,13 @@ def migrate(raw: object) -> object:
         step = _MIGRATIONS.get(version)
         if step is None:
             return raw
-        migrated = step(migrated)
+        try:
+            migrated = step(migrated)
+        except Exception:
+            # 评审 P1-1：迁移遇到无法处理的畸形数据时**原样返回**，交给 validate() 报错 →
+            # store.load 走损坏恢复；绝不能把异常冒到 GUI（那会是启动崩溃）。
+            logger.exception("schema v%d → v%d 迁移失败，按原样返回交由校验处理", version, version + 1)
+            return raw
         version += 1
         migrated["schema_version"] = version
     logger.info("配置已从 schema v%s 迁移到 v%d", raw.get("schema_version"), version)
