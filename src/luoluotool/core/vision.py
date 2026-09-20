@@ -241,8 +241,3 @@ def _save_annotated(image: np.ndarray, matches: tuple[Match, ...]) -> Path | Non
     except Exception as exc:
         logger.warning("保存识别结果截图失败：%s", exc)
         return None
-
-
-def format_matches_for_cli(result: RecognizeResult) -> str:
-    """命令行输出（把 message 转成纯文本行，便于 `--recognize` 打印）。"""
-    return result.message

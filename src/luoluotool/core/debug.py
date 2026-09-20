@@ -26,6 +26,7 @@ COORDINATE_MAX = 10000
 DURATION_RANGE_MS = (50, 10000)
 CLICK_HOLD_RANGE_MS = (0, 5000)      # 「点击时长」上限：0＝瞬时，5000＝按住 5 秒
 DEFAULT_CLICK_HOLD_MS = 40           # 与 real_input.CLICK_HOLD_SECONDS 对齐（调试页默认值）
+SLEEP_SLICE_SECONDS = 0.1            # 连点/连键间隔的切片长度：保证停止请求 100ms 内生效
 
 
 def _validate_point(x: int, y: int) -> tuple[int, int]:
@@ -75,6 +76,23 @@ def _ready(readiness: Callable[[], bool] | None, stop_event: threading.Event) ->
     if readiness is None:
         return True
     return bool(readiness())
+
+
+def _interruptible_sleep(seconds: float, stop_event: threading.Event) -> bool:
+    """分段睡眠：停止请求后最迟 `SLEEP_SLICE_SECONDS` 内返回；返回 False 表示被停止。
+
+    评审 P2-3：旧实现直接 `time.sleep(interval_ms/1000)`，而间隔上限 5000ms →
+    停止请求最迟 5 秒才生效，违反「500ms 内停止」的硬规则。这里与
+    `core.task.TaskContext.interruptible_sleep` 同一套写法（0.1s 切片）。
+    """
+    remaining = max(float(seconds), 0.0)
+    while remaining > 1e-9:
+        if stop_event.is_set():
+            return False
+        chunk = min(SLEEP_SLICE_SECONDS, remaining)
+        time.sleep(chunk)
+        remaining -= chunk
+    return not stop_event.is_set()
 
 
 def run_single_click(
@@ -132,8 +150,8 @@ def run_repeat_click(
         else:
             sender.click_at(x, y, hold_seconds=hold_ms / 1000)
         done += 1
-        if index < count:
-            time.sleep(interval_ms / 1000)
+        if index < count and not _interruptible_sleep(interval_ms / 1000, stop_event):
+            break
     if done == count:
         return f"连点测试完成：(x={x}, y={y}) {done} 次，间隔 {interval_ms} ms，{hold_text}"
     return f"连点测试中断：已完成 {done}/{count} 次（停止请求或窗口不可用）"
@@ -177,8 +195,8 @@ def run_key(
         (log or logger).info("调试：键盘测试 第 %d/%d 次 → %s", index, count, text)
         sender.key_combo(text)
         done += 1
-        if index < count:
-            time.sleep(interval_ms / 1000)
+        if index < count and not _interruptible_sleep(interval_ms / 1000, stop_event):
+            break
     if done == count:
         return f"键盘测试完成：{text} {done} 次，间隔 {interval_ms} ms"
     return f"键盘测试中断：已完成 {done}/{count} 次（停止请求或窗口不可用）"

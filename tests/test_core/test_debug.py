@@ -2,6 +2,7 @@
 
 import logging
 import threading
+import time
 
 import pytest
 
@@ -120,8 +121,30 @@ def test_repeat_click_clicks_count_times(fake_channel, monkeypatch) -> None:
     monkeypatch.setattr(debug.time, "sleep", sleeps.append)
     message = debug.run_repeat_click(_config(), 10, 20, 3, 500, logging.getLogger("t"))
     assert fake_channel.calls == [("click_at", 10, 20)] * 3
-    assert sleeps == [0.5, 0.5]           # 最后一次不额外等待
+    assert len(sleeps) == 10                  # 两次间隔各切成 5 片（0.1s 一片），最后一次不等待
+    assert all(abs(chunk - debug.SLEEP_SLICE_SECONDS) < 1e-9 for chunk in sleeps)
     assert "连点测试完成" in message and "3 次" in message
+
+
+def test_repeat_click_interval_is_interruptible(fake_channel, monkeypatch) -> None:
+    """回归（评审 P2-3）：间隔最长 5s 也必须能被停止请求打断（旧实现用不可中断的 time.sleep）。"""
+    stop = threading.Event()
+    started = time.monotonic()
+    real_sleep = time.sleep                    # 先抓住真身：debug.time 就是 time 模块本身
+
+    def fake_sleep(seconds: float) -> None:
+        real_sleep(min(seconds, 0.005))       # 测试里不真的睡 0.1s
+        if len(fake_channel.calls) >= 2:      # 第二次点击之后立刻请求停止
+            stop.set()
+
+    monkeypatch.setattr(debug.time, "sleep", fake_sleep)
+    message = debug.run_repeat_click(
+        _config(), 10, 20, 50, 5000, logging.getLogger("t"), stop,  # 间隔 5 秒 × 50 次
+    )
+
+    assert len(fake_channel.calls) <= 3       # 停止请求后不再继续点
+    assert "中断" in message
+    assert time.monotonic() - started < 1.0   # 不是等满 5 秒才停
 
 
 def test_repeat_click_passes_click_hold(fake_channel, monkeypatch) -> None:
@@ -132,7 +155,7 @@ def test_repeat_click_passes_click_hold(fake_channel, monkeypatch) -> None:
         _config(), 10, 20, 3, 500, logging.getLogger("t"), hold_ms=200
     )
     assert fake_channel.click_holds == [0.2, 0.2, 0.2]
-    assert sleeps == [0.5, 0.5]                     # 间隔仍是"点击之后"的等待
+    assert sum(sleeps) == pytest.approx(1.0)        # 两次间隔共 0.5+0.5（切片后总量不变）
     assert "点击时长 200 ms" in message
 
 
@@ -191,7 +214,7 @@ def test_key_test_sends_combo_count_times(fake_channel, monkeypatch) -> None:
     monkeypatch.setattr(debug.time, "sleep", sleeps.append)
     message = debug.run_key(_config(), "ctrl+s", 2, 300, logging.getLogger("t"))
     assert fake_channel.calls == [("key_combo", "ctrl+s")] * 2
-    assert sleeps == [0.3]
+    assert sum(sleeps) == pytest.approx(0.3)        # 间隔被切片，但总量不变
     assert "键盘测试完成" in message
 
 

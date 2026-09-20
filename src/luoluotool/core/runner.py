@@ -52,10 +52,13 @@ class Runner:
         return self._state_machine.state
 
     def request_stop(self) -> None:
-        """请求停止（非阻塞）；主循环在最近检查点退出。"""
+        """请求停止（非阻塞）；主循环在最近检查点退出。
+
+        评审 P3-1：用 `try_transition` 而不是"先读 state 再 transition" —— 与 worker 线程
+        置 IDLE 并发时，旧写法可能命中非法转移并抛异常（在 GUI 线程里会让 `_stop()` 提前返回）。
+        """
         self._stop_event.set()
-        if self._state_machine.state is RunState.RUNNING:
-            self._state_machine.transition(RunState.STOPPING)
+        self._state_machine.try_transition(RunState.STOPPING)
 
     def stop(self, timeout: float | None = 5.0) -> bool:
         """请求停止并等待主循环退出；返回是否在超时内退出。"""
@@ -84,10 +87,10 @@ class Runner:
             self._run_loop()
         except WindowUnavailableError as exc:
             logger.error("无法执行：%s", exc)
-            self._state_machine.transition(RunState.ERROR)
+            self._state_machine.try_transition(RunState.ERROR)     # 评审 P3-1：并发下尽力转移
         except Exception:
             logger.exception("任务执行出现异常")
-            self._state_machine.transition(RunState.ERROR)
+            self._state_machine.try_transition(RunState.ERROR)
         finally:
             if self._state_machine.state in (RunState.RUNNING, RunState.STOPPING):
                 self._state_machine.transition(RunState.IDLE)
@@ -146,9 +149,16 @@ class Runner:
             if cfg.enabled
         ]
         selected.sort(key=lambda item: (item[1].order, item[0]))
+        scheduled = {task_id for task_id, _ in selected}
         for task_id, enabled in self._single_feature_tasks():
-            if enabled:
-                selected.append((task_id, TaskConfig(enabled=True, params={})))
+            if not enabled:
+                continue
+            if task_id in scheduled:
+                # 评审 P3-4：单功能组任务若同时也出现在日常任务组里，不去重会执行两次
+                logger.warning("任务 %s 已在日常任务组中，跳过单功能组的重复入队", task_id)
+                continue
+            selected.append((task_id, TaskConfig(enabled=True, params={})))
+            scheduled.add(task_id)
         return selected
 
     def _single_feature_tasks(self) -> tuple[tuple[str, bool], ...]:

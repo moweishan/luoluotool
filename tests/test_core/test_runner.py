@@ -242,6 +242,17 @@ def test_single_feature_switch_off_keeps_task_out() -> None:
     assert Runner(_with_features(_config([]))).queued_tasks() == []
 
 
+def test_queue_deduplicates_single_feature_tasks(caplog) -> None:
+    """回归（评审 P3-4）：单功能组任务若已出现在日常任务组里，不得被重复入队。"""
+    config = _with_features(_config([("order_hold", True, 1)]), order_hold=True)
+    runner = Runner(config)
+
+    queued = runner.queued_tasks()
+
+    assert queued == ["order_hold"]                       # 只出现一次
+    assert "跳过单功能组的重复入队" in caplog.text
+
+
 def test_reserved_switches_never_affect_queue() -> None:
     """卡订单两个预留开关是纯占位：任意组合都不改变运行任务集合（零行为）。"""
     expected: list[str] | None = None
