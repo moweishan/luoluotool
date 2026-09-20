@@ -57,19 +57,19 @@ def test_main_window_has_window_icon(window_factory, tmp_path) -> None:
 
 def test_window_icon_missing_degrades_gracefully(window_factory, tmp_path, monkeypatch) -> None:
     """图标目录为空时降级为空图标，窗口仍可创建。"""
-    from luoluotool.gui import main_window as mw
+    from luoluotool.gui import icons
 
-    monkeypatch.setattr(mw, "get_icons_dir", lambda: tmp_path)
+    monkeypatch.setattr(icons, "get_icons_dir", lambda: tmp_path)
     window = window_factory(tmp_path / "config.json")
     assert window.windowIcon().isNull()
 
 
 def test_fake_ico_file_is_skipped(window_factory, tmp_path, monkeypatch) -> None:
     """伪装成 .ico 的 PNG 文件被魔数校验拦截。"""
-    from luoluotool.gui import main_window as mw
+    from luoluotool.gui import icons
 
     (tmp_path / "luoluoTool.ico").write_bytes(b"\x89PNG\r\n\x1a\n" + b"0" * 32)
-    monkeypatch.setattr(mw, "get_icons_dir", lambda: tmp_path)
+    monkeypatch.setattr(icons, "get_icons_dir", lambda: tmp_path)
     window = window_factory(tmp_path / "config.json")
     assert window.windowIcon().isNull()
 

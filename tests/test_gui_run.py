@@ -428,9 +428,10 @@ def test_diagnose_button_runs_and_reports(window_factory, tmp_path, monkeypatch)
     """窗口诊断：按钮触发工作线程，结果写入状态栏与日志面板。"""
     from luoluotool.automation.window import DiagnosticResult
     from luoluotool.gui import main_window as mw
+    from luoluotool.gui import workers
 
     monkeypatch.setattr(
-        mw, "diagnose_window",
+        workers, "diagnose_window",
         lambda keyword, debug_dir: DiagnosticResult(f"诊断结果: {keyword}", False),
     )
     config = AppConfig.default()
@@ -448,12 +449,13 @@ def test_diagnose_button_runs_and_reports(window_factory, tmp_path, monkeypatch)
 
 def test_diagnose_failure_reports_error(window_factory, tmp_path, monkeypatch) -> None:
     """诊断抛异常时给出可读错误提示，程序不崩溃。"""
+    from luoluotool.gui import workers
     from luoluotool.gui import main_window as mw
 
     def boom(keyword, debug_dir):
         raise RuntimeError("模拟失败")
 
-    monkeypatch.setattr(mw, "diagnose_window", boom)
+    monkeypatch.setattr(workers, "diagnose_window", boom)
     config = AppConfig.default()
     config.automation.developer_mode = True     # 调试页选项需调试开关开启才生效
     window = window_factory(tmp_path / "config.json", config)
@@ -518,13 +520,14 @@ def test_stop_button_logs_when_runner_active(window_factory, tmp_path) -> None:
 
 def test_restart_admin_button_confirmed(window_factory, tmp_path, monkeypatch) -> None:
     """确认后带 --config 参数请求提权重启；按钮场景不提供「不再询问」。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     recorded: dict[str, list[str]] = {}
     ask_flags: list[bool] = []
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
-        mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True
+        elevation_flow, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True
     )
     monkeypatch.setattr(
         mw.MainWindow,
@@ -539,11 +542,12 @@ def test_restart_admin_button_confirmed(window_factory, tmp_path, monkeypatch) -
 
 def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, monkeypatch) -> None:
     """取消确认时不重启，仅提示。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     called: list[list[str]] = []
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: called.append(list(args)) or True)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: called.append(list(args)) or True)
     monkeypatch.setattr(
         mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, False)
     )
@@ -555,12 +559,13 @@ def test_restart_admin_button_cancelled_keeps_running(window_factory, tmp_path, 
 
 def test_restart_admin_button_when_already_elevated(window_factory, tmp_path, monkeypatch) -> None:
     """已是管理员权限：仅提示无需重启，不发起重启、不弹确认框。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     info_calls: list[str] = []
     restart_calls: list[list[str]] = []
     question_calls: list[tuple] = []
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: True)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: True)
     monkeypatch.setattr(
         mw.QMessageBox, "information",
         lambda parent, title, text, *args, **kwargs: info_calls.append(text),
@@ -570,7 +575,7 @@ def test_restart_admin_button_when_already_elevated(window_factory, tmp_path, mo
         "_ask_restart_confirmation",
         lambda self, allow_dont_ask=False: question_calls.append((allow_dont_ask,)) or (True, False),
     )
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
     window = window_factory(tmp_path / "config.json")
     window.settings_page.restart_admin_button.click()
     assert info_calls and "无需重启" in info_calls[0]
@@ -581,11 +586,12 @@ def test_restart_admin_button_when_already_elevated(window_factory, tmp_path, mo
 
 def test_elevation_check_sets_settings_hint(window_factory, tmp_path, monkeypatch) -> None:
     """启动检测：游戏窗口权限更高且本工具未提权时，设置页给出提示。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
-    monkeypatch.setattr(mw, "find_window", lambda keyword: 123)
-    monkeypatch.setattr(mw, "is_window_elevated", lambda hwnd: True)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: 123)
+    monkeypatch.setattr(elevation_flow, "is_window_elevated", lambda hwnd: True)
     window = window_factory(tmp_path / "config.json")
     window._check_elevation_need()
     label = window.settings_page.elevation_hint_label
@@ -595,18 +601,19 @@ def test_elevation_check_sets_settings_hint(window_factory, tmp_path, monkeypatc
 
 def test_startup_auto_elevate_prompts_and_restarts(window_factory, tmp_path, monkeypatch) -> None:
     """启动自动流程：非管理员 → 弹确认框（含「不再询问」）→ 确认后请求提权重启。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     recorded: dict[str, list[str]] = {}
     ask_flags: list[bool] = []
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw.MainWindow,
         "_ask_restart_confirmation",
         lambda self, allow_dont_ask=False: ask_flags.append(allow_dont_ask) or (True, False),
     )
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
     window = window_factory(tmp_path / "config.json", auto_elevate=True)
     window._startup_elevation_flow()
     assert ask_flags == [True]
@@ -615,15 +622,16 @@ def test_startup_auto_elevate_prompts_and_restarts(window_factory, tmp_path, mon
 
 def test_startup_auto_elevate_declined(window_factory, tmp_path, monkeypatch) -> None:
     """启动自动流程：用户拒绝 → 不重启，提示已取消。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     restart_calls: list[list[str]] = []
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, False)
     )
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: restart_calls.append(list(args)) or True)
     window = window_factory(tmp_path / "config.json", auto_elevate=True)
     window._startup_elevation_flow()
     assert restart_calls == []
@@ -632,11 +640,12 @@ def test_startup_auto_elevate_declined(window_factory, tmp_path, monkeypatch) ->
 
 def test_startup_auto_elevate_when_admin_skips_modal(window_factory, tmp_path, monkeypatch) -> None:
     """启动自动流程：已是管理员 → 只提示无需重启，不弹任何确认框。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     questions: list[tuple] = []
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: True)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: True)
     monkeypatch.setattr(
         mw.MainWindow,
         "_ask_restart_confirmation",
@@ -650,11 +659,12 @@ def test_startup_auto_elevate_when_admin_skips_modal(window_factory, tmp_path, m
 
 def test_startup_auto_elevate_disabled_in_smoke(window_factory, tmp_path, monkeypatch) -> None:
     """auto_elevate=False（冒烟/测试）：启动流程不弹确认框。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     questions: list[tuple] = []
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw.MainWindow,
         "_ask_restart_confirmation",
@@ -669,11 +679,12 @@ def test_startup_dont_ask_persists_and_skips_next_time(window_factory, tmp_path,
     """勾选「不再询问」：落盘为 false、设置页同步。"""
     import json
 
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: False)
     monkeypatch.setattr(
         mw.MainWindow, "_ask_restart_confirmation", lambda self, allow_dont_ask=False: (False, True)
     )
@@ -687,18 +698,19 @@ def test_startup_dont_ask_persists_and_skips_next_time(window_factory, tmp_path,
 
 def test_startup_dont_ask_elevates_directly(window_factory, tmp_path, monkeypatch) -> None:
     """已设置「不再询问」：启动不弹框，直接请求提权重启。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     asked: list[bool] = []
     recorded: dict[str, list[str]] = {}
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
     monkeypatch.setattr(
         mw.MainWindow,
         "_ask_restart_confirmation",
         lambda self, allow_dont_ask=False: asked.append(allow_dont_ask) or (False, False),
     )
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: recorded.update(args=list(args)) or True)
     config = AppConfig.default()
     config.automation.ask_elevation_on_start = False
     window = window_factory(tmp_path / "config.json", config, auto_elevate=True)
@@ -709,12 +721,13 @@ def test_startup_dont_ask_elevates_directly(window_factory, tmp_path, monkeypatc
 
 def test_startup_dont_ask_elevation_cancelled_keeps_running(window_factory, tmp_path, monkeypatch) -> None:
     """「不再询问」直连提权但用户取消了 UAC：程序继续以普通权限运行，不循环重试。"""
+    from luoluotool.gui import elevation_flow
     from luoluotool.gui import main_window as mw
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(mw, "find_window", lambda keyword: None)
-    monkeypatch.setattr(mw, "is_process_elevated", lambda: False)
-    monkeypatch.setattr(mw, "restart_as_admin", lambda args: calls.append(list(args)) or False)
+    monkeypatch.setattr(elevation_flow, "find_window", lambda keyword: None)
+    monkeypatch.setattr(elevation_flow, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(elevation_flow, "restart_as_admin", lambda args: calls.append(list(args)) or False)
     config = AppConfig.default()
     config.automation.ask_elevation_on_start = False
     window = window_factory(tmp_path / "config.json", config, auto_elevate=True)
@@ -1023,10 +1036,11 @@ def test_developer_mode_from_config_mounts_tab_at_startup(window_factory, tmp_pa
 def test_run_debug_action_dispatches_all_kinds(monkeypatch) -> None:
     """主窗口的调试动作分发：四种类型分别调用 core.debug 的对应函数。"""
     from luoluotool.gui import main_window as mw
+    from luoluotool.gui import workers
 
     calls: list[tuple] = []
     for name in ("run_single_click", "run_repeat_click", "run_swipe", "run_key"):
-        monkeypatch.setattr(mw.debug_actions, name, (lambda n: lambda *args, **kwargs: calls.append((n, args[1:])) or n)(name))
+        monkeypatch.setattr(workers.debug_actions, name, (lambda n: lambda *args, **kwargs: calls.append((n, args[1:])) or n)(name))
 
     config = AppConfig.default()
     log = logging.getLogger("t")
@@ -1046,16 +1060,17 @@ def test_run_debug_action_dispatches_all_kinds(monkeypatch) -> None:
 def test_run_debug_action_passes_click_hold(monkeypatch) -> None:
     """单点/连点分发都把「点击时长」传下去；旧载荷（没有 hold_ms）走默认值而不是报错。"""
     from luoluotool.gui import main_window as mw
+    from luoluotool.gui import workers
 
     seen: list[dict] = []
     monkeypatch.setattr(
-        mw.debug_actions, "run_single_click",
+        workers.debug_actions, "run_single_click",
         lambda config, x, y, log, stop_event=None, **kwargs: seen.append(
             {"kind": "single", "x": x, "y": y, **kwargs}
         ) or "ok",
     )
     monkeypatch.setattr(
-        mw.debug_actions, "run_repeat_click",
+        workers.debug_actions, "run_repeat_click",
         lambda config, x, y, count, interval_ms, log, stop_event=None, **kwargs: seen.append(
             {"kind": "repeat", "x": x, "y": y, "count": count, **kwargs}
         ) or "ok",

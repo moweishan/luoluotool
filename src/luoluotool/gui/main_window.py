@@ -1,16 +1,20 @@
-"""主窗口：五页签配置 + 保存/重载/恢复默认 + 启动/停止 + 日志面板 + F8 急停。"""
+"""主窗口：五页签配置 + 保存/重载/恢复默认 + 启动/停止 + 日志面板 + F8 急停。
+
+拆分说明（2026-09-20，本文件由 765 行降到 ~530 行）：
+- 窗口图标加载 → `gui.icons`
+- 后台线程（任务 / 调试测试 / 框选截图 / 窗口诊断）与调试动作分发 → `gui.workers`
+- 提权流程（检测 / 提示 / 以管理员身份重启）→ `gui.elevation_flow.ElevationFlowMixin`（本类继承）
+
+本文件只保留「展示与绑定 + 线程/状态编排」，业务逻辑仍在 config / core / automation。
+"""
 
 import logging
-import threading
 from collections.abc import Callable
 from ctypes import wintypes
 from pathlib import Path
-
-from PySide6.QtCore import QThread, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QIcon
+from PySide6.QtCore import QTimer
+from PySide6.QtGui import QCloseEvent
 from PySide6.QtWidgets import (
-    QApplication,
-    QCheckBox,
     QDialog,
     QHBoxLayout,
     QMainWindow,
@@ -21,13 +25,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-
 from luoluotool import __version__
-from luoluotool.automation.elevation import (
-    is_process_elevated,
-    is_window_elevated,
-    restart_as_admin,
-)
 from luoluotool.automation.hotkey import (
     DEFAULT_HOTKEY_NAME,
     VK_F8,
@@ -35,30 +33,45 @@ from luoluotool.automation.hotkey import (
     HotkeyRegistrar,
     resolve_vk,
 )
-from luoluotool.automation.window import diagnose_window, find_window
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
-from luoluotool.core import debug as debug_actions
-from luoluotool.core import vision as vision_actions
 from luoluotool.gui.dialogs.crop_dialog import TemplateCropDialog
-from luoluotool.gui.layout_measure import format_measure_report, measure_layout
+from luoluotool.gui.layout_measure import (
+    format_measure_report,
+    measure_layout,
+)
 from luoluotool.gui.pages.daily import DailyPage
-from luoluotool.gui.pages.debug import PAGE_TITLE, DebugPage
+from luoluotool.gui.pages.debug import (
+    PAGE_TITLE,
+    DebugPage,
+)
 from luoluotool.gui.pages.feature3 import Feature3Page
 from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
 from luoluotool.gui.widgets import LogPanelHandler
-from luoluotool.utils.paths import get_anchors_dir, get_debug_dir, get_icons_dir
+from luoluotool.utils.paths import (
+    get_anchors_dir,
+    get_debug_dir,
+)
+
+from luoluotool.gui.elevation_flow import ElevationFlowMixin
+from luoluotool.gui.icons import load_window_icon
+from luoluotool.gui.workers import (
+    _CaptureThread,
+    _DebugTestThread,
+    _DiagnoseThread,
+    _RunnerThread,
+    run_debug_action,
+)
 
 logger = logging.getLogger(__name__)
 
 WINDOW_TITLE = "LuoLooTool"
 TAB_TITLES: tuple[str, ...] = ("设置", "日常任务", "卡订单", "功能三", "功能四")
-WINDOW_ICON_FILES = ("luoluoTool.png", "luoluoTool.ico")
-_ICO_MAGIC = b"\x00\x00\x01\x00"
-_PNG_MAGIC = b"\x89PNG"
+
+
 STATUS_RUNNING_DRY = "运行中 · 干跑"
 STATUS_RUNNING_REAL = "运行中 · 真实模式"
 STATUS_REAL_STYLE = "color: #c62828; font-weight: bold;"
@@ -67,152 +80,14 @@ LOG_PANEL_MAX_BLOCKS = 1000
 LOG_PANEL_MIN_HEIGHT = 240   # 固定下限，避免日志面板高度随页签集合变化（配合 tabs 的 stretch=1）
 
 
-def _is_valid_icon_file(path: Path) -> bool:
-    """按魔数校验图标格式（拦截伪装成 .ico 的 PNG 等）。"""
-    try:
-        with open(path, "rb") as fp:
-            head = fp.read(4)
-    except OSError:
-        return False
-    expected = _PNG_MAGIC if path.suffix == ".png" else _ICO_MAGIC
-    return head == expected
-
-
-def load_window_icon() -> QIcon:
-    """从 assets/icons 加载窗口图标；文件缺失或格式非法时降级为空图标。"""
-    icon = QIcon()
-    icons_dir = get_icons_dir()
-    for name in WINDOW_ICON_FILES:
-        path = icons_dir / name
-        if not path.is_file():
-            continue
-        if not _is_valid_icon_file(path):
-            logger.warning("图标文件格式非法，已跳过：%s", path)
-            continue
-        icon.addFile(str(path))
-    if icon.isNull():
-        logger.warning("未找到可用的窗口图标：%s", icons_dir)
-    return icon
+DEBUG_TAB_TITLE = PAGE_TITLE   # 页签标题由页面模块提供，布局测量工具复用同一常量
 
 
 def _default_runner_factory(config: AppConfig) -> Runner:
     return Runner(config)
 
 
-class _RunnerThread(QThread):
-    """在工作线程中执行 Runner.start()（阻塞主循环）。"""
-
-    def __init__(self, runner: Runner, parent=None) -> None:
-        super().__init__(parent)
-        self._runner = runner
-
-    def run(self) -> None:
-        self._runner.start()
-
-
-DEBUG_TAB_TITLE = PAGE_TITLE   # 页签标题由页面模块提供，布局测量工具复用同一常量
-
-
-class _DebugTestThread(QThread):
-    """在后台线程执行开发者调试动作（不阻塞 GUI；可被停止请求中断）。"""
-
-    finished_message = Signal(str)
-    failed_message = Signal(str)
-
-    def __init__(self, config, kind: str, params: dict, log: logging.Logger) -> None:
-        super().__init__()
-        self._config = config
-        self._kind = kind
-        self._params = params
-        self._log = log
-        self._stop_event = threading.Event()
-
-    def request_stop(self) -> None:
-        self._stop_event.set()
-
-    def run(self) -> None:
-        try:
-            message = run_debug_action(self._config, self._kind, self._params, self._log, self._stop_event)
-        except Exception as exc:   # 记录完整堆栈并回报可读信息
-            self._log.exception("开发者调试动作失败：%s", exc)
-            self.failed_message.emit(f"{type(exc).__name__}: {exc}")
-        else:
-            self._log.info("开发者调试结果：%s", message)
-            self.finished_message.emit(message)
-
-
-def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
-    """把界面请求映射到 `core.debug` 的具体动作（便于单测直接调用）。"""
-    if kind == "single_click":
-        return debug_actions.run_single_click(
-            config, params["x"], params["y"], log, stop_event,
-            hold_ms=params.get("hold_ms", debug_actions.DEFAULT_CLICK_HOLD_MS),
-        )
-    if kind == "repeat_click":
-        return debug_actions.run_repeat_click(
-            config, params["x"], params["y"], params["count"], params["interval_ms"], log, stop_event,
-            hold_ms=params.get("hold_ms", debug_actions.DEFAULT_CLICK_HOLD_MS),
-        )
-    if kind == "swipe":
-        return debug_actions.run_swipe(
-            config, (params["from_x"], params["from_y"]), (params["to_x"], params["to_y"]),
-            params["duration_ms"], log, stop_event,
-        )
-    if kind == "key":
-        return debug_actions.run_key(
-            config, params["combo"], params["count"], params["interval_ms"], log, stop_event
-        )
-    if kind == "vision":
-        # 图像识别：找窗口 → 截图（只截一次）→ 逐张模板匹配 → 返回命中位置（客户区坐标）
-        # 多张模板：第一张达到阈值的直接用它的结果；一张模板命中多处则全部列出。
-        return vision_actions.recognize_in_window(
-            config, params["images"], threshold=params["threshold"],
-            max_results=params["max_results"],
-        ).message
-    raise ValueError(f"未知的调试测试类型：{kind}")
-
-
-class _CaptureThread(QThread):
-    """在后台线程截取游戏窗口客户区（供「框选截图生成模板」用，避免卡住界面）。"""
-
-    captured = Signal(object, object)          # (numpy 图像, (宽, 高))
-    failed_message = Signal(str)
-
-    def __init__(self, config: AppConfig, log: logging.Logger) -> None:
-        super().__init__()
-        self._config = config
-        self._log = log
-
-    def run(self) -> None:
-        image, message = vision_actions.capture_window(self._config)
-        if image is None:
-            self._log.warning("框选模板：截图失败：%s", message)
-            self.failed_message.emit(message)
-            return
-        height, width = image.shape[:2]
-        self._log.info("框选模板：已截取客户区 %dx%d", width, height)
-        self.captured.emit(image, (int(width), int(height)))
-
-
-class _DiagnoseThread(QThread):
-
-    finished_message = Signal(str, bool)
-
-    def __init__(self, keyword: str, debug_dir: Path, parent=None) -> None:
-        super().__init__(parent)
-        self._keyword = keyword
-        self._debug_dir = debug_dir
-
-    def run(self) -> None:
-        try:
-            result = diagnose_window(self._keyword, self._debug_dir)
-            self.finished_message.emit(result.message, result.needs_elevation)
-        except Exception:
-            logger.exception("窗口诊断失败")
-            self.finished_message.emit("窗口诊断失败，详见日志", False)
-
-
-class MainWindow(QMainWindow):
+class MainWindow(ElevationFlowMixin, QMainWindow):
     """LuoLooTool 主窗口：仅展示与绑定；文件/任务逻辑调用 config/core 模块。"""
 
     def __init__(
@@ -655,111 +530,3 @@ class MainWindow(QMainWindow):
     def _on_diagnose_thread_finished(self) -> None:
         self.debug_page.diagnose_button.setEnabled(True)
         self._diagnose_thread = None
-
-    def _show_elevation_hint(self) -> None:
-        """设置页显示提权提示（自动检测到权限不足时）。"""
-        self.settings_page.elevation_hint_label.setText(
-            "检测到游戏以管理员权限运行，本工具为普通权限，无法置前/截图"
-            "（后续键鼠模拟同样会被系统拦截）。请点击下方「以管理员身份重启」。"
-        )
-        self.settings_page.elevation_hint_label.setVisible(True)
-
-    def _check_elevation_need(self) -> None:
-        """启动时自动检测：游戏窗口权限更高而本工具未提权时给出提示。"""
-        if is_process_elevated():
-            return
-        hwnd = find_window(self._config.automation.window_title_keyword)
-        if hwnd is None or is_window_elevated(hwnd) is not True:
-            return
-        logger.warning("检测到游戏窗口以管理员权限运行，本工具为普通权限，建议以管理员身份重启")
-        self._show_elevation_hint()
-
-    def _startup_elevation_flow(self) -> None:
-        """启动完成后：权限检测（提示条）+ 自动走一次提权重启流程。"""
-        self._check_elevation_need()
-        if not self._auto_elevate_enabled:
-            return
-        self._auto_elevate_if_needed()
-
-    def _auto_elevate_if_needed(self) -> None:
-        """非管理员时自动执行「以管理员身份重启」的询问流程。
-
-        已是管理员时只记录日志与状态栏提示，不弹窗（避免每次启动都需确认）；
-        配置为「不再询问」时不弹框，直接发起提权重启（UAC 取消则继续运行）。
-        """
-        if is_process_elevated():
-            logger.info("当前已是管理员权限")
-            self.statusBar().showMessage("当前已是管理员权限")
-            return
-        if not self._config.automation.ask_elevation_on_start:
-            logger.info("已设置「不再询问」，直接以管理员身份重启")
-            self._perform_elevated_restart()
-            return
-        logger.info("启动时未以管理员权限运行，询问是否提权重启")
-        confirmed, dont_ask = self._ask_restart_confirmation(allow_dont_ask=True)
-        if dont_ask:
-            self._set_ask_elevation_on_start(False)
-        if confirmed:
-            self._perform_elevated_restart()
-        else:
-            self.statusBar().showMessage("已取消以管理员身份重启")
-
-    def _set_ask_elevation_on_start(self, enabled: bool) -> None:
-        """记录「不再询问」偏好并立即落盘（启动阶段尚无未保存改动）。"""
-        self._config.automation.ask_elevation_on_start = enabled
-        self.settings_page.set_config(self._config)
-        store.save(self._config, self._config_path)
-        logger.info("已更新「启动时自动询问提权」为 %s 并保存配置", enabled)
-
-    def _relaunch_args(self) -> list[str]:
-        return ["--config", str(self._config_path)]
-
-    def _offer_elevated_restart(self) -> None:
-        answer = QMessageBox.question(
-            self,
-            "需要管理员权限",
-            "游戏以管理员权限运行，本工具权限不足，无法还原窗口/截图。\n是否立即以管理员身份重启本工具？",
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._perform_elevated_restart()
-
-    def _ask_restart_confirmation(self, allow_dont_ask: bool = False) -> tuple[bool, bool]:
-        """弹确认框，返回 (是否重启, 是否勾选「不再询问」)。
-
-        allow_dont_ask=True 时才显示「不再询问」勾选框（启动自动流程使用）。
-        """
-        box = QMessageBox(self)
-        box.setIcon(QMessageBox.Icon.Question)
-        box.setWindowTitle("以管理员身份重启")
-        box.setText("将以管理员权限重新启动本工具（会弹出 UAC 确认），当前窗口会关闭。是否继续？")
-        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
-        box.setDefaultButton(QMessageBox.StandardButton.No)
-        dont_ask_box = None
-        if allow_dont_ask:
-            dont_ask_box = QCheckBox("不再询问（以后启动直接提权重启，可在设置页改回）")
-            box.setCheckBox(dont_ask_box)
-        answer = box.exec()
-        return answer == QMessageBox.StandardButton.Yes, bool(dont_ask_box and dont_ask_box.isChecked())
-
-    def _on_restart_admin_clicked(self) -> None:
-        if is_process_elevated():
-            QMessageBox.information(
-                self,
-                "已经是管理员权限",
-                "本工具当前已以管理员权限运行，无需重启。",
-            )
-            self.statusBar().showMessage("当前已是管理员权限，无需重启")
-            return
-        confirmed, _ = self._ask_restart_confirmation()
-        if confirmed:
-            self._perform_elevated_restart()
-        else:
-            self.statusBar().showMessage("已取消以管理员身份重启")
-
-    def _perform_elevated_restart(self) -> None:
-        if restart_as_admin(self._relaunch_args()):
-            self.statusBar().showMessage("正在以管理员身份重启…")
-            self.close()
-            QApplication.instance().quit()
-        else:
-            self.statusBar().showMessage("以管理员身份重启被取消或失败（详见日志）")

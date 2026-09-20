@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from luoluotool.gui.main_window import _is_valid_icon_file
+from luoluotool.gui.icons import _is_valid_icon_file
 from luoluotool.utils.paths import get_icons_dir
 
 ICO_MAGIC = b"\x00\x00\x01\x00"
