@@ -272,15 +272,21 @@ LuoLuoTool/
 │   │   ├── vision.py        # 图像识别编排：找窗口→就绪校验→截图→匹配→RecognizeResult
 │   │   └── state.py         # 运行状态枚举与状态机
 │   ├── automation/          # Windows 交互层
-│   │   ├── window.py        # 窗口查找/置前/截屏、窗口诊断
-│   │   ├── vision.py        # 图像识别：模板匹配纯函数 + 客户区截图转 numpy + 标注画框
+│   │   ├── window.py        # 窗口查找/置前/截屏、客户区几何、窗口诊断
+│   │   ├── vision.py        # 取景/渲染（黑帧回退链、BitBlt/PrintWindow 几何）+ 匹配名字的对外门面
+│   │   ├── template_match.py# 模板读取与匹配原语（读图/纯色拒绝/Match/locate_all）
+│   │   ├── multiscale.py    # 多尺度（缩放）两档搜索（粗搜 + 精修 + 峰值回落）
+│   │   ├── drag_path.py     # 滑动路径几何（缓出曲线 + 分帧插值，纯函数）
 │   │   ├── elevation.py     # 进程/窗口权限检测与 UAC 提权重启
 │   │   ├── input_sender.py  # 输入通道：DryRunSender（干跑）+ RealInputSender（真实键鼠）+ 窗口就绪守卫
 │   │   ├── real_input.py    # 真实键鼠输入（SendInput）：唯一允许调用注入 API 的模块 + 输入前置顶校验
 │   │   └── hotkey.py        # F8 全局急停
 │   ├── gui/                 # PySide6 界面（薄层，不含业务逻辑）
 │   │   ├── app.py           # QApplication + 主题
-│   │   ├── main_window.py   # 主窗口（页签 + 启动/停止 + 状态栏）
+│   │   ├── main_window.py   # 主窗口（页签 + 启动/停止 + 状态栏 + 线程/状态编排）
+│   │   ├── workers.py       # 后台线程：任务/调试测试/框选截图/窗口诊断 + run_debug_action 分发
+│   │   ├── elevation_flow.py# 提权流程 mixin（检测/提示/以管理员身份重启）
+│   │   ├── icons.py         # 窗口图标加载（魔数校验 + 降级）
 │   │   ├── layout_measure.py# 布局测量：页签高度稳定规则的度量与报告（CLI 与调试页共用）
 │   │   ├── dialogs/         # crop_dialog.py：框选截图生成模板（拖拽选区 → 存 assets/anchors/）
 │   │   ├── pages/           # daily.py / order_hold.py / feature3.py / feature4.py / settings.py / debug.py（开发者调试）
@@ -295,6 +301,8 @@ LuoLuoTool/
 │   └── icons/               # 静态资源：窗口图标等（入库）
 ├── user_data/               # 运行时生成，git 忽略；config.example.json 入库
 ├── logs/                    # git 忽略
+├── reports/                 # 代码审查/复审报告（命名：CODE_REVIEW_REPORT_<年月日>_<第几份>.md，入库）
+├── tools/                   # 开发期自检脚本（check_guide_index.py：BUG_HUNT_GUIDE 索引自检，不入打包产物）
 └── packaging/               # 打包（Phase 7）：LuoLuoTool.spec、version_info.txt、build.ps1
                              # 产物 dist\LuoLuoTool\（one-dir，git 忽略）；资源与 exe 同级
 ```
@@ -314,6 +322,8 @@ LuoLuoTool/
 | automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`（窗口诊断截图：统一走 `capture_client_bgr` 回退链 → 真 PNG + 黑帧检测，不再自带 PrintWindow 实现）, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（点击、**滑动拖拽**、单键/组合键/长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入；点击支持**点击时长**（按下→按住 `hold_seconds`→抬起，默认 40 ms、0＝瞬时，按住期间可被急停打断且任何路径都会抬起左键） | `RealInputSender.click_at(x, y, hold_seconds=None)` / `drag(from_xy, to_xy, seconds)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click(sleep, hold_seconds, stop_event)`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
+| automation（匹配/几何，2026-09-20 拆分） | 模板读写与匹配原语、多尺度两档搜索、滑动路径几何；`vision.py` 只留取景/渲染并**再导出**匹配名字（旧导入路径不变） | `template_match.load_template(path)` / `locate_all(...)` / `is_blank_frame(img)`, `multiscale.locate_all_scaled(...)` / `scale_candidates(...)`, `drag_path.build_drag_path(start, end, steps, tail_hold_steps=...)`, `vision.capture_client_bgr(hwnd, on_progress=...)` |
+| gui（线程/提权/图标，2026-09-20 拆分） | 后台线程与调试动作分发、提权流程、窗口图标加载；`main_window` 只做展示与绑定 + 线程/状态编排 | `workers._RunnerThread` / `_DebugTestThread` / `_CaptureThread` / `_DiagnoseThread`, `workers.run_debug_action(config, kind, params, log, stop_event)`, `elevation_flow.ElevationFlowMixin`（`MainWindow` 继承）, `icons.load_window_icon() -> QIcon` |
 | gui | 五页签（设置/日常任务/卡订单/功能三/功能四）+ 可选「开发者调试」页 + 日志面板 + 状态栏；**所有页签继承 `widgets.ScrollablePage`**（内容进 `QScrollArea` + 建议尺寸 `PAGE_SIZE_HINT`），页签高度不随挂载/卸载变化 | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` / `layout_measure_requested()`; `layout_measure.measure_layout(window)` / `format_measure_report(measure)`; 功能三/功能四公共基类 `pages.planned_feature.PlannedFeaturePage`; 急停热键不可用提示 `SettingsPage.show_hotkey_hint(text)` |
 | utils | 日志初始化、路径解析 | `setup_logging(level, max_file_mb, backup_count)`（幂等，可重配置，参数变化时重建 handler）, `get_user_data_dir()` |
 
