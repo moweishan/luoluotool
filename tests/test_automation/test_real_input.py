@@ -472,10 +472,11 @@ def test_click_skips_intermediate_move_when_already_at_target(recording, monkeyp
 
 
 def test_click_waits_before_restoring_cursor(recording) -> None:
-    """松手后**延迟**再还原光标：游戏按帧采样指针位置，立刻跳回会让这一帧的点击被丢弃。
+    """松手后**延迟再分帧小步**还原光标 —— 一次跳回会让游戏把这次点击当成"指针已移出窗口"。
 
-    与滑动同源的经验（滑动早就用 `DRAG_RESTORE_DELAY_SECONDS` 修过同类问题）：
-    实测"某页能点、另一页点不动"，而日志显示光标位置/前台/命中窗口全对 —— 剩下的就是这条时间线。
+    2026-09-20 用户实测确认：关掉「把真实鼠标移回原位置」就立刻能点动，说明就是这一步 ——
+    Unity 按帧采样指针位置，处理这次点击的那一帧里指针已经跳到另一个显示器，这次点击被丢弃。
+    因此还原必须是"先等 `CLICK_RESTORE_DELAY_SECONDS`，再分帧小步移回"（禁止一次 SetCursorPos）。
     """
     events: list[tuple] = []
     recording.events = events
@@ -483,10 +484,11 @@ def test_click_waits_before_restoring_cursor(recording) -> None:
     sender.click_at(120, 80)
 
     click_index = events.index(("click",))
-    restore_index = next(i for i, e in enumerate(events) if e[0] == "restore_cursor")
+    restore_index = next(i for i, e in enumerate(events) if e[0] == "restore_cursor_smooth")
     delays = [e[1] for e in events[click_index:restore_index] if e[0] == "sleep"]
     assert delays, "点击与还原光标之间必须有等待"
     assert max(delays) >= input_sender.CLICK_RESTORE_DELAY_SECONDS
+    assert not any(e[0] == "restore_cursor" for e in events), "不得用一次跳回（SetCursorPos）还原"
 
 
 def test_focus_settle_is_long_enough_for_the_game() -> None:
@@ -539,18 +541,18 @@ def test_real_sender_click_bounds_are_exclusive(recording, monkeypatch, caplog) 
 
 
 def test_real_sender_clicks_inside_window(recording, monkeypatch) -> None:
-    """范围内的点击照常执行：顺序一致，另加"两步移动 + 点击前核对"。"""
+    """范围内的点击照常执行：顺序一致，另加"两步移动 + 点击前核对 + 分帧还原"。"""
     monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 200, 100))
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.click_at(120, 80)
     assert recording.events == [
         ("ensure_front", 555),
         ("get_cursor_pos",),
-        ("move_cursor", 465, 350),   # 两步移动的中途点
-        ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
-        ("get_cursor_pos",),         # 点击前核对：实测光标是否到位
+        ("move_cursor", 465, 350),              # 两步移动的中途点
+        ("move_cursor", 130, 100),              # 客户区 (120,80) + (10,20)
+        ("get_cursor_pos",),                    # 点击前核对：实测光标是否到位
         ("click",),
-        ("restore_cursor", 800, 600),
+        ("restore_cursor_smooth", 800, 600),    # 延迟后分帧小步移回
         ("release_topmost", 555),
     ]
 
@@ -712,17 +714,17 @@ def recording(monkeypatch):
 
 
 def test_real_sender_moves_cursor_clicks_and_restores(recording) -> None:
-    """点击顺序：校验/置顶 → 记录光标 → 两步移动（先中途点）→ 核对到位 → 点击 → 延迟还原 → 取消置顶。"""
+    """点击顺序：校验/置顶 → 记录光标 → 两步移动（先中途点）→ 核对到位 → 点击 → 延迟后分帧还原 → 取消置顶。"""
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.click_at(120, 80)
     assert recording.events == [
         ("ensure_front", 555),
-        ("get_cursor_pos",),         # 记下原位置（点击后要还原）
-        ("move_cursor", 465, 350),   # 两步移动的中途点：(800,600) 与 (130,100) 的中点
-        ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
-        ("get_cursor_pos",),         # 点击前核对：实测光标是否到位
+        ("get_cursor_pos",),                    # 记下原位置（点击后要还原）
+        ("move_cursor", 465, 350),              # 两步移动的中途点：(800,600) 与 (130,100) 的中点
+        ("move_cursor", 130, 100),              # 客户区 (120,80) + (10,20)
+        ("get_cursor_pos",),                    # 点击前核对：实测光标是否到位
         ("click",),
-        ("restore_cursor", 800, 600),
+        ("restore_cursor_smooth", 800, 600),    # 延迟后**分帧小步**移回（不是一次跳回）
         ("release_topmost", 555),
     ]
 
@@ -757,10 +759,10 @@ def test_real_sender_refuses_when_window_not_ready(monkeypatch) -> None:
 
 
 def test_real_sender_keeps_cursor_when_restore_disabled(recording) -> None:
-    """可配置：关闭"点击后还原光标"时不还原（光标停在目标点）。"""
+    """可配置：关闭"点击后还原光标"时不还原（光标停在目标点）——用户实测这是能点动的那一档。"""
     sender = RealInputSender(555, restore_cursor=False, sleep=lambda _s: None)
     sender.click_at(120, 80)
-    assert ("restore_cursor", 800, 600) not in recording.events
+    assert not any(e[0].startswith("restore_cursor") for e in recording.events)
     assert ("click",) in recording.events
 
 
@@ -774,7 +776,7 @@ def test_real_sender_restores_cursor_and_releases_topmost_even_on_error(recordin
     sender = RealInputSender(555, sleep=lambda _s: None)
     with pytest.raises(WindowUnavailableError):
         sender.click_at(10, 10)
-    assert ("restore_cursor", 800, 600) in recording.events
+    assert ("restore_cursor_smooth", 800, 600) in recording.events   # 延迟 + 分帧小步移回
     assert ("release_topmost", 555) in recording.events
 
 

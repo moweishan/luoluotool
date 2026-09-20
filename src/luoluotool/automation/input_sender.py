@@ -182,13 +182,27 @@ class RealInputSender:
             )
         finally:
             if self.restore_cursor and saved is not None:
-                if clicked:
-                    # 松手后**先等几帧再还原光标**（与滑动路径的 DRAG_RESTORE_DELAY_SECONDS 同源经验）：
-                    # 游戏按帧采样指针位置，若光标立刻跳到另一个显示器，游戏处理这次点击的那一帧
-                    # 可能已经"指针不在窗口内"→ 这次点击被丢弃（实测"某页能点、另一页点不动"）。
-                    self._sleep(CLICK_RESTORE_DELAY_SECONDS)
-                real_input.set_cursor_pos(*saved)
+                self._restore_cursor_after_click(saved, clicked=clicked)
             self._release_topmost_if_needed(front)
+
+    def _restore_cursor_after_click(self, saved: tuple[int, int], clicked: bool) -> None:
+        """点击后把真实光标移回 `saved`：**先延迟**（让游戏处理完这次点击）**再分帧小步移回**。
+
+        为什么不能一次 `SetCursorPos` 跳回（2026-09-20 用户实测确认的根因）：游戏（Unity）按帧
+        采样指针位置 —— 松手后立刻把光标跳到另一个显示器，游戏处理这次点击的那一帧看到的是
+        "指针已不在窗口内"，于是这次点击被丢弃。用户实测「关掉还原鼠标原位置就能点动」正好反证。
+        分帧小步 + 延迟（`CLICK_RESTORE_DELAY_SECONDS`）能保证"游戏先处理点击，再看到指针离开"。
+        与滑动路径的 `_restore_cursor_after_drag` 同一套做法；被跳过/未点击时不额外等待。
+        """
+        if clicked:
+            try:
+                self._sleep(CLICK_RESTORE_DELAY_SECONDS)
+            except Exception as exc:        # 等待被中断（例如急停）也必须继续还原光标
+                self._logger.warning("还原光标前的等待被中断（继续还原）：%s", exc)
+        if real_input.restore_cursor_smooth(saved, self._sleep):
+            self._logger.info("真实光标已移回点击前的位置 (%d, %d)", saved[0], saved[1])
+        else:
+            self._logger.warning("真实光标可能未完全移回点击前的位置 (%d, %d)", saved[0], saved[1])
 
     def _move_cursor_for_click(self, start: tuple[int, int] | None, target: tuple[int, int]) -> None:
         """把光标移到点击目标；分两步走（先到中途点），让游戏先收到"指针移进来/hover"再收到按下。
