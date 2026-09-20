@@ -22,6 +22,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QVBoxLayout,
@@ -72,14 +73,33 @@ class TemplateCropDialog(QDialog):
             "**双击**＝清空重来。\n"
             "**键盘微调**：方向键移动 1 像素、Shift+方向键 10 像素、Ctrl+方向键把那条边向外 1 像素、"
             "Ctrl+Shift+方向键向内 1 像素。\n"
+            "**看细节**：滚轮＝以鼠标为中心缩放、中键拖拽 或 空格+拖拽＝平移画面、"
+            "下面两个按钮＝「适配窗口」/「1:1 显示」；鼠标旁的放大镜显示当前像素与坐标。\n"
             "建议框选画面中**不会变化**的局部（数字、倒计时等变动区域会让匹配不稳定）。"
         ))
         self.view = CropView(image_bgr)
         self.crop_view = self.view            # 语义化别名
         self.view.setFocus()                  # 打开弹窗就把键盘焦点给框选图（方向键立刻可用）
         self.info_label = QLabel("尚未选择区域")
+        self.info_label.setWordWrap(True)
         self.view.selection_changed.connect(self._refresh_info)
+        self.view.view_changed.connect(self._refresh_info)
+
+        zoom_row = QHBoxLayout()
+        self.zoom_fit_button = QPushButton("适配窗口")
+        self.zoom_fit_button.setToolTip("整张截图缩放到窗口大小（回到初始视图）")
+        self.zoom_fit_button.clicked.connect(self.view.zoom_to_fit)
+        self.zoom_actual_button = QPushButton("1:1 显示")
+        self.zoom_actual_button.setToolTip("1 个图像像素 = 1 个屏幕像素（精确定位用）")
+        self.zoom_actual_button.clicked.connect(self.view.zoom_to_actual)
+        self.zoom_hint_label = QLabel("滚轮＝缩放（以鼠标为中心）｜中键拖拽 或 空格+拖拽＝平移画面")
+        self.zoom_hint_label.setWordWrap(True)
+        zoom_row.addWidget(self.zoom_fit_button)
+        zoom_row.addWidget(self.zoom_actual_button)
+        zoom_row.addWidget(self.zoom_hint_label, 1)
+
         layout.addWidget(self.view, 1)
+        layout.addLayout(zoom_row)
         layout.addWidget(self.info_label)
 
         buttons = QDialogButtonBox()
@@ -116,7 +136,16 @@ class TemplateCropDialog(QDialog):
         return text
 
     def _refresh_info(self) -> None:
-        self.info_label.setText(self.selection_text())
+        """信息行 = 选区描述 + 视图状态（缩放倍率 + 鼠标处客户区坐标）。"""
+        self.info_label.setText(f"{self.selection_text()}　｜　{self.view_status_text()}")
+
+    def view_status_text(self) -> str:
+        """视图状态：缩放倍率与鼠标处的客户区坐标（鼠标还没进图时只给缩放）。"""
+        zoom = f"缩放 {self.view.zoom_percent()}%"
+        cursor = self.view.cursor_position()
+        if cursor is None:
+            return f"{zoom}　｜　鼠标：移入截图后显示坐标"
+        return f"{zoom}　｜　鼠标客户区 ({cursor.x()}, {cursor.y()})"
 
     # ------------------------------------------------------------- 保存
     def _on_save_clicked(self) -> None:

@@ -94,7 +94,9 @@ src/luoluotool/
     pages/planned_feature.py  51  功能三/四公共基类（占位页）
     pages/feature3.py,4.py    13  功能三/四页（占位子类）
     pages/about.py           213  「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断/打开目录）
-    dialogs/crop_dialog.py   479  框选截图生成模板（CropView + TemplateCropDialog）
+    dialogs/crop_dialog.py   189  框选弹窗外壳（提示文字 / 适配窗口·1:1 按钮 / 保存选区）
+    dialogs/crop_view.py     537  框选交互视图 CropView（选区新建/移动/手柄缩放/键盘微调/绘制）
+    dialogs/crop_view_zoom.py 205 显示变换 ZoomPanMixin（滚轮缩放/平移/放大镜，纯搬运用）
     layout_measure.py        283  --measure-layout 的测量与报告（ASCII 安全）
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
     app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
@@ -170,12 +172,19 @@ print('layer check violations =', bad)
 主窗口门禁 + 后台截图               gui/main_window.py:497   _on_crop_requested()
   截图线程                          gui/workers.py:100   _CaptureThread → core/vision.py:212 capture_window()
   弹框（GUI 线程）                  gui/main_window.py:470   _on_capture_ready() → TemplateCropDialog
-  拖拽框选                          gui/dialogs/crop_dialog.py:58   CropView（选区外＝新框选）
-  改选区（2026-09-20 新增）         gui/dialogs/crop_dialog.py:179  hit_test() → _apply_move() / _apply_resize()
+  拖拽框选                          gui/dialogs/crop_view.py:62    CropView（选区外＝新框选）
+  改选区（2026-09-20 新增）         gui/dialogs/crop_view.py:180   hit_test() → _apply_move() / _apply_resize()
                                     选区内部＝整体移动；四角/四边 8 个手柄＝改大小（对角固定、≥MIN_SELECTION_SIZE=8）
-  键盘微调（2026-09-20 新增）       gui/dialogs/crop_dialog.py:280  keyPressEvent → _nudge_whole() / _nudge_edge()
+                                    Alt+手柄＝以选区中心对称缩放（_symmetric_resize）
+  键盘微调（2026-09-20 新增）       gui/dialogs/crop_view.py:403   keyPressEvent → _nudge_whole() / _nudge_edge()
                                     方向键＝整体 1 图像像素（Shift=10）；Ctrl+方向＝该边外扩 1；Ctrl+Shift＝该边内收 1
-  保存（**只存选区**）              gui/dialogs/crop_dialog.py:439  _on_save_clicked() → save_selection():455
+  批 1 视觉/撤销（2026-09-20）      gui/dialogs/crop_view.py:354   drag_bubble_text() / _paint_dim_mask():522
+                                    Esc＝撤销拖拽或清空；双击＝清空；空格·右键拖拽＝移动
+  批 2 视图变换（2026-09-21）       gui/dialogs/crop_view_zoom.py:35  fit_scale/image_rect/_set_zoom/wheelEvent:141
+                                    滚轮＝以鼠标为锚点缩放；中键·空格拖拽＝平移；magnifier_rect:152＝放大镜
+  适配窗口 / 1:1 显示按钮           gui/dialogs/crop_dialog.py:87   zoom_fit_button / zoom_actual_button
+  HUD（选区+缩放%+鼠标坐标）        gui/dialogs/crop_dialog.py:136  _refresh_info() → view_status_text():140
+  保存（**只存选区**）              gui/dialogs/crop_dialog.py:149  _on_save_clicked() → save_selection():165
   加入模板列表                      gui/main_window.py:484   debug_page.add_vision_template()
 ```
 
@@ -367,7 +376,9 @@ capture_client_bgr (vision.py:393)
 | 25 | （**潜在**）"以后把按键步数上限调大"时，界面上能存下 25 步的配置，**下次启动却判它损坏并整份恢复默认** | `validation.py` 先 `from ...models import MAX_KEY_STEPS`，第 15 行又写了 `MAX_KEY_STEPS = 20` —— **同名赋值遮蔽了 import**；写入路径用 models 的、校验路径用本地的，两边今天都是 20 所以没暴露 | 删掉那行遮蔽（保留 import），上限只留 `config/models.py` 一份；并新增仓库级守卫：**任何模块级 import 都不得被同名赋值遮蔽** | `tests/test_source_guards.py::test_no_module_level_import_is_shadowed` / `a07b42a` |
 | 26 | （**潜在**）调试页允许填的坐标/间隔/次数与校验器各走各的，填进去了却在执行时被拒 | 同一组业务常量在两处各定义一份：`PW_*` 在 `vision.py` 与 `window.py` 各一份（后者是**死常量**）；`COORDINATE_MAX`/`INTERVAL_RANGE_MS`/`DURATION_RANGE_MS` 在 `core/debug.py` 与 `gui/pages/debug.py` 各一份 | 删掉 `window.py` 的死常量；调试页改为从 `core.debug` **导入**这些范围（`COUNT_RANGE` 由 `MAX_REPEAT` 推导）；守卫测试锁住"只允许定义一处 / 必须是同一个对象" | `test_printwindow_flags_are_defined_once`、`test_debug_page_limits_come_from_core_debug`、`test_sources_stay_under_line_limit` / `a07b42a` |
 | 27 | 三处"小而真"的债：接口表写了不存在的参数、共享夹具抽了但旧文件仍各有副本（三份行为已分歧）、跨模块 `from ... import _prepare` 引用私有名 | 拆分时只搬了代码，没顺手收敛"文档/夹具/私有名"这三类**隐形重复** | 接口表改成真实签名 `capture_client_bgr(hwnd)`；`test_gui_config/test_gui_layout/test_gui_smoke` 改用 `gui_helpers.window_factory`（并给它补 `tmp_path`/`developer_mode` 支持，全仓库只剩一份夹具）；`_prepare` → 公开名 `prepare_for_match` 并写进 §8 接口表 | 三个测试文件全绿（116 passed）；`gui_helpers.window_factory` 唯一副本 / `a07b42a`、`00a348b` |
-| 28 | 框选完发现**差一点**（多框/少框一截），只能**整块重新拖**（用户 2026-09-20 报告） | `CropView` 只有"按下→拖→松手"这一种交互：每次按下都从头开始新建选区，没有"改已有选区"的概念 | 加命中判定与三种拖拽模式：**选区内部**＝整体移动（`_apply_move`，夹在图像内）、**四角/四边 8 个手柄**＝改大小（`_apply_resize`：被拖的边跟手、对角固定、不小于 `MIN_SELECTION_SIZE`）、**选区外**＝重新框选；悬停给指针形状（缩放箭头/移动/十字），手柄画成 8 个方块；改完的选区就是保存用的选区 | `tests/test_gui_crop.py` 的 `test_drag_inside_selection_moves_it`、`test_drag_corner_handle_resizes_both_dimensions`、`test_drag_edge_handle_resizes_one_dimension`、`test_moving_selection_is_clamped_inside_image`、`test_resizing_cannot_shrink_below_minimum_size`、`test_drag_outside_selection_starts_a_new_one`、`test_cursor_hints_match_handle_and_inside`、`test_saved_template_uses_the_modified_selection` / 本条提交 |
+| 28 | 框选完发现**差一点**（多框/少框一截），只能**整块重新拖**（用户 2026-09-20 报告） | `CropView` 只有"按下→拖→松手"这一种交互：每次按下都从头开始新建选区，没有"改已有选区"的概念 | 加命中判定与三种拖拽模式：**选区内部**＝整体移动（`_apply_move`，夹在图像内）、**四角/四边 8 个手柄**＝改大小（`_apply_resize`：被拖的边跟手、对角固定、不小于 `MIN_SELECTION_SIZE`）、**选区外**＝重新框选；悬停给指针形状（缩放箭头/移动/十字），手柄画成 8 个方块；改完的选区就是保存用的选区 | `tests/test_gui_crop_edit.py`（2026-09-21 从 `test_gui_crop.py` 拆出）的 `test_drag_inside_selection_moves_it`、`test_drag_corner_handle_resizes_both_dimensions`、`test_drag_edge_handle_resizes_one_dimension`、`test_moving_selection_is_clamped_inside_image`、`test_resizing_cannot_shrink_below_minimum_size`、`test_drag_outside_selection_starts_a_new_one`、`test_cursor_hints_match_handle_and_inside`、`test_saved_template_uses_the_modified_selection` / 本条提交 |
+| 29 | 框选时**看不清选了哪块**、不知道自己框了多大；框歪了只能整块重拖（用户 2026-09-20 勾选的候选清单，批 1） | 视图只有"选区线框"一种反馈：选区外的画面与选区内一样亮（分不清边界）、拖拽时没有任何尺寸数字（要松手再看信息行）、拖错了只能重拖、修大小只能拽角 | 批 1 六项交互：**选区外压暗**（`_paint_dim_mask` 四个矩形拼，不动选区内像素）、**拖拽尺寸气泡**（`drag_bubble_text`＝`宽×高 @ (x, y)`，靠边翻转）、**Esc**（拖拽中＝撤销这次拖拽 `_selection_before_drag`／有选区＝清空／都没有＝交对话框关窗）、**双击**＝清空、**Alt+手柄**＝以中心对称缩放、**空格拖拽/右键拖拽**＝移动选区 | `tests/test_gui_crop_edit.py` 的 `test_dim_mask_darkens_outside_selection`、`test_drag_bubble_reports_size_while_dragging`、`test_escape_cancels_drag_and_restores_previous_selection`、`test_escape_clears_selection_when_not_dragging`、`test_escape_without_selection_reaches_the_dialog`、`test_double_click_clears_selection`、`test_alt_drag_resizes_around_the_selection_center`、`test_space_drag_moves_selection_even_on_a_handle`、`test_right_button_drag_moves_selection` / `296028c` |
+| 30 | 模板要框的细节太小，**截图缩放后看不见自己在框哪个像素**；想核对坐标只能松手看信息行（用户同批选的批 2） | 视图只有"整图适配"一档缩放：没有放大/缩小（滚轮无效）、没有平移（`_pan` 字段还不存在）、没有倍率与鼠标坐标显示、没有像素级放大镜 | 批 2 五项视图功能：**滚轮缩放**（`_set_zoom` 以鼠标处图像像素为锚点，`[0.5, 8]` 夹取）、**中键/空格拖拽平移**（`_clamp_pan` 至少留 60px 可见）、「**适配窗口**」/「**1:1 显示**」（1 图像像素＝1 控件像素）、**HUD**（选区 + 缩放% + 鼠标客户区坐标）、**放大镜**（132px、6 倍整数放大、十字 + 坐标、贴鼠标靠边翻转、`leaveEvent` 收起）；期间修掉三个真 bug：`QRect.center()` 奇数尺寸少 1 像素导致整图适配偏 `(-1, -1)`、放大镜可见性误用选区矩形（没框选时永不显示）、悬停不重绘（放大镜停在上一帧） | `tests/test_gui_crop_zoom.py` 11 条（`test_wheel_zoom_scales_and_keeps_cursor_anchor`、`test_zoom_actual_makes_one_image_pixel_one_widget_pixel`、`test_zoom_fit_restores_the_initial_view`、`test_zoom_is_clamped_to_limits`、`test_middle_button_drag_pans_the_image`、`test_magnifier_follows_cursor_and_stays_inside_view`、`test_magnifier_source_rect_is_clamped_to_image`、`test_magnifier_paints_the_pixel_under_the_cursor`、`test_info_label_shows_zoom_and_cursor_position`、`test_hovering_repaints_so_the_magnifier_follows_the_cursor`、`test_mouse_leave_hides_the_magnifier_and_the_coordinate_hint`）+ `test_crop_view_fits_image_inside_widget`（居中回归）/ 本条提交 |
 
 ---
 
@@ -390,6 +401,14 @@ capture_client_bgr (vision.py:393)
      `test_real_input_click.py`（368/28）、`test_real_input_drag.py`（300/22）、
      `test_real_input_keys.py`（194/16），共享夹具进 `tests/test_automation/real_input_helpers.py`（224）。
      至此**源文件与测试文件全部在 600 行以内**（唯一接近的是 `tests/test_core/test_vision.py` 589 行）。
+   - **2026-09-21 又拆了两轮（都是"改功能时不小心顶破 600 行"）**：`gui/dialogs/crop_dialog.py`
+     627 → **189**（拆出 `crop_view.py`，交互视图整块搬走，`crop_dialog` 再导出 `CropView` 与常量）；
+     `gui/dialogs/crop_view.py` 694 → **537**（把显示变换 —— `fit_scale`/`image_rect`/`zoom_*`/`_set_zoom`/
+     `_clamp_pan`/`wheelEvent`/`magnifier_*`/`_paint_magnifier` 与 9 个常量 —— 搬进 `crop_view_zoom.py`（205）
+     的 `ZoomPanMixin`，`CropView(ZoomPanMixin, QWidget)` 用继承接回来）；测试同理：
+     `tests/test_gui_crop.py` 740 → **253**、`tests/test_gui_crop_edit.py` 763 → **562**（拆出
+     `test_gui_crop_zoom.py`，11 条视图变换用例）。**用例总数拆分前后不变**（39 → 39、48 → 48），
+     AST 比对 16 个方法 + 9 个常量逐字一致。
    **搬迁手法（下次拆文件照抄）**：用脚本按 AST 行区间**原样搬运**（不改一行函数体），再用 AST 比对
    "旧文件的定义 == 新文件的定义"逐字一致；头部 import 用 AST 剪掉搬走后没人用的名字。
    **最容易踩的坑**：测试里的 `monkeypatch.setattr(模块, ...)` 目标必须跟着实现搬
@@ -666,8 +685,15 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `client_to_screen` | `automation/real_input.py:157` | 客户区→屏幕换算（点击路径） |
 | `build_drag_path` | `automation/drag_path.py:49` | 缓出曲线 + 末尾静止帧 |
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
-| `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:58` / `:368` | 框选几何与保存 |
-| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:439` / `:455` | **只保存选区** |
+| `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_view.py:62` / `gui/dialogs/crop_dialog.py:51` | 框选几何与保存 |
+| `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:180` / `:190` / `:202` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
+| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:354` / `:522` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
+| `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:403` / `:467` | 方向键微调 / Ctrl 调单边 |
+| `image_rect` / `_set_zoom` / `wheelEvent` | `gui/dialogs/crop_view_zoom.py:42` / `:100` / `:141` | 图像显示矩形（缩放+平移）/ 以鼠标为锚点缩放 / 滚轮缩放 |
+| `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:152` / `:169` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
+| `zoom_fit_button` / `zoom_actual_button` | `gui/dialogs/crop_dialog.py:87` / `:90` | 「适配窗口」/「1:1 显示」按钮 |
+| `view_status_text` | `gui/dialogs/crop_dialog.py:140` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
+| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:149` / `:165` | **只保存选区** |
 | `DebugPage` | `gui/pages/debug.py:67` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `AboutPage` | `gui/pages/about.py:67` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
 | `diagnostics_text` | `gui/pages/about.py:193` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |

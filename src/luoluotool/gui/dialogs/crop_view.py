@@ -6,6 +6,10 @@
 坐标约定：对外一律暴露**图像像素坐标**（`selection_in_image()`），图像就是游戏客户区截图，
 因此选区左上角即客户区坐标（与点击/滑动/识别结果同一坐标系）。
 显示时按控件里的矩形换算（等比适配 + 居中），缩放取整误差只影响显示，不影响暴露的坐标。
+
+拆分说明（2026-09-21，原文件 694 行超 600 硬线）：**显示变换**（滚轮缩放 / 中键·空格平移 /
+1:1 显示 / 放大镜 / 鼠标坐标）已纯搬运到 `gui/dialogs/crop_view_zoom.py` 的 `ZoomPanMixin`，
+本模块的 `CropView(ZoomPanMixin, QWidget)` 直接继承，并把那批常量**再导出**（旧导入路径不变）。
 """
 
 from __future__ import annotations
@@ -14,6 +18,19 @@ import numpy as np
 from PySide6.QtCore import QPoint, QRect, Qt, Signal
 from PySide6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPen
 from PySide6.QtWidgets import QWidget
+
+from luoluotool.gui.dialogs.crop_view_zoom import (      # 再导出：旧导入路径不变
+    CROSSHAIR_COLOR,
+    MAGNIFIER_BORDER_COLOR,
+    MAGNIFIER_SCALE,
+    MAGNIFIER_SIZE_PX,
+    MAGNIFIER_SOURCE_PX,
+    MAX_ZOOM,
+    MIN_VISIBLE_PX,
+    MIN_ZOOM,
+    WHEEL_ZOOM_STEP,
+    ZoomPanMixin,
+)
 
 
 MIN_SELECTION_SIZE = 8          # 选区小于该像素数视为无效（点一下、手抖）
@@ -24,6 +41,7 @@ HANDLE_SIZE_PX = 10             # 手柄命中范围（控件像素）：缩放�
 DIM_COLOR = QColor(0, 0, 0, 120)        # 选区外遮罩（让选中的那块跳出来，用户 2026-09-20 要求）
 BUBBLE_COLOR = QColor(0, 0, 0, 200)     # 拖拽时的尺寸气泡底色
 BUBBLE_PADDING_PX = 6
+
 
 # 八个手柄（四角 + 四边）与它们的指针形状：拖动它们改选区大小（用户 2026-09-20 要求）
 HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
@@ -45,7 +63,7 @@ def to_qimage(image_bgr: np.ndarray) -> QImage:
     return QImage(rgb.data, width, height, 3 * width, QImage.Format.Format_RGB888).copy()
 
 
-class CropView(QWidget):
+class CropView(ZoomPanMixin, QWidget):
     """显示截图并支持左键拖拽框选；选区以图像像素坐标对外暴露。
 
     交互（用户 2026-09-20 要求"框选完还能改"）：
@@ -73,6 +91,11 @@ class CropView(QWidget):
         self._cursor_widget: QPoint | None = None    # 鼠标处的控件坐标（气泡/放大镜定位用）
         self._selection_before_drag: QRect | None = None   # Esc 撤销拖拽用
         self._symmetric_resize = False                     # Alt：以中心为锚点对称缩放
+        self._zoom = 1.0                                   # 相对"适配比例"的倍数
+        self._pan = QPoint(0, 0)                            # 平移量（控件像素）
+        self._pan_origin: QPoint | None = None              # 平移起点（控件坐标）
+        self._pan_start = QPoint(0, 0)
+        self._magnifier_enabled = True                      # 放大镜（默认开，截图工具习惯）
         self.setMinimumSize(360, 240)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)     # 方向键微调需要键盘焦点
@@ -83,20 +106,6 @@ class CropView(QWidget):
     def image_size(self) -> tuple[int, int]:
         height, width = self._image.shape[:2]
         return int(width), int(height)
-
-    def image_rect(self) -> QRect:
-        """图像在控件内的显示区域（等比缩放 + 居中）。"""
-        width, height = self.image_size
-        if width <= 0 or height <= 0 or self.width() <= 0 or self.height() <= 0:
-            return QRect()
-        scale = min(self.width() / width, self.height() / height)
-        drawn_w, drawn_h = int(width * scale), int(height * scale)
-        return QRect((self.width() - drawn_w) // 2, (self.height() - drawn_h) // 2, drawn_w, drawn_h)
-
-    def _scale(self) -> float:
-        width, _ = self.image_size
-        drawn = self.image_rect().width()
-        return drawn / width if width else 1.0
 
     def selection_in_image(self) -> tuple[int, int, int, int] | None:
         """当前选区（图像像素坐标, 已裁剪到图像内）；过小或未选返回 None。"""
@@ -237,6 +246,15 @@ class CropView(QWidget):
         point = self._widget_point_in_image(widget_point)
         # 记下按下之前的选区：Esc 撤销这次拖拽时要还原它
         self._selection_before_drag = self._image_selection
+        if button == Qt.MouseButton.MiddleButton or (
+            button == Qt.MouseButton.LeftButton and self._space_down and self._image_selection is None
+        ):
+            # 中键拖拽 / 空格+左键（没有选区时）＝平移画面
+            self._mode = "pan"
+            self._pan_origin = widget_point
+            self._pan_start = self._pan
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
         if button == Qt.MouseButton.RightButton:
             # 右键拖拽＝移动选区（左键保留给"重新框选"）
             if self._image_selection is None:
@@ -285,8 +303,16 @@ class CropView(QWidget):
         widget_point = event.position().toPoint()
         self._cursor_widget = widget_point
         self._cursor_in_image = self._widget_point_in_image(widget_point)
+        if self._mode == "pan" and self._pan_origin is not None:
+            self._pan = self._pan_start + (widget_point - self._pan_origin)
+            self._clamp_pan()
+            self.update()
+            self.view_changed.emit()
+            return
         if self._origin is None:
             self._update_cursor(widget_point)      # 没按住时只更新指针形状（提示能改哪里）
+            # 放大镜与坐标提示是"贴着鼠标画"的：不重绘就会停在上一帧位置
+            self.update()
             self.view_changed.emit()
             return
         point = self._widget_point_in_image(widget_point)
@@ -313,7 +339,11 @@ class CropView(QWidget):
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:    # noqa: N802
-        if event.button() in (Qt.MouseButton.LeftButton, Qt.MouseButton.RightButton):
+        if event.button() in (
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.RightButton,
+            Qt.MouseButton.MiddleButton,
+        ):
             self._reset_drag_state()
             self._update_cursor(event.position().toPoint())
             self.selection_changed.emit()
@@ -324,6 +354,7 @@ class CropView(QWidget):
         self._handle = None
         self._start_rect = None
         self._selection_before_drag = None
+        self._pan_origin = None
 
     # ------------------------------------------------------------- 拖拽时的尺寸气泡
     def drag_bubble_text(self) -> str:
@@ -359,7 +390,13 @@ class CropView(QWidget):
         super().keyReleaseEvent(event)
 
     def _update_cursor(self, widget_point: QPoint) -> None:
-        """悬停提示：手柄上给对应方向的缩放指针，选区内给"可移动"指针，外部给十字。"""
+        """悬停提示：手柄＝缩放箭头、选区内＝可移动、平移模式＝手形、外部＝十字。"""
+        if self._mode == "pan":
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+        if self._space_down and self._image_selection is None:
+            self.setCursor(Qt.CursorShape.OpenHandCursor)     # 空格＝平移画面
+            return
         hit = self.hit_test(widget_point)
         if hit in HANDLE_CURSORS:
             self.setCursor(HANDLE_CURSORS[hit])
@@ -486,6 +523,7 @@ class CropView(QWidget):
             painter.setPen(QColor(255, 255, 255))
             painter.drawText(bubble, Qt.AlignmentFlag.AlignCenter, self.drag_bubble_text())
             painter.setBrush(Qt.BrushStyle.NoBrush)
+        self._paint_magnifier(painter)
 
     def _paint_dim_mask(self, painter: QPainter, selection: QRect) -> None:
         """把选区以外的区域压暗（四个矩形拼起来，避免动到选区内的像素）。"""
