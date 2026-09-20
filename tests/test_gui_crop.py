@@ -117,7 +117,7 @@ def test_save_selection_reports_unwritable_dir(tmp_path, monkeypatch, caplog) ->
         raise PermissionError("模拟目录不可写")
 
     monkeypatch.setattr(Path, "mkdir", boom)
-    dialog = TemplateCropDialog(_image(200, 100), (200, 100), save_dir=tmp_path / "screenshots")
+    dialog = TemplateCropDialog(_image(200, 100), (200, 100), save_dir=tmp_path / "anchors")
     dialog.set_selection_in_image(30, 20, 50, 40)
 
     assert dialog.save_selection() is None                 # 不抛异常

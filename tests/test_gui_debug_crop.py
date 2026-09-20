@@ -116,8 +116,8 @@ def test_crop_flow_writes_only_selected_region(window_factory, tmp_path, monkeyp
     config = AppConfig.default()
     config.automation.developer_mode = True
     window = window_factory(tmp_path / "config.json", config)
-    screenshots = tmp_path / "screenshots"
-    monkeypatch.setattr(mw, "get_screenshots_dir", lambda: screenshots)
+    anchors = tmp_path / "anchors"
+    monkeypatch.setattr(mw, "get_anchors_dir", lambda: anchors)
 
     class _AutoCrop(mw.TemplateCropDialog):
         """替代 exec()：模拟用户拖框并点「保存为模板」，再返回真实对话框结果。"""
@@ -135,7 +135,7 @@ def test_crop_flow_writes_only_selected_region(window_factory, tmp_path, monkeyp
     image[:, :, 1] = np.arange(300, dtype=np.uint8).reshape(-1, 1)
     window._on_capture_ready(image, (400, 300))
 
-    files = list(screenshots.glob("anchor_*.png"))
+    files = list(anchors.glob("anchor_*.png"))
     assert len(files) == 1, "「保存为模板」必须写出一个模板文件"
     saved = load_template(files[0])
     assert saved.shape == (40, 50, 3)              # 只存框选的那块，不是整屏 300x400

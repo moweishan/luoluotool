@@ -52,8 +52,8 @@ from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
 from luoluotool.gui.widgets import LogPanelHandler
 from luoluotool.utils.paths import (
+    get_anchors_dir,
     get_debug_dir,
-    get_screenshots_dir,
 )
 
 from luoluotool.gui.elevation_flow import ElevationFlowMixin
@@ -470,11 +470,11 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
     def _on_capture_ready(self, image, window_size) -> None:
         """截图完成（GUI 线程）：弹出框选窗口，保存后把模板路径回填到调试页。
 
-        框选产物（`anchor_<时间戳>.png`）落到 `assets/screenshots/`（用户 2026-09-20 明确：
-        该目录放「用工具截图与框选功能产出的图片」）。
+        框选产物（`anchor_<时间戳>.png`）落到 `assets/anchors/`（用户 2026-09-20 明确：
+        该目录放开发者调试页框选功能的产出）。
         """
         self.debug_page.set_status("请在弹窗里拖拽框选要识别的区域…")
-        dialog = TemplateCropDialog(image, window_size, get_screenshots_dir(), self)
+        dialog = TemplateCropDialog(image, window_size, get_anchors_dir(), self)
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
         finally:
