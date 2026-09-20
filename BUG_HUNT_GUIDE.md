@@ -97,8 +97,9 @@ src/luoluotool/
     layout_measure.py        283  --measure-layout 的测量与报告（ASCII 安全）
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
     app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
-  utils/                         keys.py(72) paths.py(50) logging_setup.py(53)
-tests/                           与 src 同构；conftest.py 全局夹具；test_packaging.py 守卫构建红线
+  utils/                         keys.py(72) paths.py(63) logging_setup.py(53)
+assets/                          icons/（入库）；anchors/（框选生成模板）与 templates/（自己整理的识别图片）放图片，个人素材不入库
+tests/                           与 src 同构；conftest.py 全局夹具；gui_helpers.py 共享 GUI 夹具；test_packaging.py / test_source_guards.py / test_paths.py 是仓库级守卫
 packaging/                       build.ps1（UTF-8 **带 BOM**）、LuoLuoTool.spec、rthook_windowed_stdio.py
 ```
 
@@ -660,6 +661,9 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
 | `migrate` / `validate` | `config/validation.py:309` / `:339` | 迁移链（每步独立 try，绝不崩）与校验 |
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
+| `get_templates_dir` / `get_anchors_dir` | `utils/paths.py:53` / `:45` | 识别图片目录：`assets/templates`（自己整理的）/ `assets/anchors`（框选生成） |
+| `prepare_for_match` | `automation/template_match.py:104` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
+| `_on_vision_add_clicked` | `gui/pages/debug.py:425` | 「添加图片…」对话框默认打开 `assets/templates` |
 | `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
 | `ease_out_quad` / `interpolate_points` | `automation/drag_path.py:22` / `:27` | 滑动缓出曲线 / 分帧插值（纯函数） |
 | `scale_candidates` | `automation/multiscale.py:45` | 粗搜档位生成（按步长枚举比例） |

@@ -297,7 +297,8 @@ LuoLuoTool/
 │       └── paths.py         # 运行时路径（user_data/logs）解析
 ├── tests/                   # 与 src 同构：test_config / test_core / test_automation / test_gui
 ├── assets/
-│   ├── anchors/             # 后期锚点截图（个人素材，不入库）
+│   ├── anchors/             # 框选截图生成模板的落盘目录（个人素材，不入库）
+│   ├── templates/           # 图像识别图片：用户自己整理/命名的识别图（个人素材，不入库）
 │   └── icons/               # 静态资源：窗口图标等（入库）
 ├── user_data/               # 运行时生成，git 忽略；config.example.json 入库
 ├── logs/                    # git 忽略

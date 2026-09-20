@@ -49,7 +49,7 @@
 ## 4. 缓存与临时数据
 
 - [ ] 诊断截图写入 `user_data/debug/`，有清理说明（旧截图会积累，需手动或后续加清理）。
-- [ ] `assets/anchors/` 中的个人截图不入库（`.gitignore` 覆盖）。
+- [ ] `assets/anchors/`（框选生成模板）与 `assets/templates/`（用户自己整理的识别图片）里的图片都不入库：`.gitignore` 覆盖 `assets/anchors/*.png` 与 `assets/templates/*.{png,jpg,jpeg,bmp,webp}`，目录靠 `.gitkeep` 入库；守卫测试 `tests/test_paths.py`（目录存在、`.gitkeep` 在、忽略规则在、git 索引里没有图片）。
 - [ ] 构建产物 `build/`、`dist/` 不入库。
 - [ ] 程序不写注册表、不写系统临时敏感位置。
 
