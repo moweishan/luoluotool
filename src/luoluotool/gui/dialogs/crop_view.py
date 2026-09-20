@@ -129,6 +129,12 @@ class CropView(ZoomPanMixin, QWidget):
         self.update()
         self.selection_changed.emit()
 
+    def clear_selection(self) -> None:
+        """清空选区（双击 / Esc / 弹窗「重置」共用这一条路径，避免各写一份）。"""
+        self._image_selection = None
+        self.update()
+        self.selection_changed.emit()
+
     def _widget_point_in_image(self, point: QPoint) -> QPoint:
         """控件坐标 → 图像坐标（按当前缩放比例换算，并夹到图像范围内）。"""
         display = self.image_rect()
@@ -334,10 +340,8 @@ class CropView(ZoomPanMixin, QWidget):
     def mouseDoubleClickEvent(self, event) -> None:    # noqa: N802
         """双击＝清空选区（重新框）。"""
         if event.button() == Qt.MouseButton.LeftButton:
-            self._image_selection = None
+            self.clear_selection()
             self._reset_drag_state()
-            self.update()
-            self.selection_changed.emit()
             event.accept()
 
     def mouseReleaseEvent(self, event) -> None:    # noqa: N802
@@ -440,9 +444,7 @@ class CropView(ZoomPanMixin, QWidget):
                 event.accept()
                 return
             if self._image_selection is not None:         # 有选区：清空
-                self._image_selection = None
-                self.update()
-                self.selection_changed.emit()
+                self.clear_selection()
                 event.accept()
                 return
             super().keyPressEvent(event)                  # 都没有：交给对话框（→ 关窗）

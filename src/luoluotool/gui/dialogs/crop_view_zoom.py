@@ -57,6 +57,14 @@ class ZoomPanMixin:
         """当前显示倍率（100% ＝ 1 个图像像素占 1 个控件像素）。"""
         return int(round(self._scale() * 100))
 
+    def zoom_relative_percent(self) -> int:
+        """相对"整图适配"的缩放百分比（100%＝整图刚好铺满；弹窗滑条用这个口径）。"""
+        return int(round(self._zoom * 100))
+
+    def set_zoom_relative(self, zoom: float) -> bool:
+        """按"相对整图适配的倍数"设置缩放，锚点＝选区中心（没选区则图像中心），画面不跳走。"""
+        return self._set_zoom(zoom, anchor_widget=self._zoom_anchor_widget())
+
     def cursor_position(self) -> QPoint | None:
         """鼠标处的图像（客户区）坐标；鼠标不在图上时为 None（HUD 用）。"""
         return self._cursor_in_image
@@ -77,7 +85,7 @@ class ZoomPanMixin:
         base = self.fit_scale()
         if base <= 0:
             return
-        self._set_zoom(1.0 / base, anchor_widget=self._zoom_anchor_widget())
+        self.set_zoom_relative(1.0 / base)
 
     def _zoom_anchor_widget(self) -> QPoint:
         """缩放锚点：有选区就取选区中心，否则取图像中心。"""

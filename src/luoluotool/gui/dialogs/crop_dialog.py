@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime
 from pathlib import Path
 
@@ -25,6 +26,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -43,7 +45,9 @@ from luoluotool.gui.dialogs.crop_view import (      # 再导出：旧导入路�
     DIM_COLOR,
     HANDLE_CURSORS,
     HANDLE_SIZE_PX,
+    MAX_ZOOM,
     MIN_SELECTION_SIZE,
+    MIN_ZOOM,
     SELECTION_COLOR,
     CropView,
     to_qimage,
@@ -55,6 +59,26 @@ logger = logging.getLogger(__name__)
 NEAR_FULL_RATIO = 0.95          # 选区面积 ≥ 整屏的该比例时提示"几乎等于整屏"
 PROBE_IDLE_TEXT = "尚未试识别（点左边按钮，把当前选区在本图上匹配一次）"
 PROBE_WAIT_MS = 10000           # 关窗口时最多等试识别线程多久（全屏大模板实测 1–2 秒）
+ZOOM_SLIDER_STEPS = 1000        # 缩放滑条的行程（整数刻度；刻度含义见下面两个换算函数）
+
+
+def zoom_slider_to_percent(position: int) -> int:
+    """滑条位置 → **相对「整图适配」**的缩放百分比（`MIN_ZOOM`–`MAX_ZOOM`，即 50%–800%）。
+
+    用**对数刻度**而不是线性：0.5–8 跨了 16 倍，线性刻度下 50%–100% 只占行程的 1/15，
+    往左轻轻一拉就跨过一大段；对数刻度下**每 1/4 行程翻一倍**（50 → 100 → 200 → 400 → 800），
+    于是「100%＝整图适配」正好落在 1/4 处，往左缩小、往右放大，手感均匀。
+    """
+    ratio = max(0.0, min(float(position), float(ZOOM_SLIDER_STEPS))) / ZOOM_SLIDER_STEPS
+    span = math.log(MAX_ZOOM) - math.log(MIN_ZOOM)
+    return int(round(100 * math.exp(math.log(MIN_ZOOM) + span * ratio)))
+
+
+def zoom_percent_to_slider(percent: float) -> int:
+    """相对百分比 → 滑条位置（`zoom_slider_to_percent` 的反函数；用于把视图状态同步回滑条）。"""
+    value = max(MIN_ZOOM, min(float(percent) / 100.0, MAX_ZOOM))
+    span = math.log(MAX_ZOOM) - math.log(MIN_ZOOM)
+    return int(round(ZOOM_SLIDER_STEPS * (math.log(value) - math.log(MIN_ZOOM)) / span))
 
 
 class TemplateCropDialog(QDialog):
@@ -83,7 +107,8 @@ class TemplateCropDialog(QDialog):
             "**键盘微调**：方向键移动 1 像素、Shift+方向键 10 像素、Ctrl+方向键把那条边向外 1 像素、"
             "Ctrl+Shift+方向键向内 1 像素。\n"
             "**看细节**：滚轮＝以鼠标为中心缩放、中键拖拽 或 空格+拖拽＝平移画面、"
-            "下面两个按钮＝「适配窗口」/「1:1 显示」；鼠标旁的放大镜显示当前像素与坐标。\n"
+            "下面滑条＝左右拉改缩放（100%＝整图适配，最高 800%）、旁边的「重置」＝视图归位 + 清空选区；"
+            "鼠标旁的放大镜显示当前像素与坐标。\n"
             "**拿不准就点「在本图试识别」**：把当前选区当模板，在这张截图上匹配一次，"
             "当场告诉你这块区域在画面里是不是独一无二。\n"
             "建议框选画面中**不会变化**的局部（数字、倒计时等变动区域会让匹配不稳定）。"
@@ -95,17 +120,27 @@ class TemplateCropDialog(QDialog):
         self.info_label.setWordWrap(True)
 
         zoom_row = QHBoxLayout()
-        self.zoom_fit_button = QPushButton("适配窗口")
-        self.zoom_fit_button.setToolTip("整张截图缩放到窗口大小（回到初始视图）")
-        self.zoom_fit_button.clicked.connect(self.view.zoom_to_fit)
-        self.zoom_actual_button = QPushButton("1:1 显示")
-        self.zoom_actual_button.setToolTip("1 个图像像素 = 1 个屏幕像素（精确定位用）")
-        self.zoom_actual_button.clicked.connect(self.view.zoom_to_actual)
-        self.zoom_hint_label = QLabel("滚轮＝缩放（以鼠标为中心）｜中键拖拽 或 空格+拖拽＝平移画面")
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(0, ZOOM_SLIDER_STEPS)
+        self.zoom_slider.setValue(zoom_percent_to_slider(100))
+        self.zoom_slider.setToolTip(
+            "左右拖动改缩放（相对「整图适配」）：100%＝整图刚好铺满，每往右 1/4 行程翻一倍（最高 800%），"
+            "最左是 50%；滚轮缩放也会同步到这里"
+        )
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider_changed)
+        # 滑条**不拿键盘焦点**：方向键要留给框选图做微调（QSlider 会吃掉左右方向键，一拖滑条
+        # 方向键就从"挪选区 1 像素"变成"改缩放"了）
+        self.zoom_slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.zoom_value_label = QLabel()
+        self.zoom_value_label.setMinimumWidth(88)     # 数字位数变化时界面不抖
+        self.zoom_reset_button = QPushButton("重置")
+        self.zoom_reset_button.setToolTip("恢复弹窗初始状态：缩放回到整图适配、画面归位，并清空当前选区")
+        self.zoom_reset_button.clicked.connect(self.reset_all)
+        self.zoom_hint_label = QLabel("滚轮＝以鼠标为中心缩放｜中键拖拽 或 空格+拖拽＝平移画面")
         self.zoom_hint_label.setWordWrap(True)
-        zoom_row.addWidget(self.zoom_fit_button)
-        zoom_row.addWidget(self.zoom_actual_button)
-        zoom_row.addWidget(self.zoom_hint_label, 1)
+        zoom_row.addWidget(self.zoom_slider, 1)
+        zoom_row.addWidget(self.zoom_value_label)
+        zoom_row.addWidget(self.zoom_reset_button)
 
         # 「在本图试识别」（D1）：把当前选区当模板，在同一张截图上匹配一次
         self.probe_button = QPushButton("在本图试识别")
@@ -128,6 +163,7 @@ class TemplateCropDialog(QDialog):
 
         layout.addWidget(self.view, 1)
         layout.addLayout(zoom_row)
+        layout.addWidget(self.zoom_hint_label)
         layout.addWidget(self.info_label)
         layout.addLayout(probe_row)
         layout.addWidget(self.probe_result_label)
@@ -195,6 +231,32 @@ class TemplateCropDialog(QDialog):
         self.probe_button.setEnabled(selection is not None and not self._probe_running())
         if self._probe_region is not None and selection != self._probe_region:
             self._clear_probe_result()
+        self._sync_zoom_controls()
+
+    # ------------------------------------------- 缩放滑条 / 重置（用户 2026-09-21 要求）
+    def _on_zoom_slider_changed(self, position: int) -> None:
+        """拖滑条 → 改缩放（锚点＝选区中心，没选区则图像中心，画面不跳走）。"""
+        self.view.set_zoom_relative(zoom_slider_to_percent(position) / 100.0)
+
+    def _sync_zoom_controls(self) -> None:
+        """把视图的缩放同步回滑条与数值标签（滚轮 / 滑条 / 重置都共用视图这一份状态）。"""
+        percent = self.view.zoom_relative_percent()
+        self.zoom_slider.blockSignals(True)          # 防回环：程序设置滑条不要再触发一次缩放
+        self.zoom_slider.setValue(zoom_percent_to_slider(percent))
+        self.zoom_slider.blockSignals(False)
+        self.zoom_value_label.setText(f"适配 {percent}%")
+
+    def reset_all(self) -> None:
+        """「重置」＝恢复弹窗初始状态（用户 2026-09-21 要求）：视图归位 + 清空选区。
+
+        与「滚轮缩小」之类不同：这里把**缩放和平移一起归零**（回到整图适配），
+        并把当前框选清掉、试识别结论作废，等于把弹窗退回刚打开时的样子。
+        """
+        self.view.zoom_to_fit()                      # 缩放归 1（滑条跟着回 100%）、平移归零
+        self.view.clear_selection()
+        self._clear_probe_result()
+        self._refresh_info()
+        self.view.setFocus()                         # 重置完把键盘焦点交回框选图（方向键继续可用）
 
     # ------------------------------------------- 「在本图试识别」（D1 自检）
     @property

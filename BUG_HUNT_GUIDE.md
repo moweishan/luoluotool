@@ -94,9 +94,9 @@ src/luoluotool/
     pages/planned_feature.py  51  功能三/四公共基类（占位页）
     pages/feature3.py,4.py    13  功能三/四页（占位子类）
     pages/about.py           213  「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断/打开目录）
-    dialogs/crop_dialog.py   341  框选弹窗外壳（提示文字 / 适配窗口·1:1 按钮 / 保存选区 + 质量检查）
-    dialogs/crop_view.py     574  框选交互视图 CropView（选区新建/移动/手柄缩放/键盘微调/绘制）
-    dialogs/crop_view_zoom.py 205 显示变换 ZoomPanMixin（滚轮缩放/平移/放大镜，纯搬运用）
+    dialogs/crop_dialog.py   403  框选弹窗外壳（提示文字 / 缩放滑条·重置 / 试识别 / 保存 + 质量检查）
+    dialogs/crop_view.py     576  框选交互视图 CropView（选区新建/移动/手柄缩放/键盘微调/绘制/试识别标注）
+    dialogs/crop_view_zoom.py213  显示变换 ZoomPanMixin（滚轮缩放/平移/放大镜/相对缩放 API，纯搬运+扩展）
     layout_measure.py        283  --measure-layout 的测量与报告（ASCII 安全）
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
     app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
@@ -189,7 +189,10 @@ print('layer check violations =', bad)
      ↑ 判据                        core/vision.py:288  probe_region_on_image()（1:1 试匹配，看除自己外还有几处）
      ↑ 结论展示                    gui/dialogs/crop_view.py:532  set_probe_rects()（橙色框 + 序号标注其它位置）
                                     关窗必须等线程：crop_dialog.py:268 done() → _wait_for_probe_thread():260
-  适配窗口 / 1:1 显示按钮           gui/dialogs/crop_dialog.py:90   zoom_fit_button / zoom_actual_button
+  缩放滑条（相对整图适配 50%–800%）  gui/dialogs/crop_dialog.py:123  zoom_slider → _on_zoom_slider_changed():237
+     刻度换算（对数，互为反函数）    gui/dialogs/crop_dialog.py:65   zoom_slider_to_percent / zoom_percent_to_slider:77
+  重置（视图归位 + 清空选区）        gui/dialogs/crop_dialog.py:249  reset_all()（含 zoom_to_fit + clear_selection）
+  滑条状态同步                       gui/dialogs/crop_dialog.py:241  _sync_zoom_controls()（blockSignals 防回环）
   HUD（选区+辨识度+缩放%+鼠标坐标）  gui/dialogs/crop_dialog.py:154  _refresh_info() → view_status_text():158
   保存（**只存选区**）              gui/dialogs/crop_dialog.py:167  _on_save_clicked() → save_selection():194
   加入模板列表                      gui/main_window.py:484   debug_page.add_vision_template()
@@ -676,7 +679,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `screenshot_client` | `automation/window.py:94` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
 | `build_channel` | `automation/input_sender.py:516` | 干跑/真实通道选择 |
 | `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:457` / `:472` | 越界校验 |
-| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:149` / `:273` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长；协议里的同名方法在 `:42`/`:46`） |
+| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:42` / `:46` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长；协议里的同名方法在 `:42`/`:46`） |
 | `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:207` / `:222` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
 | `_restore_cursor_after_click` / `_restore_cursor_after_drag` | `automation/input_sender.py:188` / `:323` | 延迟 + 分帧小步还原光标（点击/滑动同一套做法） |
 | `CLICK_CURSOR_TOLERANCE_PX` / `CLICK_MOVE_STEP_SECONDS` / `CLICK_RESTORE_DELAY_SECONDS` | `automation/input_sender.py:26` / `:27` / `:28` | 4px / 30ms / 350ms（输入时间线三档） |
@@ -695,20 +698,24 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `build_drag_path` | `automation/drag_path.py:49` | 缓出曲线 + 末尾静止帧 |
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_view.py:66` / `gui/dialogs/crop_dialog.py:51` | 框选几何与保存 |
-| `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:186` / `:196` / `:208` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
-| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:362` / `:565` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
-| `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:411` / `:475` | 方向键微调 / Ctrl 调单边 |
-| `image_rect` / `_set_zoom` / `wheelEvent` | `gui/dialogs/crop_view_zoom.py:42` / `:100` / `:141` | 图像显示矩形（缩放+平移）/ 以鼠标为锚点缩放 / 滚轮缩放 |
-| `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:152` / `:169` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
-| `zoom_fit_button` / `zoom_actual_button` | `gui/dialogs/crop_dialog.py:98` / `:101` | 「适配窗口」/「1:1 显示」按钮 |
-| `selection_quality` / `selection_text` | `gui/dialogs/crop_dialog.py:160` / `:172` | 可辨识度评估（`RegionQuality`）/ 信息行文案（含辨识度） |
-| `view_status_text` | `gui/dialogs/crop_dialog.py:273` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
-| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:282` / `:309` | **只保存选区**；纯色（`flat`）时拒绝保存 |
+| `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:192` / `:202` / `:214` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
+| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:366` / `:567` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
+| `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:415` / `:477` | 方向键微调 / Ctrl 调单边 |
+| `image_rect` / `_set_zoom` / `wheelEvent` | `gui/dialogs/crop_view_zoom.py:42` / `:108` / `:149` | 图像显示矩形（缩放+平移）/ 以鼠标为锚点缩放 / 滚轮缩放 |
+| `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:160` / `:177` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
+| `zoom_slider` / `zoom_reset_button` | `gui/dialogs/crop_dialog.py:123` / `:136` | 缩放滑条（相对整图适配 50%–800%）/ 「重置」按钮 |
+| `zoom_slider_to_percent` / `zoom_percent_to_slider` | `gui/dialogs/crop_dialog.py:65` / `:77` | 滑条刻度换算（对数：每 1/4 行程翻一倍，互为反函数）|
+| `reset_all` / `_sync_zoom_controls` | `gui/dialogs/crop_dialog.py:249` / `:241` | 重置（视图归位 + 清空选区）/ 缩放状态同步回滑条 |
+| `clear_selection` | `gui/dialogs/crop_view.py:132` | 清空选区（双击 / Esc / 重置共用）|
+| `zoom_relative_percent` / `set_zoom_relative` | `gui/dialogs/crop_view_zoom.py:60` / `:64` | 相对整图适配的缩放百分比 / 按倍数设置（锚点＝选区中心）|
+| `selection_quality` / `selection_text` | `gui/dialogs/crop_dialog.py:196` / `:208` | 可辨识度评估（`RegionQuality`）/ 信息行文案（含辨识度） |
+| `view_status_text` | `gui/dialogs/crop_dialog.py:335` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
+| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:344` / `:371` | **只保存选区**；纯色（`flat`）时拒绝保存 |
 | `assess_region_quality` / `RegionQuality` | `automation/template_match.py:101` / `:85` | 模板区域可辨识度（对比度 + 边缘占比；`flat` 拒存，`low` 只提示） |
 | `probe_region_on_image` / `TemplateProbeResult` | `core/vision.py:288` / `:253` | **「在本图试识别」（D1）**：选区当模板在同图 1:1 试匹配；`duplicates`＝除自己以外的命中数 |
-| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:208` / `:201` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
+| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:270` / `:263` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
 | `TemplateProbeThread` | `gui/workers.py:140` | 试识别后台线程（匹配是 CPU 密集的，不许放 GUI 线程） |
-| `set_probe_rects` / `_paint_probe_rects` | `gui/dialogs/crop_view.py:532` / `:544` | 把试识别命中的**其它**位置画成橙框 + 序号（图像像素坐标） |
+| `set_probe_rects` / `_paint_probe_rects` | `gui/dialogs/crop_view.py:534` / `:546` | 把试识别命中的**其它**位置画成橙框 + 序号（图像像素坐标） |
 | `DebugPage` | `gui/pages/debug.py:68` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `AboutPage` | `gui/pages/about.py:67` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
 | `diagnostics_text` | `gui/pages/about.py:193` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
