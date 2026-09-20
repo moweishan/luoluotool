@@ -30,6 +30,7 @@ PAGE_TITLES: tuple[tuple[str, str], ...] = (
     ("卡订单", "order_hold_page"),
     ("功能三", "feature3_page"),
     ("功能四", "feature4_page"),
+    ("关于", "about_page"),
     ("开发者调试", "debug_page"),
 )
 

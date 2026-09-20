@@ -41,6 +41,7 @@ from luoluotool.gui.layout_measure import (
     format_measure_report,
     measure_layout,
 )
+from luoluotool.gui.pages.about import AboutPage
 from luoluotool.gui.pages.daily import DailyPage
 from luoluotool.gui.pages.debug import (
     PAGE_TITLE,
@@ -69,7 +70,7 @@ from luoluotool.gui.workers import (
 logger = logging.getLogger(__name__)
 
 WINDOW_TITLE = "LuoLooTool"
-TAB_TITLES: tuple[str, ...] = ("设置", "日常任务", "卡订单", "功能三", "功能四")
+TAB_TITLES: tuple[str, ...] = ("设置", "日常任务", "卡订单", "功能三", "功能四", "关于")
 
 
 STATUS_RUNNING_DRY = "运行中 · 干跑"
@@ -117,6 +118,7 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
             OrderHoldPage(self._config, self._mark_dirty),
             Feature3Page(self._config, self._mark_dirty),
             Feature4Page(self._config, self._mark_dirty),
+            AboutPage(),
         )
         (
             self.settings_page,
@@ -124,6 +126,7 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
             self.order_hold_page,
             self.feature3_page,
             self.feature4_page,
+            self.about_page,
         ) = pages
         for page, title in zip(pages, TAB_TITLES):
             self.tabs.addTab(page, title)

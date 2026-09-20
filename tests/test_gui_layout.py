@@ -60,17 +60,17 @@ def test_measure_layout_reports_stable_heights(window_factory) -> None:
 def test_measure_layout_does_not_change_mounted_state(window_factory) -> None:
     """测量是只读的：测完页签数量与调试页的挂载状态保持原样。"""
     window = window_factory(developer_mode=False)
-    assert window.tabs.count() == 5
+    assert window.tabs.count() == 6
     measure_layout(window)
-    assert window.tabs.count() == 5
+    assert window.tabs.count() == 6
     assert window.tabs.indexOf(window.debug_page) < 0
 
     window.settings_page.developer_box.setChecked(True)
-    assert window.tabs.count() == 6
+    assert window.tabs.count() == 7
     measure = measure_layout(window)
     assert measure.pages[-1].mounted is True
-    assert window.tabs.count() == 6
-    assert window.tabs.indexOf(window.debug_page) == 5
+    assert window.tabs.count() == 7
+    assert window.tabs.indexOf(window.debug_page) == 6
 
 
 def test_format_measure_report_has_summary_and_pages(window_factory) -> None:
@@ -215,5 +215,5 @@ def test_debug_page_layout_measure_button_shows_report(window_factory) -> None:
     text = window.debug_page.status_label.text()
     assert "布局测量" in text and "结论：" in text
     # 测量不得改变页签状态
-    assert window.tabs.count() == 6
-    assert window.tabs.indexOf(window.debug_page) == 5
+    assert window.tabs.count() == 7
+    assert window.tabs.indexOf(window.debug_page) == 6

@@ -344,12 +344,12 @@ def test_developer_tab_appears_and_disappears(window_factory, tmp_path) -> None:
 
     config = AppConfig.default()
     window = window_factory(tmp_path / "config.json", config)
-    assert window.tabs.count() == 5
-    window.settings_page.developer_box.setChecked(True)
     assert window.tabs.count() == 6
+    window.settings_page.developer_box.setChecked(True)
+    assert window.tabs.count() == 7
     assert window.tabs.tabText(window.tabs.count() - 1) == DEBUG_TAB_TITLE
     window.settings_page.developer_box.setChecked(False)
-    assert window.tabs.count() == 5
+    assert window.tabs.count() == 6
     assert window.tabs.indexOf(window.debug_page) < 0
 
 

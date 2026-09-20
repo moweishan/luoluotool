@@ -12,15 +12,15 @@ from luoluotool.gui.main_window import TAB_TITLES, WINDOW_TITLE
 from gui_helpers import window_factory  # 共享夹具（评审 P3-2：不再各自留副本）
 
 
-def test_main_window_has_five_tabs_and_version(window_factory, tmp_path) -> None:
-    """主窗口：标题、尺寸、页签顺序（设置在第一）、默认选中设置页、状态栏版本号。"""
+def test_main_window_has_six_tabs_and_version(window_factory, tmp_path) -> None:
+    """主窗口：标题、尺寸、页签顺序（设置在第一、「关于」在最后）、默认选中设置页、状态栏版本号。"""
     window = window_factory(tmp_path / "config.json")
     assert window.windowTitle() == WINDOW_TITLE
     assert window.size().width() == 960
     assert window.size().height() == 640
-    assert window.tabs.count() == 5
+    assert window.tabs.count() == 6
     titles = [window.tabs.tabText(i) for i in range(window.tabs.count())]
-    assert titles == ["设置", "日常任务", "卡订单", "功能三", "功能四"]
+    assert titles == ["设置", "日常任务", "卡订单", "功能三", "功能四", "关于"]
     assert list(TAB_TITLES) == titles
     assert window.tabs.currentIndex() == 0
     assert window.tabs.currentWidget() is window.settings_page
