@@ -163,6 +163,166 @@ def test_mouse_drag_creates_selection() -> None:
     view.deleteLater()
 
 
+# ------------------------------------------- 修改已有选区（移动 / 改大小，用户 2026-09-20 要求）
+
+
+def _drag(view: CropView, start: tuple[int, int], end: tuple[int, int]) -> None:
+    """在控件坐标里模拟一次真实左键拖拽（按下 → 移动 → 松开）。"""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    view.show()
+    _APP.processEvents()
+    QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=QPoint(*start))
+    QTest.mouseMove(view, QPoint(*end))
+    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=QPoint(*end))
+    _APP.processEvents()
+
+
+def _scaled_view(image_size: tuple[int, int], scale: int = 2) -> CropView:
+    """造一个 1:scale 显示的视图（图像坐标 = 控件坐标 / scale），方便写断言。"""
+    width, height = image_size
+    view = CropView(_image(width, height))
+    view.resize(width * scale, height * scale)
+    return view
+
+
+def test_hit_test_distinguishes_handles_inside_and_outside() -> None:
+    """命中判定：四角/四边是手柄、选区内部是移动、外面是重新框选（控件坐标）。"""
+    from PySide6.QtCore import QPoint
+
+    view = _scaled_view((100, 100))          # 2 倍：图像 (20,30,40,20) → 控件 (40,60,80,40)
+    view.set_selection_in_image(20, 30, 40, 20)
+    rect = view._image_rect_on_widget()
+
+    assert view.hit_test(rect.topLeft()) == "nw"
+    assert view.hit_test(rect.topRight()) == "ne"
+    assert view.hit_test(rect.bottomLeft()) == "sw"
+    assert view.hit_test(rect.bottomRight()) == "se"
+    assert view.hit_test(rect.center()) == "inside"
+    assert view.hit_test(rect.topLeft() - QPoint(40, 40)) == "outside"
+    view.deleteLater()
+
+
+def test_drag_inside_selection_moves_it() -> None:
+    """拖选区内部 = 整体移动：尺寸不变、位置按拖拽位移平移。"""
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)      # 控件坐标 (100,100)-(180,160)
+
+    _drag(view, (120, 120), (160, 140))              # 控件 +40,+20 → 图像 +20,+10
+
+    assert view.selection_in_image() == (70, 60, 40, 30)
+    view.close()
+    view.deleteLater()
+
+
+def test_drag_corner_handle_resizes_both_dimensions() -> None:
+    """拖右下角手柄：对角（左上）固定，宽高同时变化。"""
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+    rect = view._image_rect_on_widget()
+
+    _drag(view, (rect.right(), rect.bottom()), (rect.right() + 40, rect.bottom() + 20))
+
+    assert view.selection_in_image() == (50, 50, 60, 40)
+    view.close()
+    view.deleteLater()
+
+
+def test_drag_edge_handle_resizes_one_dimension() -> None:
+    """拖右边手柄：只改宽度，高度与纵向位置不动。"""
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+    rect = view._image_rect_on_widget()
+
+    _drag(view, (rect.right(), rect.center().y()), (rect.right() - 20, rect.center().y()))
+
+    assert view.selection_in_image() == (50, 50, 30, 30)
+    view.close()
+    view.deleteLater()
+
+
+def test_moving_selection_is_clamped_inside_image() -> None:
+    """整体移动不能把选区拖出图像（贴边即停，尺寸不变）。"""
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+
+    _drag(view, (120, 120), (1000, 1000))            # 往右下拖出图像
+
+    assert view.selection_in_image() == (200 - 40, 200 - 30, 40, 30)
+    view.close()
+    view.deleteLater()
+
+
+def test_resizing_cannot_shrink_below_minimum_size() -> None:
+    """改大小不能小于 MIN_SELECTION_SIZE（否则会存出垃圾模板）。"""
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+    rect = view._image_rect_on_widget()
+
+    _drag(view, (rect.right(), rect.bottom()), (rect.left() - 60, rect.top() - 60))
+
+    assert view.selection_in_image() == (50, 50, MIN_SELECTION_SIZE, MIN_SELECTION_SIZE)
+    view.close()
+    view.deleteLater()
+
+
+def test_drag_outside_selection_starts_a_new_one() -> None:
+    """在选区外按下拖拽＝重新框选（旧选区被替换）。"""
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+
+    _drag(view, (20, 20), (60, 40))                  # 控件 → 图像 (10,10) 拖到 (30,20)
+
+    assert view.selection_in_image() == (10, 10, 20, 10)
+    view.close()
+    view.deleteLater()
+
+
+def test_cursor_hints_match_handle_and_inside() -> None:
+    """悬停时指针形状要提示"这里能改大小 / 这里能整体移动"。"""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    view = _scaled_view((200, 200))
+    view.set_selection_in_image(50, 50, 40, 30)
+    rect = view._image_rect_on_widget()
+
+    def _hover(point: QPoint) -> Qt.CursorShape:
+        event = QMouseEvent(
+            QMouseEvent.Type.MouseMove, point, view.mapToGlobal(point),
+            Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+        )
+        view.mouseMoveEvent(event)
+        return view.cursor().shape()
+
+    assert _hover(rect.center()) == Qt.CursorShape.SizeAllCursor
+    assert _hover(rect.topLeft()) == Qt.CursorShape.SizeFDiagCursor
+    assert _hover(rect.topRight()) == Qt.CursorShape.SizeBDiagCursor
+    assert _hover(QPoint(rect.right(), rect.center().y())) == Qt.CursorShape.SizeHorCursor
+    assert _hover(QPoint(rect.center().x(), rect.bottom())) == Qt.CursorShape.SizeVerCursor
+    view.deleteLater()
+
+
+def test_saved_template_uses_the_modified_selection(tmp_path) -> None:
+    """先移动再保存：落盘的就是**改过之后**的选区（像素必须来自新位置）。"""
+    image = _image(200, 100)
+    dialog = TemplateCropDialog(image, (200, 100), save_dir=tmp_path)
+    dialog.view.resize(400, 400)
+    dialog.set_selection_in_image(20, 20, 30, 20)
+
+    _drag(dialog.view, (60, 150), (140, 190))              # 拖选区内部 → 图像 +40,+20
+
+    assert dialog.selection() == (60, 40, 30, 20)
+    path = dialog.save_selection()
+    assert path is not None
+    saved = load_template(path)
+    assert saved.shape == (20, 30, 3)
+    assert tuple(int(v) for v in saved[0, 0]) == tuple(int(v) for v in image[40, 60])
+    dialog.view.close()
+    dialog.deleteLater()
+
+
 # ------------------------------------------- 「保存为模板」按钮（回归：按钮以前只关窗口不保存）
 
 
