@@ -4,34 +4,12 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
 from PySide6.QtWidgets import QApplication
 
 from luoluotool import __version__
-from luoluotool.config.models import AppConfig
-from luoluotool.gui.main_window import TAB_TITLES, WINDOW_TITLE, MainWindow
+from luoluotool.gui.main_window import TAB_TITLES, WINDOW_TITLE
 
-_APP = QApplication.instance() or QApplication([])
-
-
-@pytest.fixture
-def window_factory(request):
-    """创建主窗口并注册清理：即使断言失败也确定性销毁 C++ 对象，避免 GC 崩溃。"""
-    created = []
-
-    def make(path):
-        window = MainWindow(AppConfig.default(), path, auto_elevate=False)
-        created.append(window)
-        return window
-
-    def cleanup():
-        for window in created:
-            window.close()
-            window.deleteLater()
-        _APP.processEvents()
-
-    request.addfinalizer(cleanup)
-    return make
+from gui_helpers import window_factory  # 共享夹具（评审 P3-2：不再各自留副本）
 
 
 def test_main_window_has_five_tabs_and_version(window_factory, tmp_path) -> None:

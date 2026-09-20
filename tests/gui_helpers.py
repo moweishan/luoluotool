@@ -16,11 +16,15 @@ _APP = QApplication.instance() or QApplication([])
 
 
 @pytest.fixture
-def window_factory(request):
+def window_factory(request, tmp_path):
     """创建主窗口（注入无等待 Runner 工厂与安全输入通道）并注册清理。
 
     默认通道工厂始终返回干跑 sender：测试绝不触碰真实窗口、绝不产生真实输入。
     需要验证真实模式行为的用例请显式传入自己的 channel_factory。
+
+    参数（评审 P3-2：全仓库只保留这一份夹具，各测试文件不再自带副本）：
+    - `path` 省略时用 `tmp_path/config.json`（需要指定路径就显式传）；
+    - `developer_mode` 只在显式传入时覆盖（不传则沿用配置里的值，默认 False）。
     """
     from luoluotool.automation.input_sender import DryRunSender, InputChannel
 
@@ -30,11 +34,13 @@ def window_factory(request):
     def _safe_channel(config, stop_event, sleep, log):
         return InputChannel(DryRunSender())
 
-    def make(path, config=None, auto_elevate=False, channel_factory=None):
+    def make(path=None, config=None, auto_elevate=False, channel_factory=None, developer_mode=None):
         config = config if config is not None else AppConfig.default()
+        if developer_mode is not None:
+            config.automation.developer_mode = developer_mode
         window = MainWindow(
             config,
-            path,
+            path if path is not None else tmp_path / "config.json",
             runner_factory=lambda cfg: Runner(
                 cfg, sleep=lambda s: None, channel_factory=channel_factory or _safe_channel
             ),

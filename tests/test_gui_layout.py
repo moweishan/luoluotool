@@ -9,9 +9,6 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import pytest
-from PySide6.QtWidgets import QApplication
-
 from luoluotool.config.models import AppConfig
 from luoluotool.gui.layout_measure import (
     MAX_PAGE_MIN_HEIGHT,
@@ -21,32 +18,9 @@ from luoluotool.gui.layout_measure import (
     format_measure_report,
     measure_layout,
 )
-from luoluotool.gui.main_window import MainWindow
 from luoluotool.gui.widgets import PAGE_SIZE_HINT, ScrollablePage
 
-_APP = QApplication.instance() or QApplication([])
-
-
-@pytest.fixture
-def window_factory(request, tmp_path):
-    """创建主窗口并注册清理（离屏，auto_elevate=False 不触发提权流程）。"""
-    created = []
-
-    def make(config=None, developer_mode: bool = False):
-        config = config or AppConfig.default()
-        config.automation.developer_mode = developer_mode
-        window = MainWindow(config, tmp_path / "config.json", auto_elevate=False)
-        created.append(window)
-        return window
-
-    def cleanup():
-        for window in created:
-            window.close()
-            window.deleteLater()
-        _APP.processEvents()
-
-    request.addfinalizer(cleanup)
-    return make
+from gui_helpers import window_factory  # 共享夹具（评审 P3-2：不再各自留副本）
 
 
 def test_all_tab_pages_are_scrollable(window_factory) -> None:
