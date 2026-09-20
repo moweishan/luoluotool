@@ -150,7 +150,8 @@ def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
         )
     if kind == "repeat_click":
         return debug_actions.run_repeat_click(
-            config, params["x"], params["y"], params["count"], params["interval_ms"], log, stop_event
+            config, params["x"], params["y"], params["count"], params["interval_ms"], log, stop_event,
+            hold_ms=params.get("hold_ms", debug_actions.DEFAULT_CLICK_HOLD_MS),
         )
     if kind == "swipe":
         return debug_actions.run_swipe(

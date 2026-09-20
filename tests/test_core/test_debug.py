@@ -124,6 +124,34 @@ def test_repeat_click_clicks_count_times(fake_channel, monkeypatch) -> None:
     assert "连点测试完成" in message and "3 次" in message
 
 
+def test_repeat_click_passes_click_hold(fake_channel, monkeypatch) -> None:
+    """连点同样支持点击时长：每次都按同一时长按下→保持→抬起。"""
+    sleeps: list[float] = []
+    monkeypatch.setattr(debug.time, "sleep", sleeps.append)
+    message = debug.run_repeat_click(
+        _config(), 10, 20, 3, 500, logging.getLogger("t"), hold_ms=200
+    )
+    assert fake_channel.click_holds == [0.2, 0.2, 0.2]
+    assert sleeps == [0.5, 0.5]                     # 间隔仍是"点击之后"的等待
+    assert "点击时长 200 ms" in message
+
+
+def test_repeat_click_without_hold_keeps_engine_default(fake_channel, monkeypatch) -> None:
+    """不传点击时长时保持原行为（不向 sender 传 hold_seconds）。"""
+    monkeypatch.setattr(debug.time, "sleep", lambda _s: None)
+    debug.run_repeat_click(_config(), 1, 2, 2, 100, logging.getLogger("t"))
+    assert fake_channel.click_holds == [None, None]
+
+
+@pytest.mark.parametrize("hold_ms", [-1, 60000, True, "100"])
+def test_repeat_click_rejects_bad_hold(fake_channel, monkeypatch, hold_ms) -> None:
+    """连点的点击时长同样受 0–5000 ms 校验保护。"""
+    monkeypatch.setattr(debug.time, "sleep", lambda _s: None)
+    with pytest.raises(ValueError):
+        debug.run_repeat_click(_config(), 1, 2, 2, 100, logging.getLogger("t"), hold_ms=hold_ms)
+    assert fake_channel.calls == []
+
+
 def test_repeat_click_stops_between_clicks(fake_channel, monkeypatch) -> None:
     stop = threading.Event()
     monkeypatch.setattr(debug.time, "sleep", lambda _s: stop.set())   # 第一次间隔后收到停止

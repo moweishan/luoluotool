@@ -106,23 +106,36 @@ def run_single_click(
 def run_repeat_click(
     config: AppConfig, x: int, y: int, count: int, interval_ms: int,
     log: logging.Logger | None = None, stop_event: threading.Event | None = None,
+    hold_ms: int | None = None,
 ) -> str:
-    """鼠标连点测试：在 (x, y) 连点 `count` 次，每次间隔 `interval_ms`。"""
+    """鼠标连点测试：在 (x, y) 连点 `count` 次，每次间隔 `interval_ms`。
+
+    `hold_ms` 是**点击时长**（每次点击按下左键后保持多久再松开），语义与单点一致：
+    `None`＝引擎默认（40 ms）、`0`＝瞬时、正数＝按住这么多毫秒；
+    间隔是"本次点击结束之后"的等待（点击时长包含在点击动作里，不会额外叠加）。
+    """
     x, y = _validate_point(x, y)
     count, interval_ms = _validate_repeat(count, interval_ms)
+    hold_ms = _validate_click_hold(hold_ms)
     stop_event = stop_event or threading.Event()
     sender, readiness = _open_sender(config, stop_event, log)
+    hold_text = f"点击时长 {hold_ms} ms" if hold_ms is not None else "点击时长＝引擎默认"
     done = 0
     for index in range(1, count + 1):
         if not _ready(readiness, stop_event):
             break
-        (log or logger).info("调试：连点测试 第 %d/%d 次 → 客户区 (%d, %d)", index, count, x, y)
-        sender.click_at(x, y)
+        (log or logger).info(
+            "调试：连点测试 第 %d/%d 次 → 客户区 (%d, %d)（%s）", index, count, x, y, hold_text
+        )
+        if hold_ms is None:
+            sender.click_at(x, y)
+        else:
+            sender.click_at(x, y, hold_seconds=hold_ms / 1000)
         done += 1
         if index < count:
             time.sleep(interval_ms / 1000)
     if done == count:
-        return f"连点测试完成：(x={x}, y={y}) {done} 次，间隔 {interval_ms} ms"
+        return f"连点测试完成：(x={x}, y={y}) {done} 次，间隔 {interval_ms} ms，{hold_text}"
     return f"连点测试中断：已完成 {done}/{count} 次（停止请求或窗口不可用）"
 
 

@@ -225,6 +225,7 @@ def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
     page.repeat_y_spin.setValue(20)
     page.repeat_count_spin.setValue(3)
     page.repeat_interval_spin.setValue(400)
+    page.repeat_hold_spin.setValue(150)
     page.repeat_button.click()
     # 滑动：起终点 + 用时
     page.swipe_from_x_spin.setValue(1)
@@ -241,7 +242,7 @@ def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
 
     assert requests == [
         ("single_click", {"x": 120, "y": 80, "hold_ms": 300}),
-        ("repeat_click", {"x": 10, "y": 20, "count": 3, "interval_ms": 400}),
+        ("repeat_click", {"x": 10, "y": 20, "count": 3, "interval_ms": 400, "hold_ms": 150}),
         ("swipe", {"from_x": 1, "from_y": 2, "to_x": 300, "to_y": 400, "duration_ms": 700}),
         ("key", {"combo": "ctrl+s", "count": 2, "interval_ms": 250}),
     ]
@@ -249,7 +250,7 @@ def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
 
 
 def test_debug_page_single_click_hold_bounds_and_default() -> None:
-    """「点击时长」控件：默认＝引擎默认时长，范围 0–5000 ms，且有说明性提示。"""
+    """两处「点击时长」控件（单点 + 连点）：默认＝引擎默认时长，范围 0–5000 ms，且有说明。"""
     from luoluotool.gui.pages.debug import (
         SINGLE_CLICK_HOLD_RANGE_MS,
         DebugPage,
@@ -260,11 +261,12 @@ def test_debug_page_single_click_hold_bounds_and_default() -> None:
     config.automation.developer_mode = True
     page = DebugPage(config, lambda: None)
 
-    assert page.single_hold_spin.minimum() == SINGLE_CLICK_HOLD_RANGE_MS[0]
-    assert page.single_hold_spin.maximum() == SINGLE_CLICK_HOLD_RANGE_MS[1]
-    assert page.single_hold_spin.value() == DEFAULT_CLICK_HOLD_MS_UI
-    assert page.single_hold_spin.suffix().strip().lower() == "ms"
-    assert "点击时长" in page.single_hold_spin.toolTip()
+    for spin in (page.single_hold_spin, page.repeat_hold_spin):
+        assert spin.minimum() == SINGLE_CLICK_HOLD_RANGE_MS[0]
+        assert spin.maximum() == SINGLE_CLICK_HOLD_RANGE_MS[1]
+        assert spin.value() == DEFAULT_CLICK_HOLD_MS_UI
+        assert spin.suffix().strip().lower() == "ms"
+        assert "点击时长" in spin.toolTip()
     page.close()
 
 

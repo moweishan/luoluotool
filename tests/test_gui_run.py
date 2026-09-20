@@ -906,19 +906,36 @@ def test_run_debug_action_dispatches_all_kinds(monkeypatch) -> None:
 
 
 def test_run_debug_action_passes_click_hold(monkeypatch) -> None:
-    """单点分发把「点击时长」传下去；旧载荷（没有 hold_ms）走默认值而不是报错。"""
+    """单点/连点分发都把「点击时长」传下去；旧载荷（没有 hold_ms）走默认值而不是报错。"""
     from luoluotool.gui import main_window as mw
 
     seen: list[dict] = []
     monkeypatch.setattr(
         mw.debug_actions, "run_single_click",
-        lambda config, x, y, log, stop_event=None, **kwargs: seen.append({"x": x, "y": y, **kwargs}) or "ok",
+        lambda config, x, y, log, stop_event=None, **kwargs: seen.append(
+            {"kind": "single", "x": x, "y": y, **kwargs}
+        ) or "ok",
+    )
+    monkeypatch.setattr(
+        mw.debug_actions, "run_repeat_click",
+        lambda config, x, y, count, interval_ms, log, stop_event=None, **kwargs: seen.append(
+            {"kind": "repeat", "x": x, "y": y, "count": count, **kwargs}
+        ) or "ok",
     )
     log = logging.getLogger("t")
     config = AppConfig.default()
 
     mw.run_debug_action(config, "single_click", {"x": 5, "y": 6, "hold_ms": 250}, log, None)
     mw.run_debug_action(config, "single_click", {"x": 7, "y": 8}, log, None)
+    mw.run_debug_action(
+        config, "repeat_click",
+        {"x": 9, "y": 10, "count": 3, "interval_ms": 100, "hold_ms": 180}, log, None,
+    )
+    mw.run_debug_action(
+        config, "repeat_click", {"x": 11, "y": 12, "count": 2, "interval_ms": 100}, log, None,
+    )
 
     assert seen[0]["hold_ms"] == 250
     assert "hold_ms" in seen[1] and seen[1]["hold_ms"] >= 0      # 缺省时用引擎默认时长
+    assert seen[2]["hold_ms"] == 180 and seen[2]["count"] == 3
+    assert "hold_ms" in seen[3] and seen[3]["count"] == 2

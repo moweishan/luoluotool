@@ -194,6 +194,13 @@ class DebugPage(ScrollablePage):
         self.repeat_count_spin.setValue(5)
         self.repeat_interval_spin = _spin(INTERVAL_RANGE_MS[1], INTERVAL_RANGE_MS[0], " ms")
         self.repeat_interval_spin.setValue(500)
+        self.repeat_hold_spin = _spin(SINGLE_CLICK_HOLD_RANGE_MS[1], SINGLE_CLICK_HOLD_RANGE_MS[0], " ms")
+        self.repeat_hold_spin.setValue(DEFAULT_CLICK_HOLD_MS_UI)
+        self.repeat_hold_spin.setToolTip(
+            "点击时长：每一次连点按下左键后保持多久再松开。\n"
+            f"默认 {DEFAULT_CLICK_HOLD_MS_UI} ms（引擎默认）；0 = 瞬时点击；\n"
+            "时长包含在每次点击里，不会额外叠加到间隔上；按住期间可被 F8 急停打断。"
+        )
         self.repeat_button = QPushButton("连点测试")
         repeat_grid.addWidget(QLabel("X"), 0, 0)
         repeat_grid.addWidget(self.repeat_x_spin, 0, 1)
@@ -203,7 +210,9 @@ class DebugPage(ScrollablePage):
         repeat_grid.addWidget(self.repeat_count_spin, 1, 1)
         repeat_grid.addWidget(QLabel("间隔"), 1, 2)
         repeat_grid.addWidget(self.repeat_interval_spin, 1, 3)
-        repeat_grid.addWidget(self.repeat_button, 0, 4, 2, 1)
+        repeat_grid.addWidget(QLabel("点击时长"), 2, 0)
+        repeat_grid.addWidget(self.repeat_hold_spin, 2, 1)
+        repeat_grid.addWidget(self.repeat_button, 0, 4, 3, 1)
         self.repeat_button.clicked.connect(self._on_repeat_clicked)
         layout.addWidget(repeat_group)
 
@@ -351,6 +360,7 @@ class DebugPage(ScrollablePage):
             "x": self.repeat_x_spin.value(), "y": self.repeat_y_spin.value(),
             "count": self.repeat_count_spin.value(),
             "interval_ms": self.repeat_interval_spin.value(),
+            "hold_ms": self.repeat_hold_spin.value(),
         })
 
     def _on_swipe_clicked(self) -> None:
