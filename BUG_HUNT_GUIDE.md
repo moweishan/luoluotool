@@ -140,9 +140,9 @@ print('layer check violations =', bad)
 ### 主链路 A：图像识别（框选模板 → 识别 → 坐标）
 
 ```
-调试页「图片识别匹配测试」          gui/pages/debug.py:370   _on_vision_clicked()
+调试页「图片识别匹配测试」          gui/pages/debug.py:380   _on_vision_clicked()
   → 发信号 test_requested("vision", {images, threshold, max_results})
-主窗口分发                          gui/main_window.py:494  _on_debug_test()
+主窗口分发                          gui/main_window.py:495  _on_debug_test()
   后台线程 _DebugTestThread.run     gui/main_window.py:116  （不阻塞 GUI）
   动作映射                          gui/main_window.py:144  run_debug_action(kind="vision")
 业务编排                            core/vision.py:67       recognize_in_window()
@@ -158,21 +158,25 @@ print('layer check violations =', bad)
 
 ```
 调试页「框选截图生成模板」          gui/pages/debug.py:133   crop_button → crop_requested 信号
-主窗口门禁 + 后台截图               gui/main_window.py:555   _on_crop_requested()
-  截图线程                          gui/main_window.py:174   _CaptureThread → core/vision.py:212 capture_window()
-  弹框（GUI 线程）                  gui/main_window.py:528   _on_capture_ready() → TemplateCropDialog
+主窗口门禁 + 后台截图               gui/main_window.py:556   _on_crop_requested()
+  截图线程                          gui/main_window.py:175   _CaptureThread → core/vision.py:212 capture_window()
+  弹框（GUI 线程）                  gui/main_window.py:529   _on_capture_ready() → TemplateCropDialog
   拖拽框选                          gui/dialogs/crop_dialog.py:45   CropView
   保存（**只存选区**）              gui/dialogs/crop_dialog.py:233  _on_save_clicked() → save_selection():249
   加入模板列表                      gui/main_window.py:542   debug_page.add_vision_template()
 ```
 
-### 主链路 C：鼠标单点（含"点击时长"）
+### 主链路 C：鼠标单点 / 连点（含"点击时长"）
 
 ```
 调试页「鼠标单点测试」              gui/pages/debug.py:170   single_hold_spin（点击时长，ms）
-  → _on_single_clicked 发信号       gui/pages/debug.py:...   test_requested("single_click", {x, y, hold_ms})
-主窗口分发                          gui/main_window.py:144   run_debug_action → run_single_click(hold_ms=...)
-业务编排                            core/debug.py:80         run_single_click()（_validate_click_hold 校验 0–5000 ms）
+调试页「鼠标连点测试」              gui/pages/debug.py:197   repeat_hold_spin（连点每次都用它）
+  → _on_single_clicked / _on_repeat_clicked 发信号 test_requested(kind, {...})
+    载荷：single {x, y, hold_ms}｜repeat {x, y, count, interval_ms, hold_ms}
+主窗口分发                          gui/main_window.py:144   run_debug_action
+业务编排（单点）                    core/debug.py:80         run_single_click(hold_ms=...)
+业务编排（连点）                    core/debug.py:106        run_repeat_click(..., hold_ms=...)（间隔＝点击之后的等待）
+校验                                core/debug.py:55         _validate_click_hold（0–5000 ms 整数）
 通道（干跑/真实）                   automation/input_sender.py:425 build_channel
   点击                              input_sender.py:146      RealInputSender.click_at(x, y, hold_seconds)
                                     input_sender.py:84       DryRunSender.click_at（只写日志，同样校验越界）
@@ -184,10 +188,10 @@ print('layer check violations =', bad)
 
 ```
 日常任务页/卡订单页勾选 → 任务进队列（core/registry.py 注册表）
-主窗口「启动」                      gui/main_window.py:386   _start()
-  真实模式确认弹窗                  gui/main_window.py:408   _real_mode_warning_text()/_confirm_real_mode()
+主窗口「启动」                      gui/main_window.py:387   _start()
+  真实模式确认弹窗                  gui/main_window.py:409   _real_mode_warning_text()/_confirm_real_mode()
   运行线程 _RunnerThread            gui/main_window.py:102
-  Runner 顺序执行                   core/runner.py:28        Runner.start()
+  Runner 顺序执行                   core/runner.py:65        Runner.start()
     每个任务拿到 TaskContext（含 sender）core/task.py:15
     输入通道构建                    automation/input_sender.py:425 build_channel()
       ├─ 干跑：DryRunSender（:50，只写日志，**同样做越界校验**）
@@ -196,7 +200,7 @@ print('layer check violations =', bad)
            每次输入前置顶/置前并复核    automation/real_input.py:194 ensure_window_front()
            客户端→屏幕换算              automation/real_input.py:148 client_to_screen()
            实际注入                     automation/real_input.py:257 _send()（SendInput）
-    停止/F8 急停                     gui/main_window.py:431/457 _stop()/_on_failsafe() → stop_event
+    停止/F8 急停                     gui/main_window.py:432/458 _stop()/_on_failsafe() → stop_event
 ```
 
 ### 线程模型（bug 高发区）
@@ -343,8 +347,11 @@ capture_client_bgr (vision.py:393)
 10. **识别参数不落配置**（模板列表/阈值/最多列出条数都是界面态，重启即丢）。
 11. **`tests/test_core/test_vision.py` 589 行、`tests/test_automation/test_vision.py` 638 行**
     也在往硬线靠（测试文件同样适用长度建议）。
-12. **连点测试（`run_repeat_click`）暂未接入点击时长**：它走 `sender.click_at(x, y)`（不传 hold）
-    → 用引擎默认 40 ms。需要"连点也带时长"时按单点同一路径扩展（`repeat_click` 载荷加 `hold_ms`）。
+12. **内存里那三条 P1（来自 `CODE_REVIEW_REPORT.md`，基线 7e56cc4）仍未修**：
+    ① `config/validation.py` 迁移对畸形 `params` 抛异常且不在 `try` 内 → 启动崩溃；
+    ② GUI 能存下"自己读不回来"的配置（按键步数超 `MAX_KEY_STEPS`）→ 下次启动整份配置被重置；
+    ③ `input_sender._ensure_front_or_raise` 置顶成功但置前失败时直接抛错、**永不取消置顶**，
+    且现有测试把该行为固化成了期望。三条都能在 1 小时内修完（②③是同一片代码）。
 
 ---
 
@@ -554,7 +561,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `send_left_click` | `automation/real_input.py:301` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
 | `run_single_click` | `core/debug.py:80` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
 | `_validate_click_hold` | `core/debug.py:55` | 点击时长校验（0–5000 ms，整数、非布尔） |
-| `single_hold_spin` | `gui/pages/debug.py:170` | 调试页「点击时长」控件（默认 40 ms，经 `hold_ms` 下发） |
+| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:170` / `:197` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
+| `run_repeat_click` | `core/debug.py:106` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待） |
 | `ensure_window_front` | `automation/real_input.py:194` | 每次输入前置顶置前 + 复核 |
 | `client_to_screen` | `automation/real_input.py:148` | 客户区→屏幕换算（点击路径） |
 | `build_drag_path` | `automation/real_input.py:381` | 缓出曲线 + 末尾静止帧 |
@@ -562,9 +570,9 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
 | `DebugPage` | `gui/pages/debug.py:62` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
-| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:494` / `:144` | 调试请求接收 / 动作分发（含 `hold_ms`） |
-| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:528` / `:555` | 框选回填 / 框选入口（门禁 + 后台截图） |
-| `_debug_actions_allowed` | `gui/main_window.py:486` | 开发者调试门禁 |
+| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:495` / `:144` | 调试请求接收 / 动作分发（含 `hold_ms`） |
+| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:529` / `:556` | 框选回填 / 框选入口（门禁 + 后台截图） |
+| `_debug_actions_allowed` | `gui/main_window.py:487` | 开发者调试门禁 |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:169` / `:237` | 布局测量与报告 |
 | `Runner.start` | `core/runner.py:65` | 任务顺序执行/循环/失败计数 |
 | `migrate` / `validate` | `config/validation.py:301` / `:325` | 迁移链与校验 |
