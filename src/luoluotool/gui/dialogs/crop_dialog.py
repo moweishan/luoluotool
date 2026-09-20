@@ -5,6 +5,10 @@
 
 坐标说明：选区对外暴露为**图像像素坐标**，而图像就是游戏窗口的客户区截图，
 因此选区左上角就是客户区坐标（与点击/滑动/识别结果同一坐标系）。
+
+拆分说明（2026-09-21，原文件 627 行超 600 硬线）：**交互视图 `CropView` 已移到
+`gui/dialogs/crop_view.py`**，本模块只保留对话框外壳（提示、按钮、保存），
+并把 `CropView` 与相关常量**再导出**，`from ...crop_dialog import CropView` 等旧写法继续可用。
 """
 
 from __future__ import annotations
@@ -14,8 +18,7 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QPoint, QRect, Qt, Signal
-from PySide6.QtGui import QColor, QImage, QPainter, QPen
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -26,343 +29,22 @@ from PySide6.QtWidgets import (
 )
 
 from luoluotool.automation.vision import save_image
+from luoluotool.gui.dialogs.crop_view import (      # 再导出：旧导入路径不变
+    BACKGROUND_COLOR,
+    BUBBLE_COLOR,
+    BUBBLE_PADDING_PX,
+    DIM_COLOR,
+    HANDLE_CURSORS,
+    HANDLE_SIZE_PX,
+    MIN_SELECTION_SIZE,
+    SELECTION_COLOR,
+    CropView,
+    to_qimage,
+)
 
 logger = logging.getLogger(__name__)
 
-MIN_SELECTION_SIZE = 8          # 选区小于该像素数视为无效（点一下、手抖）
 NEAR_FULL_RATIO = 0.95          # 选区面积 ≥ 整屏的该比例时提示"几乎等于整屏"
-BACKGROUND_COLOR = QColor(32, 32, 32)
-SELECTION_COLOR = QColor(0, 220, 255)
-HANDLE_SIZE_PX = 10             # 手柄命中范围（控件像素）：缩放后也要好点中
-
-# 八个手柄（四角 + 四边）与它们的指针形状：拖动它们改选区大小（用户 2026-09-20 要求）
-HANDLE_CURSORS: dict[str, Qt.CursorShape] = {
-    "nw": Qt.CursorShape.SizeFDiagCursor,
-    "n": Qt.CursorShape.SizeVerCursor,
-    "ne": Qt.CursorShape.SizeBDiagCursor,
-    "w": Qt.CursorShape.SizeHorCursor,
-    "e": Qt.CursorShape.SizeHorCursor,
-    "sw": Qt.CursorShape.SizeBDiagCursor,
-    "s": Qt.CursorShape.SizeVerCursor,
-    "se": Qt.CursorShape.SizeFDiagCursor,
-}
-
-
-def to_qimage(image_bgr: np.ndarray) -> QImage:
-    """BGR numpy 数组 → QImage（Qt 用 RGB，必须交换通道，否则颜色会错）。"""
-    rgb = np.ascontiguousarray(image_bgr[:, :, ::-1])
-    height, width = rgb.shape[:2]
-    return QImage(rgb.data, width, height, 3 * width, QImage.Format.Format_RGB888).copy()
-
-
-class CropView(QWidget):
-    """显示截图并支持左键拖拽框选；选区以图像像素坐标对外暴露。
-
-    交互（用户 2026-09-20 要求"框选完还能改"）：
-    - **选区外**按下拖拽 → 重新框选；
-    - **选区内部**按下拖拽 → 整体移动（贴到图像边界即停，尺寸不变）；
-    - **四角/四边手柄**上按下拖拽 → 改大小（对角固定、最小 MIN_SELECTION_SIZE 像素）。
-    """
-
-    selection_changed = Signal()
-
-    def __init__(self, image_bgr: np.ndarray, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._image = image_bgr
-        self._qimage = to_qimage(image_bgr)
-        self._origin: QPoint | None = None
-        # 选区以**图像像素坐标**为准（显示时再换算到控件坐标，避免缩放取整来回丢精度）
-        self._image_selection: QRect | None = None
-        # 修改已有选区用的状态：create=重新框选 / move=整体移动 / resize=拖手柄改大小
-        self._mode: str | None = None
-        self._handle: str | None = None
-        self._start_rect: QRect | None = None
-        self.setMinimumSize(360, 240)
-        self.setMouseTracking(True)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)     # 方向键微调需要键盘焦点
-        self.setCursor(Qt.CursorShape.CrossCursor)
-
-    # ------------------------------------------------------------- 几何换算
-    @property
-    def image_size(self) -> tuple[int, int]:
-        height, width = self._image.shape[:2]
-        return int(width), int(height)
-
-    def image_rect(self) -> QRect:
-        """图像在控件内的显示区域（等比缩放 + 居中）。"""
-        width, height = self.image_size
-        if width <= 0 or height <= 0 or self.width() <= 0 or self.height() <= 0:
-            return QRect()
-        scale = min(self.width() / width, self.height() / height)
-        drawn_w, drawn_h = int(width * scale), int(height * scale)
-        return QRect((self.width() - drawn_w) // 2, (self.height() - drawn_h) // 2, drawn_w, drawn_h)
-
-    def _scale(self) -> float:
-        width, _ = self.image_size
-        drawn = self.image_rect().width()
-        return drawn / width if width else 1.0
-
-    def selection_in_image(self) -> tuple[int, int, int, int] | None:
-        """当前选区（图像像素坐标, 已裁剪到图像内）；过小或未选返回 None。"""
-        if self._image_selection is None:
-            return None
-        image_w, image_h = self.image_size
-        rect = self._image_selection.normalized()
-        x = max(0, min(rect.left(), image_w - 1))
-        y = max(0, min(rect.top(), image_h - 1))
-        width = max(0, min(rect.width(), image_w - x))
-        height = max(0, min(rect.height(), image_h - y))
-        if width < MIN_SELECTION_SIZE or height < MIN_SELECTION_SIZE:
-            return None
-        return x, y, width, height
-
-    def set_selection_in_image(self, x: int, y: int, width: int, height: int) -> None:
-        """按图像坐标设置选区（供测试与程序化调用）。"""
-        self._image_selection = QRect(int(x), int(y), int(width), int(height))
-        self.update()
-        self.selection_changed.emit()
-
-    def _widget_point_in_image(self, point: QPoint) -> QPoint:
-        """控件坐标 → 图像坐标（按当前缩放比例换算，并夹到图像范围内）。"""
-        display = self.image_rect()
-        scale = self._scale() or 1.0
-        image_w, image_h = self.image_size
-        x = int(round((point.x() - display.x()) / scale))
-        y = int(round((point.y() - display.y()) / scale))
-        return QPoint(max(0, min(x, image_w - 1)), max(0, min(y, image_h - 1)))
-
-    def _image_rect_on_widget(self) -> QRect:
-        """图像坐标选区 → 控件坐标矩形（仅用于绘制）。"""
-        if self._image_selection is None:
-            return QRect()
-        display = self.image_rect()
-        scale = self._scale() or 1.0
-        rect = self._image_selection.normalized()
-        return QRect(
-            display.x() + int(round(rect.left() * scale)),
-            display.y() + int(round(rect.top() * scale)),
-            max(1, int(round(rect.width() * scale))),
-            max(1, int(round(rect.height() * scale))),
-        ).intersected(display)
-
-    def _set_selection_from_points(self, start: QPoint, end: QPoint) -> None:
-        """用两个图像坐标点更新选区。
-
-        注意 Qt 的 `QRect(左上, 右下)` 右下角是**包含式**的（宽度会 +1），
-        因此这里按「左上 + 宽高」构造，保证选区宽度与用户拖拽的像素数一致。
-        """
-        left, top = min(start.x(), end.x()), min(start.y(), end.y())
-        self._image_selection = QRect(
-            left, top, abs(end.x() - start.x()), abs(end.y() - start.y())
-        )
-
-    # ------------------------------------------------------------- 手柄与命中
-    def handle_rects(self) -> dict[str, QRect]:
-        """当前选区八个手柄的控件矩形（命中判定与绘制共用）。"""
-        rect = self._image_rect_on_widget()
-        if rect.isEmpty():
-            return {}
-        half = HANDLE_SIZE_PX // 2
-        left, right = rect.left(), rect.right()
-        top, bottom = rect.top(), rect.bottom()
-        center = rect.center()
-        anchors = {
-            "nw": (left, top), "n": (center.x(), top), "ne": (right, top),
-            "w": (left, center.y()), "e": (right, center.y()),
-            "sw": (left, bottom), "s": (center.x(), bottom), "se": (right, bottom),
-        }
-        return {
-            name: QRect(x - half, y - half, HANDLE_SIZE_PX, HANDLE_SIZE_PX)
-            for name, (x, y) in anchors.items()
-        }
-
-    def hit_test(self, point: QPoint) -> str:
-        """控件坐标命中判定：手柄名 / `"inside"` / `"outside"`（四角优先于四边）。"""
-        rect = self._image_rect_on_widget()
-        if rect.isEmpty():
-            return "outside"
-        for name in ("nw", "ne", "sw", "se", "n", "e", "s", "w"):
-            if self.handle_rects()[name].contains(point):
-                return name
-        return "inside" if rect.contains(point) else "outside"
-
-    def _apply_move(self, point: QPoint) -> None:
-        """整体平移选区：夹在图像内（贴边即停），尺寸不变。"""
-        if self._start_rect is None or self._origin is None:
-            return
-        rect = self._start_rect.normalized()
-        image_w, image_h = self.image_size
-        dx = point.x() - self._origin.x()
-        dy = point.y() - self._origin.y()
-        dx = max(-rect.left(), min(dx, image_w - (rect.left() + rect.width())))
-        dy = max(-rect.top(), min(dy, image_h - (rect.top() + rect.height())))
-        self._image_selection = QRect(rect.left() + dx, rect.top() + dy, rect.width(), rect.height())
-
-    def _apply_resize(self, point: QPoint) -> None:
-        """拖手柄改大小：被拖的边跟随指针（右/下为"不含边界"），对角固定、不小于最小尺寸。"""
-        if self._start_rect is None or self._handle is None:
-            return
-        rect = self._start_rect.normalized()
-        left, top = rect.left(), rect.top()
-        right = left + rect.width()             # 不含边界（与拖拽创建时的宽高语义一致）
-        bottom = top + rect.height()
-        if "n" in self._handle:
-            top = min(point.y(), bottom - MIN_SELECTION_SIZE)
-        if "s" in self._handle:
-            bottom = max(point.y(), top + MIN_SELECTION_SIZE)
-        if "w" in self._handle:
-            left = min(point.x(), right - MIN_SELECTION_SIZE)
-        if "e" in self._handle:
-            right = max(point.x(), left + MIN_SELECTION_SIZE)
-        self._image_selection = QRect(left, top, right - left, bottom - top)
-
-    # ------------------------------------------------------------- 交互
-    def mousePressEvent(self, event) -> None:      # noqa: N802 (Qt 命名)
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        widget_point = event.position().toPoint()
-        point = self._widget_point_in_image(widget_point)
-        hit = self.hit_test(widget_point)
-        if hit == "inside" or hit in HANDLE_CURSORS:
-            # 改已有选区：内部＝整体移动，手柄＝改大小（起点与初始选区都要记下来）
-            self._start_rect = (self._image_selection or QRect()).normalized()
-            self._origin = point
-            self._handle = None if hit == "inside" else hit
-            self._mode = "move" if hit == "inside" else "resize"
-            self.setCursor(
-                Qt.CursorShape.ClosedHandCursor if hit == "inside" else HANDLE_CURSORS[hit]
-            )
-        else:
-            # 选区外：重新框选
-            self._mode = "create"
-            self._handle = None
-            self._start_rect = None
-            self._origin = point
-            self._set_selection_from_points(point, point)
-        self.update()
-        self.selection_changed.emit()
-
-    def mouseMoveEvent(self, event) -> None:       # noqa: N802
-        widget_point = event.position().toPoint()
-        if self._origin is None:
-            self._update_cursor(widget_point)      # 没按住时只更新指针形状（提示能改哪里）
-            return
-        point = self._widget_point_in_image(widget_point)
-        if self._mode == "move":
-            self._apply_move(point)
-        elif self._mode == "resize":
-            self._apply_resize(point)
-        else:
-            self._set_selection_from_points(self._origin, point)
-        self.update()
-        self.selection_changed.emit()
-
-    def mouseReleaseEvent(self, event) -> None:    # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton:
-            self._origin = None
-            self._mode = None
-            self._handle = None
-            self._start_rect = None
-            self._update_cursor(event.position().toPoint())
-            self.selection_changed.emit()
-
-    def _update_cursor(self, widget_point: QPoint) -> None:
-        """悬停提示：手柄上给对应方向的缩放指针，选区内给"可移动"指针，外部给十字。"""
-        hit = self.hit_test(widget_point)
-        if hit in HANDLE_CURSORS:
-            self.setCursor(HANDLE_CURSORS[hit])
-        elif hit == "inside":
-            self.setCursor(Qt.CursorShape.SizeAllCursor)
-        else:
-            self.setCursor(Qt.CursorShape.CrossCursor)
-
-    # ------------------------------------------------------------- 键盘微调
-    def keyPressEvent(self, event) -> None:        # noqa: N802
-        """方向键微调选区（用户 2026-09-20 要求）：
-
-        - `←↑→↓`：整体移动 1 个**图像**像素；`Shift+方向键`＝10 像素；
-        - `Ctrl+方向键`：对应那条边**向外** 1 像素（选区变大）；
-        - `Ctrl+Shift+方向键`：同一条边**向内** 1 像素（选区变小）；
-        - 还没有选区时不做事（不会凭空造出选区）。
-
-        为什么需要它：截图是等比缩放显示的，鼠标一次只能挪 1 个**控件**像素
-        （2 倍显示时＝图像 0.5 像素，取整后时而不动、时而跳 2 像素），键盘可以稳定 ±1。
-        """
-        deltas = {
-            Qt.Key.Key_Left: (-1, 0),
-            Qt.Key.Key_Right: (1, 0),
-            Qt.Key.Key_Up: (0, -1),
-            Qt.Key.Key_Down: (0, 1),
-        }
-        if event.key() not in deltas or self._image_selection is None:
-            super().keyPressEvent(event)
-            return
-        dx, dy = deltas[event.key()]
-        modifiers = event.modifiers()
-        if modifiers & Qt.KeyboardModifier.ControlModifier:
-            inward = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
-            self._nudge_edge(dx, dy, inward=inward)
-        else:
-            step = 10 if modifiers & Qt.KeyboardModifier.ShiftModifier else 1
-            self._nudge_whole(dx * step, dy * step)
-        self.update()
-        self.selection_changed.emit()
-        event.accept()
-
-    def _nudge_whole(self, dx: int, dy: int) -> None:
-        """整体平移（与鼠标拖动同一套夹取规则：夹在图像内、尺寸不变）。"""
-        if self._image_selection is None:
-            return
-        rect = self._image_selection.normalized()
-        image_w, image_h = self.image_size
-        dx = max(-rect.left(), min(dx, image_w - (rect.left() + rect.width())))
-        dy = max(-rect.top(), min(dy, image_h - (rect.top() + rect.height())))
-        self._image_selection = QRect(rect.left() + dx, rect.top() + dy, rect.width(), rect.height())
-
-    def _nudge_edge(self, dx: int, dy: int, *, inward: bool) -> None:
-        """只移动一条边：`dx/dy` 指向那条边，`inward=True` 时反向（往里收）。
-
-        右/下边界仍是不含边界（与拖拽创建、拖手柄时的口径一致），并保证
-        不小于 `MIN_SELECTION_SIZE`、不越出图像。
-        """
-        if self._image_selection is None:
-            return
-        rect = self._image_selection.normalized()
-        left, top = rect.left(), rect.top()
-        right, bottom = left + rect.width(), top + rect.height()
-        image_w, image_h = self.image_size
-        if dx:
-            edge = (left if dx < 0 else right) + (-dx if inward else dx)
-            edge = max(0, min(edge, image_w))
-            if dx < 0:
-                left = max(0, min(edge, right - MIN_SELECTION_SIZE))
-            else:
-                right = min(image_w, max(edge, left + MIN_SELECTION_SIZE))
-        if dy:
-            edge = (top if dy < 0 else bottom) + (-dy if inward else dy)
-            edge = max(0, min(edge, image_h))
-            if dy < 0:
-                top = max(0, min(edge, bottom - MIN_SELECTION_SIZE))
-            else:
-                bottom = min(image_h, max(edge, top + MIN_SELECTION_SIZE))
-        self._image_selection = QRect(left, top, right - left, bottom - top)
-
-    def paintEvent(self, event) -> None:           # noqa: N802
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), BACKGROUND_COLOR)
-        display = self.image_rect()
-        if not display.isEmpty():
-            painter.drawImage(display, self._qimage)
-        selection = self._image_rect_on_widget()
-        if not selection.isEmpty():
-            painter.setPen(QPen(SELECTION_COLOR, 2))
-            painter.drawRect(selection)
-            # 八个手柄：让用户看得见"这里可以拖"
-            painter.setPen(QPen(QColor(255, 255, 255), 1))
-            painter.setBrush(SELECTION_COLOR)
-            for handle in self.handle_rects().values():
-                painter.drawRect(handle)
-            painter.setBrush(Qt.BrushStyle.NoBrush)
 
 
 class TemplateCropDialog(QDialog):
@@ -385,10 +67,11 @@ class TemplateCropDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.addWidget(QLabel(
             f"在下面的截图里按住左键拖出要识别的区域（截图＝游戏客户区 {width}x{height}）。\n"
-            "框好之后还能改：**拖选区内部＝整体移动**，**拖四角/四边的小方块＝改大小**，"
-            "在选区外重新拖＝重新框选。\n"
-            "差一两个像素时用键盘（点一下图再按）：**方向键移动 1 像素**、**Shift+方向键移动 10 像素**、"
-            "**Ctrl+方向键把那条边向外 1 像素**、**Ctrl+Shift+方向键把那条边向内 1 像素**。\n"
+            "**改选区**：拖内部＝移动、拖四角/四边小方块＝改大小（按住 **Alt** 是以中心对称缩放）、"
+            "**空格/右键拖拽**＝移动、在选区外重拖＝重新框选、**Esc**＝撤销这次拖拽（没拖拽时清空）、"
+            "**双击**＝清空重来。\n"
+            "**键盘微调**：方向键移动 1 像素、Shift+方向键 10 像素、Ctrl+方向键把那条边向外 1 像素、"
+            "Ctrl+Shift+方向键向内 1 像素。\n"
             "建议框选画面中**不会变化**的局部（数字、倒计时等变动区域会让匹配不稳定）。"
         ))
         self.view = CropView(image_bgr)
