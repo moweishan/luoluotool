@@ -44,7 +44,9 @@ LuoLuoTool/
 │       └── utils/            # 日志等工具（后续生成）
 ├── tests/                    # pytest 测试
 ├── assets/
-│   └── anchors/              # 图像匹配锚点截图（后期由诊断工具生成）
+│   ├── templates/            # 识别图片：我自己整理/命名的模板（入库）
+│   ├── screenshots/          # 用本工具的截图/框选功能产出的图片（不入库）
+│   └── icons/                # 窗口图标等静态资源（入库）
 ├── user_data/                # 运行时用户数据（不入库）
 │   ├── debug/                # 诊断截图输出目录
 │   └── config.example.json   # 配置样例（Phase 1 生成）
