@@ -177,12 +177,15 @@ print('layer check violations =', bad)
 业务编排（单点）                    core/debug.py:80         run_single_click(hold_ms=...)
 业务编排（连点）                    core/debug.py:106        run_repeat_click(..., hold_ms=...)（间隔＝点击之后的等待）
 校验                                core/debug.py:55         _validate_click_hold（0–5000 ms 整数）
-通道（干跑/真实）                   automation/input_sender.py:470 build_channel
-  点击                              input_sender.py:155      RealInputSender.click_at(x, y, hold_seconds)
-  **点击前核对事实**                input_sender.py:184      _verify_before_press（光标落点/命中窗口/前台/置顶；漂移>4px 跳过）
+通道（干跑/真实）                   automation/input_sender.py:494 build_channel
+  点击                              input_sender.py:157      RealInputSender.click_at(x, y, hold_seconds)
+  **两步移动（hover）**             input_sender.py:193      _move_cursor_for_click（中途点 → 目标）
+  **点击前核对事实**                input_sender.py:208      _verify_before_press（漂移>4px 跳过）
+  时间线                            input_sender.py:26/27/28 容差 4px / 步进 30ms / 松手后 350ms 才还原光标
                                     input_sender.py:84       DryRunSender.click_at（只写日志，同样校验越界）
 底层原语                            automation/real_input.py:335 send_left_click(sleep, hold_seconds, stop_event)
   按下 → 按住（CLICK_SLICE_SECONDS=50ms 切片查急停）→ **finally 抬起左键**
+  置前后等待 200ms（:59）、按下前等待 80ms（:58）
   命中测试/窗口描述                 automation/real_input.py:157/175 window_under_point / describe_window
 ```
 
@@ -280,6 +283,7 @@ capture_client_bgr (vision.py:393)
 | 5 | 滑动任何退出路径都释放左键；松手后复查 `VK_LBUTTON`；长按不卡键 | 鼠标卡在按下状态、游戏一直拖 | `test_send_left_drag_releases_button_on_exception`、`test_drag_reports_failure_when_button_cannot_be_released`、`test_send_left_drag_aborts_on_stop_and_releases_button` |
 | 5b | **点击时长**：点击＝按下→按住 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查急停，**任何退出路径都抬起左键** | 长按被急停后左键卡住；瞬时点击被游戏吞掉；「不传时长」被误当成 0 ms | `test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_single_click_zero_hold_means_instant` |
 | 5c | **点击前必须核对事实**：实测光标是否到达目标（偏差 >`CLICK_CURSOR_TOLERANCE_PX`=4px 就**跳过点击**）、光标处顶层窗口、前台/置顶状态、客户区尺寸，全部写进日志 | 日志写"点击完成"但游戏没反应时无法区分"没送到"与"送到了游戏不认"；光标被钳制时会点到别的控件 | `test_real_sender_logs_click_context_before_press`、`test_real_sender_skips_click_when_cursor_did_not_move`、`test_real_sender_logs_warning_when_hit_test_is_other_window` |
+| 5d | **输入时间线**：光标分两步移动（先中途点，`CLICK_MOVE_STEP_SECONDS`=30ms）→ `INPUT_SETTLE_SECONDS`=80ms → 按下；置前/置顶后等 `FRONT_SETTLE_SECONDS`=200ms 再动；**松手后等 `CLICK_RESTORE_DELAY_SECONDS`=350ms 才还原光标** | 游戏按帧采样指针位置：一次跳跃 + 松手后立刻跳回别的显示器 → 处理这次点击的那一帧已经"指针不在窗口内"，点击被丢弃（实测"某页能点、另一页点不动"，页面越重越容易丢） | `test_click_moves_cursor_in_two_steps_before_press`、`test_click_waits_before_restoring_cursor`、`test_focus_settle_is_long_enough_for_the_game`、`test_activate_sleeps_for_the_focus_settle` |
 | 6 | 滑动结束后**延迟 + 分帧**还原光标，禁止一次 `SetCursorPos` 跳回 | 画面继续乱飘（残留拖拽状态被算成大位移） | `test_real_sender_drag_waits_before_restoring_cursor`、`test_restore_cursor_smooth_moves_in_small_steps` |
 | 7 | 每次真实输入前置顶/置前并回读复核；无法确保则**绝不输入** | 输入打到别的窗口 | `test_ensure_window_front_*`、`test_real_sender_refuses_input_when_window_cannot_be_focused` |
 | 8 | **取景原点必须是客户区左上**（BitBlt 源点用 `client_area_offset`，PrintWindow 整窗渲染后裁剪） | 坐标整体偏下"标题栏高度"（实测 37px） | `test_bitblt_renderer_starts_at_client_origin`、`test_printwindow_renderer_crops_client_area`、`test_client_area_offset_is_title_bar_plus_border` |
@@ -355,6 +359,11 @@ capture_client_bgr (vision.py:393)
     ② GUI 能存下"自己读不回来"的配置（按键步数超 `MAX_KEY_STEPS`）→ 下次启动整份配置被重置；
     ③ `input_sender._ensure_front_or_raise` 置顶成功但置前失败时直接抛错、**永不取消置顶**，
     且现有测试把该行为固化成了期望。三条都能在 1 小时内修完（②③是同一片代码）。
+13. **"某页点不动"仍在跟进（2026-09-20）**：日志已证明输入完全正确（光标偏差 0px、前台、置顶、
+    命中窗口就是游戏），但不保证游戏一定处理这次点击。已按"输入时间线"加固（见 ④ 5d：
+    两步移动 / 置前后 200ms / 松手后 350ms 才还原光标）。若加固后仍不生效，下一步该做的实验是：
+    ① 关掉设置页的「点击后还原光标」再试（隔离还原时机的影响）；
+    ② 用"点击点带标注的截图"确认那个坐标真的是目标控件；③ 在同一页面换一个明显的控件试点击。
 
 ---
 
@@ -558,11 +567,12 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `_render_client_bits_bitblt` | `automation/vision.py:534` | **BitBlt 路径（源点必须客户区偏移）** |
 | `_render_client_bits_printwindow` | `automation/vision.py:478` | PrintWindow（整窗渲染 + 裁剪） |
 | `client_area_offset` | `automation/window.py:87` | 客户区在窗口内的偏移（唯一真源） |
-| `build_channel` | `automation/input_sender.py:470` | 干跑/真实通道选择 |
-| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:411` / `:426` | 越界校验 |
-| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:155` / `:225` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
-| `_verify_before_press` | `automation/input_sender.py:184` | 点击前核对事实（光标落点/命中窗口/前台/置顶），漂移 >4px 就跳过 |
-| `CLICK_CURSOR_TOLERANCE_PX` | `automation/input_sender.py:26` | 允许的光标落点偏差（4px） |
+| `build_channel` | `automation/input_sender.py:494` | 干跑/真实通道选择 |
+| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:435` / `:450` | 越界校验 |
+| `RealInputSender.click_at` / `drag` | `automation/input_sender.py:157` / `:225` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
+| `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:193` / `:208` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
+| `CLICK_CURSOR_TOLERANCE_PX` / `CLICK_MOVE_STEP_SECONDS` / `CLICK_RESTORE_DELAY_SECONDS` | `automation/input_sender.py:26` / `:27` / `:28` | 4px / 30ms / 350ms（输入时间线三档） |
+| `INPUT_SETTLE_SECONDS` / `FRONT_SETTLE_SECONDS` | `automation/real_input.py:58` / `:59` | 80ms（按下前）/ 200ms（置前后） |
 | `send_left_click` | `automation/real_input.py:335` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
 | `window_under_point` / `describe_window` | `automation/real_input.py:157` / `:175` | 命中测试与窗口描述（诊断"点击落在谁身上"） |
 | `run_single_click` | `core/debug.py:80` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
