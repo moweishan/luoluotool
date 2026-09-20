@@ -8,6 +8,47 @@ import pytest
 from luoluotool.automation import window
 
 
+def test_screenshot_client_saves_real_png_via_capture_chain(monkeypatch, tmp_path) -> None:
+    """回归（评审 P2-9）：窗口诊断截图复用识别链的取景（含黑帧兜底）并写出**真正的 PNG**。"""
+    import numpy as np
+
+    from luoluotool.automation import vision
+
+    canvas = np.zeros((40, 60, 3), dtype=np.uint8)
+    canvas[:, :, 0] = np.arange(60, dtype=np.uint8)
+    canvas[:, :, 1] = np.arange(40, dtype=np.uint8).reshape(-1, 1)
+    monkeypatch.setattr(vision, "capture_client_bgr", lambda hwnd: canvas)
+
+    path = window.screenshot_client(123, tmp_path / "shot.png")
+
+    assert path.is_file()
+    assert path.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"      # 旧实现写出的是 BMP（扩展名却是 .png）
+    assert vision.load_template(path).shape == (40, 60, 3)
+
+
+def test_diagnose_window_reports_blank_frame_instead_of_claiming_success(monkeypatch, tmp_path) -> None:
+    """回归（评审 P2-9）：取不到画面（纯色/黑帧）时必须报可读失败，不能宣称"诊断完成"。"""
+    from luoluotool.automation import vision
+
+    def blank(hwnd: int):
+        raise vision.VisionError("取景失败：各种方式都只拿到纯色/黑帧")
+
+    monkeypatch.setattr(vision, "capture_client_bgr", blank)
+    monkeypatch.setattr(window, "find_window", lambda keyword: 555)
+    monkeypatch.setattr(window, "get_client_rect", lambda hwnd: (0, 0, 800, 600))
+    monkeypatch.setattr(window, "bring_to_front", lambda hwnd: True)
+    monkeypatch.setattr(window.win32gui, "GetWindowText", lambda hwnd: "测试游戏")
+    monkeypatch.setattr(window.win32gui, "IsIconic", lambda hwnd: False)
+    monkeypatch.setattr(window, "is_process_elevated", lambda: False)
+    monkeypatch.setattr(window, "is_window_elevated", lambda hwnd: False)
+
+    result = window.diagnose_window("测试游戏", tmp_path)
+
+    assert "截图失败" in result.message
+    assert "纯色/黑帧" in result.message
+    assert not list(tmp_path.glob("window_*.png"))       # 不再留下"宣称成功"的黑图
+
+
 def test_screenshot_path_timestamp_naming(tmp_path) -> None:
     now = datetime(2026, 9, 8, 12, 34, 56)
     path = window.screenshot_path(tmp_path, now=now)

@@ -246,7 +246,7 @@ def test_release_topmost_skips_when_not_topmost(user32) -> None:
     """本来就不是 TOPMOST：不做任何窗口操作。"""
     user32.topmost_style = 0
     real_input.release_topmost(555)
-    assert ("SetWindowPos", 555, real_input.HWND_NOTOPMOST, real_input.RELEASE_FLAGS) not in user32.calls
+    assert ("SetWindowPos", 555, real_input.HWND_NOTOPMOST, real_input.TOP_FLAGS) not in user32.calls
 
 
 # --------------------------------------------------------------- 输入原语
@@ -636,10 +636,11 @@ def test_real_sender_skips_drag_when_bounds_unreadable(recording, monkeypatch, c
 class _RecordingRealInput:
     """把 real_input 的全部原语替换为记录器，验证发送器的调用顺序与守卫。"""
 
-    def __init__(self, monkeypatch, front_ok: bool = True) -> None:
+    def __init__(self, monkeypatch, front_ok: bool = True, set_topmost: bool = True) -> None:
         self.events: list[tuple] = []
         self.front_results: list[bool] = []
         self.front_ok = front_ok
+        self.set_topmost = set_topmost          # 置前失败时"本次是否已由我们置顶"
         self.cursor_to_restore = (800, 600)
         self.cursor_pos = (800, 600)                    # 当前光标位置（随移动/还原更新）
         self.hold_result = (True, False)
@@ -650,7 +651,9 @@ class _RecordingRealInput:
         def ensure_front(hwnd, log=None, sleep=None):
             self.events.append(("ensure_front", hwnd))
             self.front_results.append(self.front_ok)
-            return real_input.FrontResult(self.front_ok, True, "" if self.front_ok else "无法置前")
+            return real_input.FrontResult(
+                self.front_ok, self.set_topmost, "" if self.front_ok else "无法置前"
+            )
 
         def fake_send_left_click(sleep=None, hold_seconds=None, stop_event=None):
             self.events.append(("click",))
@@ -740,13 +743,28 @@ def test_real_sender_checks_window_front_before_every_input(recording) -> None:
 
 
 def test_real_sender_refuses_input_when_window_cannot_be_focused(monkeypatch) -> None:
-    """无法置前时绝不输入（否则会点到/敲到别的窗口）。"""
+    """无法置前时绝不输入（否则会点到/敲到别的窗口）。
+
+    回归（评审 P1-3）：**本次由我们设置的置顶必须在失败路径上取消** —— 旧实现在这里直接抛错并丢弃
+    `FrontResult`，`finally` 里的 `_release_topmost_if_needed` 永远走不到，于是窗口长期浮在最上层。
+    """
     monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)
     recording = _RecordingRealInput(monkeypatch, front_ok=False)
     sender = RealInputSender(555, sleep=lambda _s: None)
     with pytest.raises(WindowUnavailableError, match="置前"):
         sender.click_at(10, 10)
-    assert all(event[0] in ("ensure_front",) for event in recording.events)
+    assert [event[0] for event in recording.events] == ["ensure_front", "release_topmost"]
+    assert ("release_topmost", 555) in recording.events
+
+
+def test_real_sender_does_not_release_topmost_when_it_was_not_ours(monkeypatch) -> None:
+    """失败路径只取消**本次由我们设置的**置顶：置前失败但本来就没置顶时不得误取消别人的置顶。"""
+    monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)
+    recording = _RecordingRealInput(monkeypatch, front_ok=False, set_topmost=False)
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    with pytest.raises(WindowUnavailableError, match="置前"):
+        sender.click_at(10, 10)
+    assert [event[0] for event in recording.events] == ["ensure_front"]
 
 
 def test_real_sender_refuses_when_window_not_ready(monkeypatch) -> None:
@@ -1006,6 +1024,34 @@ def test_interpolate_points_supports_easing(user32) -> None:
     assert real_input.ease_out_quad(1.0) == 1.0
 
 
+def test_send_left_drag_reports_failure_when_move_fails(user32, monkeypatch) -> None:
+    """回归（评审 P3-8）：拖动中光标移动失败必须反映到返回值（旧实现忽略返回值仍可能报成功）。"""
+    real_move = real_input.move_cursor_absolute
+    calls = {"count": 0}
+
+    def flaky(x, y):
+        calls["count"] += 1
+        if calls["count"] == 3:            # 中间某一帧移动失败
+            return False
+        return real_move(x, y)
+
+    monkeypatch.setattr(real_input, "move_cursor_absolute", flaky)
+    ok, interrupted = real_input.send_left_drag((0, 0), (10, 10), 0.2, sleep=lambda _s: None)
+
+    assert ok is False
+    assert interrupted is False
+
+
+def test_send_key_hold_tolerates_zero_slice(user32) -> None:
+    """回归（评审 P3-8）：`slice_seconds <= 0` 不能死循环（旧实现 `remaining -= 0` 永远不减）。"""
+    slept: list[float] = []
+    ok, interrupted = real_input.send_key_hold(
+        "a", 0.05, sleep=slept.append, slice_seconds=0.0,
+    )
+    assert ok is True and interrupted is False
+    assert slept and all(step > 0 for step in slept)       # 每次都有正的推进量
+
+
 def test_send_left_drag_moves_in_steps_between_press_and_release(user32, monkeypatch) -> None:
     """滑动顺序：移动起点 → 按下左键 → 多次插值移动 → 抬起左键。"""
     monkeypatch.setattr(real_input, "virtual_desktop", lambda: (0, 0, 1000, 1000))
@@ -1100,14 +1146,14 @@ def test_real_sender_drag_keeps_cursor_when_restore_disabled(recording) -> None:
 
 
 def test_real_sender_drag_refuses_when_window_cannot_be_focused(monkeypatch) -> None:
-    """无法确保窗口在最前时绝不滑动（否则会拖到别的窗口）。"""
+    """无法确保窗口在最前时绝不滑动（否则会拖到别的窗口）；失败路径同样要取消本次置顶（P1-3）。"""
     monkeypatch.setattr(input_sender, "is_window_ready", lambda hwnd: True)
     from tests.test_automation.test_real_input import _RecordingRealInput
     recording = _RecordingRealInput(monkeypatch, front_ok=False)
     sender = RealInputSender(555, sleep=lambda _s: None)
     with pytest.raises(WindowUnavailableError, match="最前"):
         sender.drag((0, 0), (10, 10), 0.3)
-    assert all(event[0] == "ensure_front" for event in recording.events)
+    assert [event[0] for event in recording.events] == ["ensure_front", "release_topmost"]
 
 
 def test_real_sender_drag_logs_interruption(recording, caplog) -> None:

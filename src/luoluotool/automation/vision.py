@@ -393,27 +393,39 @@ def is_blank_frame(image: np.ndarray) -> bool:
 def capture_client_bgr(hwnd: int) -> np.ndarray:
     """把窗口客户区渲染成 BGR numpy 数组（识别用，不落盘）。
 
-    取景顺序：PrintWindow(PW_RENDERFULLCONTENT) → 若得到纯色/黑帧则自动换其它方式
+    取景顺序：PrintWindow(PW_RENDERFULLCONTENT) → 若得到纯色/黑帧**或抛异常**则自动换其它方式
     （PW_CLIENTONLY → BitBlt(窗口 DC) → 桌面屏幕 BitBlt，后者仅在窗口位于前台时使用）。
     全部失败时抛可读 `VisionError` 并给出「以管理员身份运行 / 让窗口保持可见」的指引
     —— 实测本作（GPU 渲染 + 管理员运行）会取到黑帧，若不判断就会出现"整帧纯黑 →
     匹配度 0 → 报告未识别到目标"这种误导性结论。
-    """
-    width, height, bits = _render_client_bits(hwnd)
-    image = _bits_to_bgr(width, height, bits)
-    if not is_blank_frame(image):
-        return image
 
-    logger.warning(
-        "PrintWindow 取到纯色/黑帧（%dx%d，标准差 %.2f），改用其它取景方式",
-        width, height, float(image.std()),
-    )
+    评审 P2-7：主取景**抛异常**时也必须退到兜底链（GetWindowDC / CreateCompatibleBitmap
+    在权限不足、窗口已关闭时会失败），不能在还有可用路径的情况下直接以异常收场。
+    """
+    primary_error: str = ""
+    try:
+        width, height, bits = _render_client_bits(hwnd)
+        image = _bits_to_bgr(width, height, bits)
+        if not is_blank_frame(image):
+            return image
+        logger.warning(
+            "PrintWindow 取到纯色/黑帧（%dx%d，标准差 %.2f），改用其它取景方式",
+            width, height, float(image.std()),
+        )
+    except VisionError as exc:
+        primary_error = str(exc)
+        logger.warning("主取景方式失败（%s），改用其它取景方式", exc)
+    except Exception as exc:
+        primary_error = str(exc)
+        logger.warning("主取景方式异常（%s），改用其它取景方式", exc)
+
     fallback = _render_client_bgr_fallback(hwnd)
     if fallback is not None:
         return fallback
+    hint = f"（主取景失败原因：{primary_error}）" if primary_error else ""
     raise VisionError(
-        "取景失败：各种方式都只拿到纯色/黑帧，无法识别。"
-        "请确认游戏窗口可见且在前台；若游戏以管理员身份运行，请以管理员身份重启本工具后再试。"
+        "取景失败：各种方式都只拿到纯色/黑帧或直接报错，无法识别。"
+        f"{hint}请确认游戏窗口可见且在前台；若游戏以管理员身份运行，请以管理员身份重启本工具后再试。"
     )
 
 

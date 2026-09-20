@@ -1,8 +1,6 @@
 """窗口查找/置前/截图诊断（pywin32；不依赖 PySide6）。"""
 
-import ctypes
 import logging
-import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -10,7 +8,6 @@ from pathlib import Path
 import pywintypes
 import win32con
 import win32gui
-import win32ui
 
 from luoluotool.automation.elevation import is_process_elevated, is_window_elevated
 
@@ -18,8 +15,6 @@ logger = logging.getLogger(__name__)
 
 PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
-SCREENSHOT_RETRIES = 3
-SCREENSHOT_RETRY_DELAY_SECONDS = 0.5
 ERROR_ACCESS_DENIED = 5
 
 
@@ -99,72 +94,17 @@ def client_area_offset(hwnd: int) -> tuple[int, int]:
 
 
 def screenshot_client(hwnd: int, save_path: Path) -> Path:
-    """截取客户区保存为 PNG 并返回路径。
+    """截取客户区保存为**真正的 PNG** 并返回路径。
 
-    游戏窗口多为 GPU 渲染，BitBlt/PW_CLIENTONLY 会得到黑图；
-    这里用 PW_RENDERFULLCONTENT 按窗口整体尺寸渲染（DWM 通道），
-    再按客户区偏移裁出游戏画面，避免标题栏偏移与底部裁剪。
+    评审 P2-9：旧实现自己走 PrintWindow/BitBlt 并用 `SaveBitmapFile` 落盘（那其实写的是 BMP，
+    只是扩展名是 .png），而且**不判断结果是不是纯黑** —— 对 GPU 渲染的游戏会存出一张全黑图
+    却上报"诊断完成"。现在复用识别链的 `capture_client_bgr`（黑帧检测 + PW_CLIENTONLY →
+    BitBlt(窗口DC) → 屏幕 BitBlt 多级兜底 + 客户区偏移裁剪）与 `save_image`（imencode 写 PNG）：
+    取不到画面时抛可读 `VisionError`，由 `diagnose_window` 转成提示，不再谎报成功。
     """
-    wx, wy, w_right, w_bottom = win32gui.GetWindowRect(hwnd)
-    window_width, window_height = w_right - wx, w_bottom - wy
-    _, _, client_width, client_height = get_client_rect(hwnd)
-    offset_x, offset_y = client_area_offset(hwnd)
+    from luoluotool.automation.vision import capture_client_bgr, save_image
 
-    hwnd_dc = win32gui.GetWindowDC(hwnd)
-    full_dc = win32ui.CreateDCFromHandle(hwnd_dc)
-    full_mem_dc = full_dc.CreateCompatibleDC()
-    full_bitmap = win32ui.CreateBitmap()
-    full_bitmap.CreateCompatibleBitmap(full_dc, window_width, window_height)
-    full_mem_dc.SelectObject(full_bitmap)
-
-    client_bitmap = win32ui.CreateBitmap()
-    client_bitmap.CreateCompatibleBitmap(full_dc, client_width, client_height)
-    client_dc = full_dc.CreateCompatibleDC()
-    client_dc.SelectObject(client_bitmap)
-    try:
-        rendered = False
-        for attempt in range(SCREENSHOT_RETRIES):
-            rendered = ctypes.windll.user32.PrintWindow(
-                hwnd, full_mem_dc.GetSafeHdc(), PW_RENDERFULLCONTENT
-            )
-            if rendered:
-                break
-            if attempt < SCREENSHOT_RETRIES - 1:
-                time.sleep(SCREENSHOT_RETRY_DELAY_SECONDS)
-        if rendered:
-            # 从全窗口位图裁出客户区
-            client_dc.BitBlt(
-                (0, 0), (client_width, client_height),
-                full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
-            )
-            client_bitmap.SaveBitmapFile(client_dc, str(save_path))
-            return save_path
-        logger.warning("PrintWindow(全窗口) 失败，尝试仅客户区渲染")
-        # 与主路径同一套几何：PrintWindow 以窗口左上角为原点，所以仍渲染到整窗位图后按偏移裁
-        if ctypes.windll.user32.PrintWindow(hwnd, full_mem_dc.GetSafeHdc(), PW_CLIENTONLY):
-            client_dc.BitBlt(
-                (0, 0), (client_width, client_height),
-                full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
-            )
-            client_bitmap.SaveBitmapFile(client_dc, str(save_path))
-            return save_path
-        logger.warning("PrintWindow 失败，回退 BitBlt 全窗口截图")
-        full_mem_dc.BitBlt(
-            (0, 0), (window_width, window_height), full_dc, (0, 0), win32con.SRCCOPY
-        )
-        client_dc.BitBlt(
-            (0, 0), (client_width, client_height),
-            full_mem_dc, (offset_x, offset_y), win32con.SRCCOPY,
-        )
-        client_bitmap.SaveBitmapFile(client_dc, str(save_path))
-        return save_path
-    finally:
-        win32gui.DeleteObject(client_bitmap.GetHandle())
-        win32gui.DeleteObject(full_bitmap.GetHandle())
-        client_dc.DeleteDC()
-        full_mem_dc.DeleteDC()
-        full_dc.DeleteDC()
-        win32gui.ReleaseDC(hwnd, hwnd_dc)
+    return save_image(save_path, capture_client_bgr(hwnd))
 
 
 def screenshot_path(base_dir: Path, now: datetime | None = None) -> Path:

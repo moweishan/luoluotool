@@ -224,13 +224,33 @@ def test_capture_client_bgr_handles_padding(monkeypatch) -> None:
 
 
 def test_capture_client_bgr_reports_render_failure(monkeypatch) -> None:
-    """渲染失败（窗口已关闭/无权限）→ 可读错误，不返回空图。"""
+    """渲染失败（窗口已关闭/无权限）→ 先试兜底链；全失败才给可读错误，不返回空图（评审 P2-7）。"""
     def boom(hwnd: int):
         raise vision.VisionError("截图失败：窗口已关闭")
 
     monkeypatch.setattr(vision, "_render_client_bits", boom)
-    with pytest.raises(vision.VisionError):
+    monkeypatch.setattr(vision, "_render_client_bgr_fallback", lambda hwnd: None)
+    with pytest.raises(vision.VisionError) as excinfo:
         vision.capture_client_bgr(1)
+
+    assert "取景失败" in str(excinfo.value)
+    assert "窗口已关闭" in str(excinfo.value)          # 主取景的失败原因要带出来
+
+
+def test_capture_client_bgr_falls_back_when_primary_raises(monkeypatch) -> None:
+    """回归（评审 P2-7）：主取景**抛异常**（不只是黑帧）时也必须走兜底链拿画面。
+
+    旧实现只在 `is_blank_frame()` 为真时兜底：`GetWindowDC`/`CreateCompatibleBitmap` 失败
+    （权限不足、窗口已关闭）会让整次识别以异常收场 —— 明明屏幕 BitBlt 还能用。
+    """
+    def boom(hwnd: int):
+        raise vision.VisionError("CreateCompatibleBitmap 失败（模拟）")
+
+    canvas = _haystack(40, 60)
+    monkeypatch.setattr(vision, "_render_client_bits", boom)
+    monkeypatch.setattr(vision, "_render_client_bgr_fallback", lambda hwnd: canvas)
+
+    assert vision.capture_client_bgr(1) is canvas
 
 
 # ---------------------------------------------------------------- 黑帧兜底

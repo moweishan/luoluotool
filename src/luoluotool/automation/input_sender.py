@@ -373,6 +373,14 @@ class RealInputSender:
             raise WindowUnavailableError(f"游戏窗口已最小化或不可见，已取消本次{action}")
         front = real_input.ensure_window_front(self.hwnd, self._logger, self._sleep)
         if not front.ok:
+            # 评审 P1-3：置前失败时**本次由我们设置的置顶必须立刻取消**再抛 ——
+            # 旧实现直接抛出并把 FrontResult 丢掉，调用方的 finally 永远走不到，
+            # 于是窗口长期浮在所有窗口之上（AGENTS/PROJECT_SPEC §4.2.3 的"收拾现场"硬规则）。
+            if front.set_topmost:
+                if real_input.release_topmost(self.hwnd):
+                    self._logger.warning("置前失败，已取消本次由我们设置的置顶（避免窗口长期浮在最上层）")
+                else:
+                    self._logger.warning("置前失败且取消置顶也失败：游戏窗口可能仍浮在最上层")
             raise WindowUnavailableError(
                 f"无法把游戏窗口置于最前，已取消本次{action}（真实键鼠输入只能送到最前窗口）：{front.reason}"
             )

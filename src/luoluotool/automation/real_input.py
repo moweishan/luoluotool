@@ -51,8 +51,7 @@ SWP_NOSIZE = 0x0001
 SWP_NOMOVE = 0x0002
 SWP_NOACTIVATE = 0x0010
 SWP_SHOWWINDOW = 0x0040
-TOP_FLAGS = SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW | SWP_NOACTIVATE
-RELEASE_FLAGS = SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW | SWP_NOACTIVATE
+TOP_FLAGS = SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW | SWP_NOACTIVATE   # 置顶与取消置顶共用（评审 P3-10）
 CLICK_HOLD_SECONDS = 0.04
 CLICK_SLICE_SECONDS = 0.05   # "点击时长"（按住）期间的切片步长：便于响应急停
 INPUT_SETTLE_SECONDS = 0.08  # 光标到位后到按下之间的等待（给游戏几帧建立 hover）
@@ -189,7 +188,7 @@ def release_topmost(hwnd: int) -> bool:
     """取消 TOPMOST（仅当当前确实置顶）；返回是否真的做了取消操作。"""
     if not is_topmost(hwnd):
         return False
-    if _set_window_pos(hwnd, HWND_NOTOPMOST, RELEASE_FLAGS):
+    if _set_window_pos(hwnd, HWND_NOTOPMOST, TOP_FLAGS):
         logger.debug("已取消窗口置顶（hwnd=%s）", hwnd)
         return True
     logger.warning("取消窗口置顶失败（hwnd=%s），窗口可能仍浮在最上层", hwnd)
@@ -521,7 +520,8 @@ def send_left_drag(
             if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
                 interrupted = True
                 break
-            move_cursor_absolute(*point)
+            # 评审 P3-8：移动失败也要计入结果（旧实现忽略返回值，移动全失败仍可能报"滑动成功"）
+            ok = move_cursor_absolute(*point) and ok
             if per_step > 0 and index < len(points) - DRAG_TAIL_HOLD_STEPS:
                 sleep(per_step)
             elif per_step > 0:
@@ -592,8 +592,10 @@ def send_key_hold(
 
     长按按 `slice_seconds` 切片推进，期间可被停止请求（`stop_event`）打断；
     无论正常结束、异常还是被中断，都会在 `finally` 里释放按键（绝不卡键）。
+    评审 P3-8：`slice_seconds <= 0` 会让 `remaining -= step` 变成**死循环**，这里取正下限兜底。
     """
     modifiers, main_vk = parse_combo(combo)
+    step_size = max(float(slice_seconds), 0.01)
     pressed: list[int] = []
     ok = True
     interrupted = False
@@ -608,7 +610,7 @@ def send_key_hold(
             if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
                 interrupted = True
                 break
-            step = min(slice_seconds, remaining)
+            step = min(step_size, remaining)
             sleep(step)
             remaining -= step
     finally:
