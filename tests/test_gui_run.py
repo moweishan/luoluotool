@@ -903,3 +903,22 @@ def test_run_debug_action_dispatches_all_kinds(monkeypatch) -> None:
 
     with pytest.raises(ValueError, match="未知的调试测试类型"):
         mw.run_debug_action(config, "nope", {}, log, None)
+
+
+def test_run_debug_action_passes_click_hold(monkeypatch) -> None:
+    """单点分发把「点击时长」传下去；旧载荷（没有 hold_ms）走默认值而不是报错。"""
+    from luoluotool.gui import main_window as mw
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        mw.debug_actions, "run_single_click",
+        lambda config, x, y, log, stop_event=None, **kwargs: seen.append({"x": x, "y": y, **kwargs}) or "ok",
+    )
+    log = logging.getLogger("t")
+    config = AppConfig.default()
+
+    mw.run_debug_action(config, "single_click", {"x": 5, "y": 6, "hold_ms": 250}, log, None)
+    mw.run_debug_action(config, "single_click", {"x": 7, "y": 8}, log, None)
+
+    assert seen[0]["hold_ms"] == 250
+    assert "hold_ms" in seen[1] and seen[1]["hold_ms"] >= 0      # 缺省时用引擎默认时长

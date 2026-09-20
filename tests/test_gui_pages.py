@@ -215,9 +215,10 @@ def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
     page.dry_run_box.setChecked(True)
     assert config.automation.dry_run is True
 
-    # 单点：X/Y
+    # 单点：X/Y + 点击时长
     page.single_x_spin.setValue(120)
     page.single_y_spin.setValue(80)
+    page.single_hold_spin.setValue(300)
     page.single_button.click()
     # 连点：X/Y + 次数 + 间隔
     page.repeat_x_spin.setValue(10)
@@ -239,11 +240,31 @@ def test_debug_page_binds_dry_run_and_emits_test_requests() -> None:
     page.key_button.click()
 
     assert requests == [
-        ("single_click", {"x": 120, "y": 80}),
+        ("single_click", {"x": 120, "y": 80, "hold_ms": 300}),
         ("repeat_click", {"x": 10, "y": 20, "count": 3, "interval_ms": 400}),
         ("swipe", {"from_x": 1, "from_y": 2, "to_x": 300, "to_y": 400, "duration_ms": 700}),
         ("key", {"combo": "ctrl+s", "count": 2, "interval_ms": 250}),
     ]
+    page.close()
+
+
+def test_debug_page_single_click_hold_bounds_and_default() -> None:
+    """「点击时长」控件：默认＝引擎默认时长，范围 0–5000 ms，且有说明性提示。"""
+    from luoluotool.gui.pages.debug import (
+        SINGLE_CLICK_HOLD_RANGE_MS,
+        DebugPage,
+        DEFAULT_CLICK_HOLD_MS_UI,
+    )
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+
+    assert page.single_hold_spin.minimum() == SINGLE_CLICK_HOLD_RANGE_MS[0]
+    assert page.single_hold_spin.maximum() == SINGLE_CLICK_HOLD_RANGE_MS[1]
+    assert page.single_hold_spin.value() == DEFAULT_CLICK_HOLD_MS_UI
+    assert page.single_hold_spin.suffix().strip().lower() == "ms"
+    assert "点击时长" in page.single_hold_spin.toolTip()
     page.close()
 
 

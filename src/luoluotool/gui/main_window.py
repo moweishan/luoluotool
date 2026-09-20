@@ -144,7 +144,10 @@ class _DebugTestThread(QThread):
 def run_debug_action(config, kind: str, params: dict, log, stop_event) -> str:
     """把界面请求映射到 `core.debug` 的具体动作（便于单测直接调用）。"""
     if kind == "single_click":
-        return debug_actions.run_single_click(config, params["x"], params["y"], log, stop_event)
+        return debug_actions.run_single_click(
+            config, params["x"], params["y"], log, stop_event,
+            hold_ms=params.get("hold_ms", debug_actions.DEFAULT_CLICK_HOLD_MS),
+        )
     if kind == "repeat_click":
         return debug_actions.run_repeat_click(
             config, params["x"], params["y"], params["count"], params["interval_ms"], log, stop_event

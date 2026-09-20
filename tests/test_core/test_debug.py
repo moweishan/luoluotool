@@ -20,15 +20,17 @@ class _RecordingSender:
 
     def __init__(self) -> None:
         self.calls: list[tuple] = []
+        self.click_holds: list[float | None] = []      # 每次点击带的"点击时长"（秒）
 
     def move_to(self, x: int, y: int) -> None:
         self.calls.append(("move_to", x, y))
 
-    def click(self, x: int, y: int) -> None:
+    def click(self, x: int, y: int, hold_seconds: float | None = None) -> None:
         self.calls.append(("click", x, y))
 
-    def click_at(self, x: int, y: int) -> None:
+    def click_at(self, x: int, y: int, hold_seconds: float | None = None) -> None:
         self.calls.append(("click_at", x, y))
+        self.click_holds.append(hold_seconds)
 
     def drag(self, from_xy, to_xy, duration_seconds: float) -> None:
         self.calls.append(("drag", tuple(from_xy), tuple(to_xy), round(duration_seconds, 3)))
@@ -79,6 +81,34 @@ def test_single_click_respects_stop_event(fake_channel) -> None:
 def test_single_click_rejects_bad_coordinates(fake_channel, x, y) -> None:
     with pytest.raises(ValueError):
         debug.run_single_click(_config(), x, y, logging.getLogger("t"))
+    assert fake_channel.calls == []
+
+
+def test_single_click_passes_click_hold(fake_channel) -> None:
+    """点击时长：按毫秒传进 sender（秒），并在结果消息里写清。"""
+    message = debug.run_single_click(_config(), 120, 80, logging.getLogger("t"), hold_ms=250)
+    assert fake_channel.calls == [("click_at", 120, 80)]
+    assert fake_channel.click_holds == [0.25]
+    assert "点击时长 250 ms" in message
+
+
+def test_single_click_zero_hold_means_instant(fake_channel) -> None:
+    """点击时长 0 = 瞬时点击（与"不传"不同：不传＝用引擎默认时长）。"""
+    debug.run_single_click(_config(), 1, 2, logging.getLogger("t"), hold_ms=0)
+    assert fake_channel.click_holds == [0.0]
+
+
+def test_single_click_without_hold_keeps_engine_default(fake_channel) -> None:
+    """不传点击时长时保持原行为：不向 sender 传 hold_seconds。"""
+    debug.run_single_click(_config(), 1, 2, logging.getLogger("t"))
+    assert fake_channel.click_holds == [None]
+
+
+@pytest.mark.parametrize("hold_ms", [-1, 60000, True, "100"])
+def test_single_click_rejects_bad_hold(fake_channel, hold_ms) -> None:
+    """点击时长必须在 0–5000 ms 的整数范围内（挡掉负数/超长/布尔/字符串）。"""
+    with pytest.raises(ValueError):
+        debug.run_single_click(_config(), 1, 2, logging.getLogger("t"), hold_ms=hold_ms)
     assert fake_channel.calls == []
 
 

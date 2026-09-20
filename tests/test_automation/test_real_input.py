@@ -8,6 +8,7 @@
 
 import ctypes
 import logging
+import threading
 from ctypes import wintypes
 
 import pytest
@@ -272,11 +273,59 @@ def test_move_cursor_absolute_sends_single_move_event(user32) -> None:
 
 
 def test_send_left_click_presses_then_releases(user32) -> None:
-    """左键点击：按下 + 抬起两条事件，顺序正确。"""
-    real_input.send_left_click(sleep=lambda _s: None)
+    """左键点击：按下 + 抬起两条事件，顺序正确；默认按住 CLICK_HOLD_SECONDS。"""
+    slept: list[float] = []
+    real_input.send_left_click(sleep=slept.append)
     flags = [event["flags"] for event in user32.sent]
     assert flags[0] & real_input.MOUSEEVENTF_LEFTDOWN
     assert flags[1] & real_input.MOUSEEVENTF_LEFTUP
+    assert slept == [real_input.CLICK_HOLD_SECONDS]
+
+
+def test_send_left_click_honours_requested_hold(user32) -> None:
+    """点击时长：按下后按住指定秒数再抬起（游戏吞掉瞬时点击时需要调大）。"""
+    slept: list[float] = []
+    assert real_input.send_left_click(sleep=slept.append, hold_seconds=0.3) is True
+    flags = [event["flags"] for event in user32.sent]
+    assert flags[0] & real_input.MOUSEEVENTF_LEFTDOWN and flags[1] & real_input.MOUSEEVENTF_LEFTUP
+    assert abs(sum(slept) - 0.3) < 1e-6 and all(0 < s <= real_input.CLICK_SLICE_SECONDS for s in slept)
+
+
+def test_send_left_click_with_zero_hold_does_not_sleep(user32) -> None:
+    """点击时长 0 = 瞬时点击：按下后立刻抬起，不做任何等待。"""
+    slept: list[float] = []
+    real_input.send_left_click(sleep=slept.append, hold_seconds=0.0)
+    assert slept == []
+    assert len(user32.sent) == 2
+
+
+def test_send_left_click_checks_stop_while_holding(user32) -> None:
+    """长按期间收到停止请求：立刻抬起（绝不把左键卡在按下状态）。"""
+    class _Stop:
+        def __init__(self) -> None:
+            self.checks = 0
+
+        def is_set(self) -> bool:
+            self.checks += 1
+            return self.checks > 1          # 第一次允许按住，之后请求停止
+
+    stop = _Stop()
+    slept: list[float] = []
+    real_input.send_left_click(sleep=slept.append, hold_seconds=1.0, stop_event=stop)
+    flags = [event["flags"] for event in user32.sent]
+    assert flags[-1] & real_input.MOUSEEVENTF_LEFTUP
+    assert sum(slept) < 1.0                 # 被停止请求提前打断
+
+
+def test_send_left_click_releases_when_sleep_raises(user32) -> None:
+    """按住期间 sleep 抛异常（例如被中断）：仍必须抬起左键。"""
+    def boom(_seconds: float) -> None:
+        raise RuntimeError("interrupted")
+
+    with pytest.raises(RuntimeError):
+        real_input.send_left_click(sleep=boom, hold_seconds=0.5)
+    flags = [event["flags"] for event in user32.sent]
+    assert flags[-1] & real_input.MOUSEEVENTF_LEFTUP
 
 
 def test_send_key_tap_uses_scancode_down_then_up(user32) -> None:
@@ -341,6 +390,25 @@ def test_restore_cursor_smooth_falls_back_when_read_fails(user32, monkeypatch) -
     monkeypatch.setattr(real_input, "get_cursor_pos", boom)
     assert real_input.restore_cursor_smooth((444, 555), sleep=lambda _s: None) is True
     assert ("SetCursorPos", 444, 555) in user32.calls
+
+
+# ------------------------------------------------ 点击时长（按住后再松开）
+
+
+def test_real_sender_passes_click_hold_to_primitive(recording) -> None:
+    """点击时长一路传到 send_left_click（秒）；不传时传 None（由 real_input 用默认值）。"""
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80, hold_seconds=0.25)
+    sender.click_at(120, 80)
+    assert recording.click_holds == [0.25, None]
+
+
+def test_real_sender_click_hold_reaches_stop_event(recording) -> None:
+    """真实通道把 stop_event 传给底层：按住期间可以响应急停。"""
+    stop = threading.Event()
+    sender = RealInputSender(555, sleep=lambda _s: None, stop_event=stop)
+    sender.click_at(120, 80, hold_seconds=0.3)
+    assert recording.click_stop_events == [stop]
 
 
 # ------------------------------------------------ 点击越界校验（必须在窗口内）
@@ -469,19 +537,26 @@ class _RecordingRealInput:
         self.cursor_to_restore = (800, 600)
         self.hold_result = (True, False)
         self.drag_result = (True, False)
+        self.click_holds: list[float | None] = []       # 每次点击带的"点击时长"（秒）
+        self.click_stop_events: list[object | None] = []
 
         def ensure_front(hwnd, log=None, sleep=None):
             self.events.append(("ensure_front", hwnd))
             self.front_results.append(self.front_ok)
             return real_input.FrontResult(self.front_ok, True, "" if self.front_ok else "无法置前")
 
+        def fake_send_left_click(sleep=None, hold_seconds=None, stop_event=None):
+            self.events.append(("click",))
+            self.click_holds.append(hold_seconds)
+            self.click_stop_events.append(stop_event)
+            return True
+
         monkeypatch.setattr(real_input, "ensure_window_front", ensure_front)
         monkeypatch.setattr(real_input, "get_cursor_pos",
                             lambda: (self.events.append(("get_cursor_pos",)), self.cursor_to_restore)[1])
         monkeypatch.setattr(real_input, "move_cursor_absolute",
                             lambda x, y: self.events.append(("move_cursor", x, y)))
-        monkeypatch.setattr(real_input, "send_left_click",
-                            lambda sleep=None: self.events.append(("click",)) or True)
+        monkeypatch.setattr(real_input, "send_left_click", fake_send_left_click)
         monkeypatch.setattr(real_input, "send_key_tap",
                             lambda vk, sleep=None: self.events.append(("key", vk)) or True)
         monkeypatch.setattr(real_input, "send_left_drag",

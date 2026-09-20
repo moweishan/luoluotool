@@ -54,6 +54,7 @@ SWP_SHOWWINDOW = 0x0040
 TOP_FLAGS = SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW | SWP_NOACTIVATE
 RELEASE_FLAGS = SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW | SWP_NOACTIVATE
 CLICK_HOLD_SECONDS = 0.04
+CLICK_SLICE_SECONDS = 0.05   # "点击时长"（按住）期间的切片步长：便于响应急停
 INPUT_SETTLE_SECONDS = 0.05
 FRONT_SETTLE_SECONDS = 0.05
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
@@ -297,11 +298,32 @@ def move_cursor_absolute(x: int, y: int) -> bool:
     return _send([_mouse_input(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK, nx, ny)])
 
 
-def send_left_click(sleep: Callable[[float], None] = time.sleep) -> bool:
-    """真实左键点击：按下 → 短暂保持 → 抬起。"""
+def send_left_click(
+    sleep: Callable[[float], None] = time.sleep,
+    hold_seconds: float | None = None,
+    stop_event: "object | None" = None,
+    slice_seconds: float = CLICK_SLICE_SECONDS,
+) -> bool:
+    """真实左键点击：按下 → 保持 `hold_seconds` 秒 → 抬起，返回是否成功。
+
+    - `hold_seconds=None`（默认）用 `CLICK_HOLD_SECONDS`；传 0 表示瞬时点击（按住时长为 0）。
+    - 按住期间按 `slice_seconds` 切片推进，可被 `stop_event`（急停）打断：
+      一旦收到停止请求就立刻抬起，**绝不把左键卡在按下状态**。
+    - 无论正常结束、被中断还是 `sleep` 抛异常，都在 `finally` 里抬起左键。
+    """
+    hold = CLICK_HOLD_SECONDS if hold_seconds is None else max(float(hold_seconds), 0.0)
     ok = _send([_mouse_input(MOUSEEVENTF_LEFTDOWN)])
-    sleep(CLICK_HOLD_SECONDS)
-    ok = _send([_mouse_input(MOUSEEVENTF_LEFTUP)]) and ok
+    try:
+        remaining = hold
+        while remaining > 0:
+            if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
+                logger.info("点击保持期间收到停止请求，提前抬起左键（已按住 %.3fs）", hold - remaining)
+                break
+            step = min(slice_seconds, remaining)
+            sleep(step)
+            remaining -= step
+    finally:
+        ok = _send([_mouse_input(MOUSEEVENTF_LEFTUP)]) and ok
     return ok
 
 

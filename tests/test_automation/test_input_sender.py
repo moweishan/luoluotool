@@ -107,6 +107,15 @@ def test_dry_run_sender_logs_click_inside_bounds(caplog) -> None:
     assert "模拟点击 (10, 10)" in caplog.text
 
 
+def test_dry_run_sender_logs_click_hold(caplog) -> None:
+    """干跑：带点击时长时日志里写清时长（便于在真实模式前核对参数）。"""
+    caplog.set_level(logging.INFO)
+    sender = input_sender.DryRunSender(bounds=lambda x, y: (True, "客户区 100x50"))
+    sender.click_at(10, 10, hold_seconds=0.25)
+    assert "模拟点击 (10, 10)" in caplog.text
+    assert "250 ms" in caplog.text
+
+
 # ------------------------------------------------------- 滑动越界校验（Phase 8 增量）
 
 

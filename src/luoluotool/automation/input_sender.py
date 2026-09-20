@@ -34,9 +34,9 @@ class InputSender(Protocol):
 
     def move_to(self, x: int, y: int) -> None: ...
 
-    def click(self, x: int, y: int) -> None: ...
+    def click(self, x: int, y: int, hold_seconds: float | None = None) -> None: ...
 
-    def click_at(self, x: int, y: int) -> None: ...
+    def click_at(self, x: int, y: int, hold_seconds: float | None = None) -> None: ...
 
     def key_tap(self, vk: int) -> None: ...
 
@@ -78,13 +78,18 @@ class DryRunSender:
     def move_to(self, x: int, y: int) -> None:
         self._logger.info("干跑：移动到 (%d, %d)", x, y)
 
-    def click(self, x: int, y: int) -> None:
-        self.click_at(x, y)
+    def click(self, x: int, y: int, hold_seconds: float | None = None) -> None:
+        self.click_at(x, y, hold_seconds)
 
-    def click_at(self, x: int, y: int) -> None:
+    def click_at(self, x: int, y: int, hold_seconds: float | None = None) -> None:
         if self._skip_if_out_of_bounds([(f"点击坐标 ({x}, {y})", (x, y))]):
             return
-        self._logger.info("干跑：模拟点击 (%d, %d)", x, y)
+        if hold_seconds is None:
+            self._logger.info("干跑：模拟点击 (%d, %d)", x, y)
+            return
+        self._logger.info(
+            "干跑：模拟点击 (%d, %d) 点击时长 %.0f ms（按住后再松开）", x, y, hold_seconds * 1000
+        )
 
     def key_tap(self, vk: int) -> None:
         self._logger.info("干跑：模拟按键 (vk=%d)", vk)
@@ -135,10 +140,15 @@ class RealInputSender:
         """悬停不点击：真实输入通道下不做任何光标移动（避免无意义地干扰用户的鼠标）。"""
         self._logger.debug("真实输入通道不执行悬停，已忽略 move_to(%d, %d)", x, y)
 
-    def click(self, x: int, y: int) -> None:
-        self.click_at(x, y)
+    def click(self, x: int, y: int, hold_seconds: float | None = None) -> None:
+        self.click_at(x, y, hold_seconds)
 
-    def click_at(self, x: int, y: int) -> None:
+    def click_at(self, x: int, y: int, hold_seconds: float | None = None) -> None:
+        """点击客户区 (x, y)；`hold_seconds` 为按住时长（None＝引擎默认 40ms，0＝瞬时）。
+
+        硬规则（2026-09-19 用户要求）：点击位置必须在游戏窗口客户区内，越界不点击。
+        点击时长用于游戏吞掉瞬时点击的情况（按住一会儿再松开），期间可被急停打断。
+        """
         # 硬规则（2026-09-19 用户要求）：点击位置必须在游戏窗口客户区内，越界不点击
         inside, detail = point_in_client_area(self.hwnd, x, y)
         if not inside:
@@ -154,10 +164,14 @@ class RealInputSender:
             screen = real_input.client_to_screen(self.hwnd, (x, y))
             real_input.move_cursor_absolute(*screen)
             self._sleep(real_input.INPUT_SETTLE_SECONDS)
-            if not real_input.send_left_click(self._sleep):
+            if not real_input.send_left_click(
+                self._sleep, hold_seconds=hold_seconds, stop_event=self._stop_event
+            ):
                 raise WindowUnavailableError("真实鼠标点击注入失败（SendInput 未被系统接受）")
+            hold_text = "" if hold_seconds is None else f"，点击时长 {hold_seconds * 1000:.0f} ms"
             self._logger.info(
-                "真实点击完成：客户区 (%d, %d) → 屏幕 %s（已确保窗口在最顶层）", x, y, screen
+                "真实点击完成：客户区 (%d, %d) → 屏幕 %s%s（已确保窗口在最顶层）",
+                x, y, screen, hold_text,
             )
         finally:
             if self.restore_cursor and saved is not None:

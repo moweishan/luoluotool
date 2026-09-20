@@ -30,6 +30,12 @@ from PySide6.QtWidgets import (
 from luoluotool.automation.vision import DEFAULT_MAX_RESULTS as DEFAULT_VISION_MAX_RESULTS
 from luoluotool.automation.vision import DEFAULT_THRESHOLD as DEFAULT_VISION_THRESHOLD
 from luoluotool.config.models import AppConfig
+from luoluotool.core.debug import (
+    CLICK_HOLD_RANGE_MS as SINGLE_CLICK_HOLD_RANGE_MS,
+)
+from luoluotool.core.debug import (
+    DEFAULT_CLICK_HOLD_MS as DEFAULT_CLICK_HOLD_MS_UI,
+)
 from luoluotool.gui.widgets import ScrollablePage
 
 logger = logging.getLogger(__name__)
@@ -161,12 +167,21 @@ class DebugPage(ScrollablePage):
         click_grid = QGridLayout(click_group)
         self.single_x_spin = _spin(COORDINATE_MAX)
         self.single_y_spin = _spin(COORDINATE_MAX)
+        self.single_hold_spin = _spin(SINGLE_CLICK_HOLD_RANGE_MS[1], SINGLE_CLICK_HOLD_RANGE_MS[0], " ms")
+        self.single_hold_spin.setValue(DEFAULT_CLICK_HOLD_MS_UI)
+        self.single_hold_spin.setToolTip(
+            "点击时长：按下左键后保持多久再松开。\n"
+            f"默认 {DEFAULT_CLICK_HOLD_MS_UI} ms（引擎默认）；0 = 瞬时点击；\n"
+            "游戏把普通点击吞掉时调大（例如 100–300 ms，按住期间可被 F8 急停打断）。"
+        )
         self.single_button = QPushButton("单点测试")
         click_grid.addWidget(QLabel("X"), 0, 0)
         click_grid.addWidget(self.single_x_spin, 0, 1)
         click_grid.addWidget(QLabel("Y"), 0, 2)
         click_grid.addWidget(self.single_y_spin, 0, 3)
-        click_grid.addWidget(self.single_button, 0, 4)
+        click_grid.addWidget(QLabel("点击时长"), 1, 0)
+        click_grid.addWidget(self.single_hold_spin, 1, 1)
+        click_grid.addWidget(self.single_button, 0, 4, 2, 1)
         self.single_button.clicked.connect(self._on_single_clicked)
         layout.addWidget(click_group)
 
@@ -328,6 +343,7 @@ class DebugPage(ScrollablePage):
     def _on_single_clicked(self) -> None:
         self.test_requested.emit("single_click", {
             "x": self.single_x_spin.value(), "y": self.single_y_spin.value(),
+            "hold_ms": self.single_hold_spin.value(),
         })
 
     def _on_repeat_clicked(self) -> None:

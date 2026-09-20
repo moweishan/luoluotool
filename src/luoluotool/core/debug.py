@@ -24,6 +24,8 @@ MAX_REPEAT = 200
 INTERVAL_RANGE_MS = (50, 5000)
 COORDINATE_MAX = 10000
 DURATION_RANGE_MS = (50, 10000)
+CLICK_HOLD_RANGE_MS = (0, 5000)      # 「点击时长」上限：0＝瞬时，5000＝按住 5 秒
+DEFAULT_CLICK_HOLD_MS = 40           # 与 real_input.CLICK_HOLD_SECONDS 对齐（调试页默认值）
 
 
 def _validate_point(x: int, y: int) -> tuple[int, int]:
@@ -50,6 +52,16 @@ def _validate_duration(duration_ms: int) -> int:
     return int(duration_ms)
 
 
+def _validate_click_hold(hold_ms: int | None) -> int | None:
+    """点击时长校验：`None`＝用引擎默认；否则必须是 0–`CLICK_HOLD_RANGE_MS` 的整数。"""
+    if hold_ms is None:
+        return None
+    low, high = CLICK_HOLD_RANGE_MS
+    if isinstance(hold_ms, bool) or not isinstance(hold_ms, int) or not (low <= hold_ms <= high):
+        raise ValueError(f"点击时长必须是 {low}–{high} 毫秒之间的整数（实际 {hold_ms!r}）")
+    return int(hold_ms)
+
+
 def _open_sender(config: AppConfig, stop_event: threading.Event, log: logging.Logger | None):
     """按配置构建输入通道并返回 (sender, readiness)。干跑时 sender 只会写日志。"""
     channel = build_channel(config, stop_event, time.sleep, log)
@@ -68,16 +80,27 @@ def _ready(readiness: Callable[[], bool] | None, stop_event: threading.Event) ->
 def run_single_click(
     config: AppConfig, x: int, y: int,
     log: logging.Logger | None = None, stop_event: threading.Event | None = None,
+    hold_ms: int | None = None,
 ) -> str:
-    """鼠标单点测试：在客户区 (x, y) 点击一次。"""
+    """鼠标单点测试：在客户区 (x, y) 点击一次。
+
+    `hold_ms` 是**点击时长**（按下左键后保持多久再松开）：
+    `None`（默认）＝不指定，用引擎默认时长（`real_input.CLICK_HOLD_SECONDS`＝40 ms）；
+    `0`＝瞬时点击；正数＝按住这么多毫秒（游戏吞掉瞬时点击时调大，例如 100–300）。
+    """
     x, y = _validate_point(x, y)
+    hold_ms = _validate_click_hold(hold_ms)
     stop_event = stop_event or threading.Event()
     sender, readiness = _open_sender(config, stop_event, log)
     if not _ready(readiness, stop_event):
         return "单点测试已取消（收到停止请求）"
-    (log or logger).info("调试：鼠标单点测试 → 客户区 (%d, %d)", x, y)
-    sender.click_at(x, y)
-    return f"单点测试完成：(x={x}, y={y}) 1 次"
+    hold_text = f"点击时长 {hold_ms} ms" if hold_ms is not None else "点击时长＝引擎默认"
+    (log or logger).info("调试：鼠标单点测试 → 客户区 (%d, %d)（%s）", x, y, hold_text)
+    if hold_ms is None:
+        sender.click_at(x, y)
+    else:
+        sender.click_at(x, y, hold_seconds=hold_ms / 1000)
+    return f"单点测试完成：(x={x}, y={y}) 1 次，{hold_text}"
 
 
 def run_repeat_click(
