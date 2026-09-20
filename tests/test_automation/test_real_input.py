@@ -444,6 +444,64 @@ def test_real_sender_skips_click_when_cursor_did_not_move(recording, monkeypatch
     assert "未到达目标" in caplog.text and "已跳过本次点击" in caplog.text
 
 
+# --------------------------- 输入时间线加固（2026-09-20："某页点不动"排查）
+
+
+def test_click_moves_cursor_in_two_steps_before_press(recording) -> None:
+    """点击前分两步移动光标：先到中途点、再到目标（让游戏先建立 hover 再收到按下）。
+
+    背景：只发一次绝对跳跃时，部分 Unity 界面来不及在当帧建立 hover，随后的按下会被丢掉。
+    """
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80)
+
+    moves = [event for event in recording.events if event[0] == "move_cursor"]
+    assert moves == [("move_cursor", 465, 350), ("move_cursor", 130, 100)]
+    click_index = recording.events.index(("click",))
+    assert recording.events.index(moves[-1]) < click_index        # 两次移动都在按下之前
+
+
+def test_click_skips_intermediate_move_when_already_at_target(recording, monkeypatch) -> None:
+    """光标本来就在目标上时不多发一次移动（中途点等于目标就跳过）。"""
+    recording.cursor_pos = (130, 100)          # 与 fake client_to_screen 的换算结果一致
+    sender = RealInputSender(555, sleep=lambda _s: None)
+    sender.click_at(120, 80)
+
+    moves = [event for event in recording.events if event[0] == "move_cursor"]
+    assert moves == [("move_cursor", 130, 100)]
+
+
+def test_click_waits_before_restoring_cursor(recording) -> None:
+    """松手后**延迟**再还原光标：游戏按帧采样指针位置，立刻跳回会让这一帧的点击被丢弃。
+
+    与滑动同源的经验（滑动早就用 `DRAG_RESTORE_DELAY_SECONDS` 修过同类问题）：
+    实测"某页能点、另一页点不动"，而日志显示光标位置/前台/命中窗口全对 —— 剩下的就是这条时间线。
+    """
+    events: list[tuple] = []
+    recording.events = events
+    sender = RealInputSender(555, sleep=lambda s: events.append(("sleep", round(s, 3))))
+    sender.click_at(120, 80)
+
+    click_index = events.index(("click",))
+    restore_index = next(i for i, e in enumerate(events) if e[0] == "restore_cursor")
+    delays = [e[1] for e in events[click_index:restore_index] if e[0] == "sleep"]
+    assert delays, "点击与还原光标之间必须有等待"
+    assert max(delays) >= input_sender.CLICK_RESTORE_DELAY_SECONDS
+
+
+def test_focus_settle_is_long_enough_for_the_game() -> None:
+    """置前成功后的稳定等待必须够长（游戏被唤醒需要几帧才响应输入）。"""
+    assert real_input.FRONT_SETTLE_SECONDS >= 0.2
+    assert real_input.INPUT_SETTLE_SECONDS >= 0.08
+
+
+def test_activate_sleeps_for_the_focus_settle(user32) -> None:
+    """`_activate` 置前后会按 `FRONT_SETTLE_SECONDS` 等待（不是立刻发输入）。"""
+    slept: list[float] = []
+    assert real_input._activate(555, slept.append) is True
+    assert slept and min(slept) >= real_input.FRONT_SETTLE_SECONDS
+
+
 def test_real_sender_logs_warning_when_hit_test_is_other_window(recording, monkeypatch, caplog) -> None:
     """光标处窗口不是游戏窗口时给 WARNING（但仍点击：可能只是子窗口/别名 hwnd）。"""
     caplog.set_level(logging.WARNING)
@@ -481,13 +539,14 @@ def test_real_sender_click_bounds_are_exclusive(recording, monkeypatch, caplog) 
 
 
 def test_real_sender_clicks_inside_window(recording, monkeypatch) -> None:
-    """范围内的点击照常执行（顺序与不带校验时一致，只是多了一次"点击前核对"的光标回读）。"""
+    """范围内的点击照常执行：顺序一致，另加"两步移动 + 点击前核对"。"""
     monkeypatch.setattr(input_sender, "get_client_rect", lambda hwnd: (0, 0, 200, 100))
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.click_at(120, 80)
     assert recording.events == [
         ("ensure_front", 555),
         ("get_cursor_pos",),
+        ("move_cursor", 465, 350),   # 两步移动的中途点
         ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
         ("get_cursor_pos",),         # 点击前核对：实测光标是否到位
         ("click",),
@@ -653,12 +712,13 @@ def recording(monkeypatch):
 
 
 def test_real_sender_moves_cursor_clicks_and_restores(recording) -> None:
-    """点击顺序：校验/置顶 → 记录光标 → 移动光标 → **核对光标已到位** → 点击 → 还原光标 → 取消置顶。"""
+    """点击顺序：校验/置顶 → 记录光标 → 两步移动（先中途点）→ 核对到位 → 点击 → 延迟还原 → 取消置顶。"""
     sender = RealInputSender(555, sleep=lambda _s: None)
     sender.click_at(120, 80)
     assert recording.events == [
         ("ensure_front", 555),
         ("get_cursor_pos",),         # 记下原位置（点击后要还原）
+        ("move_cursor", 465, 350),   # 两步移动的中途点：(800,600) 与 (130,100) 的中点
         ("move_cursor", 130, 100),   # 客户区 (120,80) + (10,20)
         ("get_cursor_pos",),         # 点击前核对：实测光标是否到位
         ("click",),

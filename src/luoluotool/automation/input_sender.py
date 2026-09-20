@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 
 READINESS_POLL_SECONDS = 0.2
 CLICK_CURSOR_TOLERANCE_PX = 4        # 点击前允许的光标落点偏差；超过就跳过本次点击
+CLICK_MOVE_STEP_SECONDS = 0.03       # 两步移动光标之间的间隔（给游戏一帧建立 hover）
+CLICK_RESTORE_DELAY_SECONDS = 0.35   # 松手后到"还原光标"的延迟（让游戏先处理完这次点击）
 
 
 class WindowUnavailableError(RuntimeError):
@@ -159,11 +161,12 @@ class RealInputSender:
             return
         front = self._ensure_front_or_raise("点击")
         saved: tuple[int, int] | None = None
+        clicked = False
         try:
             # 光标位置必须在 try 内读取：万一这里抛异常，finally 仍要取消我们设置的置顶
             saved = real_input.get_cursor_pos()
             screen = real_input.client_to_screen(self.hwnd, (x, y))
-            real_input.move_cursor_absolute(*screen)
+            self._move_cursor_for_click(saved, screen)
             self._sleep(real_input.INPUT_SETTLE_SECONDS)
             if not self._verify_before_press(x, y, screen):
                 return
@@ -171,6 +174,7 @@ class RealInputSender:
                 self._sleep, hold_seconds=hold_seconds, stop_event=self._stop_event
             ):
                 raise WindowUnavailableError("真实鼠标点击注入失败（SendInput 未被系统接受）")
+            clicked = True
             hold_text = "" if hold_seconds is None else f"，点击时长 {hold_seconds * 1000:.0f} ms"
             self._logger.info(
                 "真实点击完成：客户区 (%d, %d) → 屏幕 %s%s（已确保窗口在最顶层）",
@@ -178,8 +182,28 @@ class RealInputSender:
             )
         finally:
             if self.restore_cursor and saved is not None:
+                if clicked:
+                    # 松手后**先等几帧再还原光标**（与滑动路径的 DRAG_RESTORE_DELAY_SECONDS 同源经验）：
+                    # 游戏按帧采样指针位置，若光标立刻跳到另一个显示器，游戏处理这次点击的那一帧
+                    # 可能已经"指针不在窗口内"→ 这次点击被丢弃（实测"某页能点、另一页点不动"）。
+                    self._sleep(CLICK_RESTORE_DELAY_SECONDS)
                 real_input.set_cursor_pos(*saved)
             self._release_topmost_if_needed(front)
+
+    def _move_cursor_for_click(self, start: tuple[int, int] | None, target: tuple[int, int]) -> None:
+        """把光标移到点击目标；分两步走（先到中途点），让游戏先收到"指针移进来/hover"再收到按下。
+
+        为什么（2026-09-20 用户实测"某页能点、另一页点不动"）：一次绝对跳跃只产生一条移动事件，
+        Unity 的 UI 模块按帧采样指针位置与 hover 状态；两步移动多产生一条移动事件并留出
+        `CLICK_MOVE_STEP_SECONDS`，让游戏先在当前帧建立 hover 再处理按下。
+        光标本来就在目标上时不发多余移动。
+        """
+        if start is not None:
+            middle = ((int(start[0]) + int(target[0])) // 2, (int(start[1]) + int(target[1])) // 2)
+            if middle != (int(target[0]), int(target[1])):
+                real_input.move_cursor_absolute(*middle)
+                self._sleep(CLICK_MOVE_STEP_SECONDS)
+        real_input.move_cursor_absolute(*target)
 
     def _verify_before_press(self, x: int, y: int, screen: tuple[int, int]) -> bool:
         """按下左键前核对"事实"，返回是否继续点击。
