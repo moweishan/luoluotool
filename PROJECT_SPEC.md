@@ -309,13 +309,13 @@ LuoLuoTool/
 
 | 模块 | 职责 | 关键接口（示意） |
 |---|---|---|
-| config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]` |
-| core | 任务协议、注册表、执行调度、运行状态、开发者调试动作 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()`; `debug.run_single_click/repeat_click/swipe/key(...)` |
-| automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
+| config | 配置模型、默认值、加载/保存/校验/版本迁移 | `AppConfig.load(path)`, `AppConfig.save(path)`, `validate(raw) -> list[str]`; `store.ConfigSaveError`（保存前校验失败时抛出，**磁盘文件保持原样**）, `store.save()`（先校验后落盘、覆盖更高版本前先备份） |
+| core | 任务协议、注册表、执行调度、运行状态、开发者调试动作 | `class BaseTask: run(ctx)`, `TaskRegistry.get(task_id)`, `Runner.start(config)`, `Runner.stop()`; `debug.run_single_click/repeat_click/swipe/key(...)`（单点/连点支持 `hold_ms`，长等待切片可中断）; `state.try_transition(...)`（非法迁移返回 False，不抛异常；状态读写加锁） |
+| automation | 找窗口、截图、真实键鼠输入（`SendInput`，输入前置顶校验）、急停热键 | `find_window(keyword)`, `screenshot_client(hwnd, path)`（窗口诊断截图：统一走 `capture_client_bgr` 回退链 → 真 PNG + 黑帧检测，不再自带 PrintWindow 实现）, `RealInputSender.click_at(x, y)` / `key_tap(vk)`, `build_channel(config, stop_event, sleep)`, `register_hotkey(...)` |
 | automation（诊断/权限） | 窗口诊断（查找→强制置前→截客户区）、权限检测与 UAC 提权重启 | `find_window(keyword)`, `bring_to_front(hwnd) -> bool`, `diagnose_window(keyword, debug_dir) -> DiagnosticResult`; `is_process_elevated()`, `is_window_elevated(hwnd) -> bool \| None`, `restart_as_admin(extra_args) -> bool` |
 | automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（点击、**滑动拖拽**、单键/组合键/长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入；点击支持**点击时长**（按下→按住 `hold_seconds`→抬起，默认 40 ms、0＝瞬时，按住期间可被急停打断且任何路径都会抬起左键） | `RealInputSender.click_at(x, y, hold_seconds=None)` / `drag(from_xy, to_xy, seconds)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click(sleep, hold_seconds, stop_event)`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
-| gui | 五页签（设置/日常任务/卡订单/功能三/功能四）+ 可选「开发者调试」页 + 日志面板 + 状态栏；**所有页签继承 `widgets.ScrollablePage`**（内容进 `QScrollArea` + 建议尺寸 `PAGE_SIZE_HINT`），页签高度不随挂载/卸载变化 | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` / `layout_measure_requested()`; `layout_measure.measure_layout(window)` / `format_measure_report(measure)` |
-| utils | 日志初始化、路径解析 | `setup_logging()`, `get_user_data_dir()` |
+| gui | 五页签（设置/日常任务/卡订单/功能三/功能四）+ 可选「开发者调试」页 + 日志面板 + 状态栏；**所有页签继承 `widgets.ScrollablePage`**（内容进 `QScrollArea` + 建议尺寸 `PAGE_SIZE_HINT`），页签高度不随挂载/卸载变化 | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` / `layout_measure_requested()`; `layout_measure.measure_layout(window)` / `format_measure_report(measure)`; 功能三/功能四公共基类 `pages.planned_feature.PlannedFeaturePage`; 急停热键不可用提示 `SettingsPage.show_hotkey_hint(text)` |
+| utils | 日志初始化、路径解析 | `setup_logging(level, max_file_mb, backup_count)`（幂等，可重配置，参数变化时重建 handler）, `get_user_data_dir()` |
 
 ## 9. 数据结构（配置文件 schema v8）
 

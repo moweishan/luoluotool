@@ -328,39 +328,61 @@ capture_client_bgr (vision.py:393)
 
 | 16 | 单点测试"某页能点、另一页点不动"（日志显示光标偏差 0px、前台、置顶、命中窗口都对） | **松手后用 `SetCursorPos` 一次把光标跳回另一个显示器**：游戏（Unity）按帧采样指针位置，处理这次点击的那一帧看到"指针已不在窗口内"→ 点击被丢弃；页面越重帧越慢越容易丢。**用户实测关闭「把真实鼠标移回原位置」立刻可点，反证根因** | 点击还原改为与滑动同源的做法：先延迟 `CLICK_RESTORE_DELAY_SECONDS`（0.35s）再用 `restore_cursor_smooth` 分帧小步移回；另加两步移动（hover）+ 置前后 200ms + 点击前事实核对日志 | `test_click_waits_before_restoring_cursor`、`test_real_sender_keeps_cursor_when_restore_disabled`、`test_click_moves_cursor_in_two_steps_before_press`、`test_real_sender_logs_click_context_before_press` / `0b0298d`、`a43836f` |
 
+> **第 17–24 条来自 2026-09-20 的代码审查（`CODE_REVIEW_REPORT.md`：P1×3 / P2×9 / P3×10，已全部修复）**。
+> 它们集中在三类**用户看得见的失败**上：① 自己把配置写坏（下次启动整份重置）；② 状态/资源不复位
+> （窗口永久置顶、线程不收、按钮按不动）；③ 失败被藏起来（黑图报成功、热键失败只写日志）。
+> 找新 bug 时值得照这三类同一句话追问："**这里失败的时候，用户看得见吗？"**
+
+| # | 症状（用户视角） | 根因 | 修法 | 回归测试 / 提交 |
+|---|---|---|---|---|
+| 17 | 把配置里某个任务参数改坏后，工具**再也起不来**（启动即崩，界面都不出现） | `validation.migrate` 把畸形 `params`（不是 dict）交给迁移函数，异常不在 `try` 内 → `store.load` 直接抛 | `migrate` 每一步独立 `try/except`（失败记 WARNING + 回退原始 dict）；`store.load` 再把迁移包一层兜底走 `_recover`（备份坏文件 + 默认值） | `test_load_survives_malformed_params_during_migration` / `dab9348` |
+| 18 | 界面上能保存的配置，下次启动却**整份被重置**（按键/滑动步数等） | 界面允许的步数上限**大于**校验器上限 → 能存下"自己读不回来"的配置，读回时校验失败 → 恢复默认 | 上限统一到 `config/models.py`（`MAX_KEY_STEPS`/`MAX_SWIPE_STEPS`/`MAX_CLICK_POINTS`＝20）并被解析与校验共用；`store.save` **先校验再落盘**（不合法抛 `ConfigSaveError`，文件保持原样）；GUI 弹窗 + 状态栏提示；日常页超限记 WARNING 并回滚输入框 | `test_save_refuses_invalid_config_and_keeps_old_file`、`test_daily_page_rejects_over_limit_keys_text` / `dab9348`、`af52571` |
+| 19 | 对"无法置前"的窗口点一次，**游戏窗口永久浮在最上层**（只能重启游戏） | `_ensure_front_or_raise` 置顶成功、置前失败时直接抛错并丢弃 `FrontResult`，`finally` 里的取消置顶永远走不到；旧测试还把该行为写成了期望 | 抛错前先取消**本次由我们设置的**置顶（只在真的置顶过时调用）；`RELEASE_FLAGS` 并入 `TOP_FLAGS`，不误清别的程序设的置顶 | `test_real_sender_refuses_input_when_window_cannot_be_focused`、`test_real_sender_does_not_release_topmost_when_it_was_not_ours` / `082468b` |
+| 20 | 程序版本比配置文件旧（降级/回滚）时，**新配置被静默覆盖** | `load` 不认更高的 `schema_version`，`save` 直接写回 | 读到更新版本只读返回默认值、**不写盘**；`save` 覆盖前先备份 `config.json.bak-v<N>-<时间戳>` | `test_load_keeps_newer_version_file_untouched`、`test_save_backs_up_newer_version_file_before_overwriting` / `dab9348` |
+| 21 | 改了日志级别 / 轮转文件大小**不生效**（配置项是死配置） | `setup_logging()` 只在启动时用默认参数调用一次，重复调用还会叠加 handler | `setup_logging(level, max_file_mb, backup_count)` 幂等、参数变化时重建 `RotatingFileHandler`；`gui/app.py` 在 `store.load()` 后按配置重设 | `tests/test_utils_logging.py` / `af52571` |
+| 22 | 调试测试跑着**「停止」按不动**；任务与调试测试能同时跑；关窗后线程还在注入输入 | 「停止」只认任务线程；两条启动路径互不检查；`closeEvent` 不等线程；空闲等待是整段 `sleep` | 停止按钮按 `_long_job_running`（任务或调试）判定；`_start`/`_on_debug_test` 双向互斥；`closeEvent` 走 `_wait_for_threads()`（4 个线程，超时记 ERROR）；调试等待改可中断分片 | `test_stop_button_works_for_debug_test_without_ever_starting_task`、`test_debug_test_rejected_while_task_is_running`、`test_close_event_waits_for_all_background_threads`、`test_repeat_click_interval_is_interruptible` / `501c039`、`af52571` |
+| 23 | 窗口诊断报"成功"，但存下来的截图是**纯黑图**；取景主路径一抛异常就整体失败 | 诊断截图自带一套 PrintWindow 实现（本作必黑却报成功）；`capture_client_bgr` 的回退链只处理"黑帧"不处理"异常" | 诊断截图改为复用 `capture_client_bgr`（真 PNG + 黑帧检测，全失败给可读错误）；回退链把主路径包进 `try/except` 并在错误里带主因 | `test_screenshot_client_saves_real_png_via_capture_chain`、`test_diagnose_window_reports_blank_frame_instead_of_claiming_success`、`test_capture_client_bgr_falls_back_when_primary_raises` / `082468b` |
+| 24 | 并发点击"停止"会抛异常；`STOPPING → ERROR` 被当成非法（真实错误被状态机掩盖）；滑动某帧 move 失败却当滑过去了 | 状态读写无锁且迁移表有死路；`SendInput` 返回值被忽略 | `state` 加锁 + `try_transition`（非法迁移返回 False 不抛）、放行 `STOPPING → ERROR`；滑动逐帧核对返回值、失败即报错；`send_key_hold` 切片下限钳到 0.01s | `test_try_transition_never_raises`、`test_stopping_can_go_to_error`、`test_send_left_drag_reports_failure_when_move_fails`、`test_send_key_hold_tolerates_zero_slice` / `501c039`、`082468b` |
+
 ---
 
 ## ⑥ 尚未修 / 已知薄弱点（找 bug 的优先清单）
 
 按"值得投入"排序：
 
-1. **`automation/vision.py` 642 行、`gui/main_window.py` 695 行都超过 AGENTS 的 600 行硬线**
-   （main_window 是历史遗留）。建议拆法：多尺度匹配（`scale_candidates`/`_resize_scale`/
-   `_scan_coarse`/`_refine_scale`/`locate_all_scaled`，约 200 行）移到 `automation/multiscale.py`；
-   取景部分**不要动**（刚做实机验证）。拆完必须重跑全量 + 实机交叉验证。
+1. **三个源文件超过 AGENTS 的 600 行硬线，且本次评审修复后只多不少**（实测基线 `af52571`）：
+   `gui/main_window.py` **765 行**（历史遗留）、`automation/vision.py` **654 行**、
+   `automation/real_input.py` **620 行**；测试文件 `tests/test_gui_run.py` 1079 行、
+   `tests/test_automation/test_vision.py` 658 行。`CODE_REVIEW_REPORT.md` §8 把"拆文件"列为**独立阶段**，
+   本次**未拆**（已向用户披露，等授权）。建议拆法：多尺度匹配（`_scale_tiers`/`_scan_coarse`/
+   `_refine_scale`/`locate_all_scaled`，约 200 行）移到 `automation/multiscale.py`；`main_window.py`
+   的四个 QThread 类与 `_wait_for_threads`/线程互斥逻辑移到 `gui/workers.py`；取景部分**不要动**
+   （刚做实机验证）。拆完必须重跑全量测试 + 实机交叉验证。
 2. **识别尚未接入任务**："按图点击"没实现（模板/阈值也不落配置，每次手选）。接入时会碰
    `core/registry.py` 的任务参数、`config/models.py` 与 schema 迁移，是新的 bug 高发面。
 3. **多模板"先命中即用"的误报风险**：模板互相形似时，靠前那张可能先蹭到低分命中。
    实测条纹模板缩到 0.5x 对另一张模板的亮块区拿到 0.883（默认阈值 0.85 就中了）。
    缓解手段：提高阈值、模板更有辨识度，或改成"全部试完取最高分"（未做）。
 4. **极小模板（<40px）+ 小缩放的缩放判断不稳**（信息量不足，模板匹配固有限制）。
-5. **`automation/window.screenshot_client`（窗口诊断截图）** 用 PrintWindow 整窗渲染，
-   对同类黑帧游戏可能存成纯黑图（诊断页因此可能误导），未接入黑帧兜底链。
+5. ~~窗口诊断截图可能存成纯黑图~~ **已修（评审 P2-9，`082468b`）**：改为复用 `capture_client_bgr`
+   的完整回退链（真 PNG + 黑帧检测），全失败时报可读错误而不是给你一张黑图。剩余限制：窗口不在前台时
+   屏幕 BitBlt 不可用，此时诊断会**失败**（可读原因），这是环境限制。
 6. **识别耗时随模板数线性增长**：单张约 1.6–5s，N 张全落空 ≈ N 倍。GUI 期间按钮禁用，
    但仍可能让用户觉得卡。
 7. **屏幕取景要求窗口在前台**：不在前台时只剩 BitBlt/PrintWindow（本作可能黑帧），
    会报"取景失败"。这是环境限制而非 bug，但很容易被当成 bug 报上来。
 8. **权限不对等**：游戏以管理员运行、本工具普通权限时无法置前（错误 5），任务会拒绝输入并报错。
    提权流程见 `gui/main_window.py:589-695`、`automation/elevation.py`。
-9. **F8 急停热键常注册失败**（被占用）：只告警不中断。若任务正在跑而急停不可用，风险较大。
+9. **F8 急停热键常注册失败**（被占用）：**已改进但未根治**（评审 P3-9，`af52571`）—— 失败现在会在
+   状态栏追加提示 + 设置页红字提示，且「停止」按钮对调试测试也已生效（原来按不动）；但热键本身在 F8
+   被占用时仍不可用，根治办法是在设置页换一个键名。
 10. **识别参数不落配置**（模板列表/阈值/最多列出条数都是界面态，重启即丢）。
-11. **`tests/test_core/test_vision.py` 589 行、`tests/test_automation/test_vision.py` 638 行**
-    也在往硬线靠（测试文件同样适用长度建议）。
-12. **内存里那三条 P1（来自 `CODE_REVIEW_REPORT.md`，基线 7e56cc4）仍未修**：
-    ① `config/validation.py` 迁移对畸形 `params` 抛异常且不在 `try` 内 → 启动崩溃；
-    ② GUI 能存下"自己读不回来"的配置（按键步数超 `MAX_KEY_STEPS`）→ 下次启动整份配置被重置；
-    ③ `input_sender._ensure_front_or_raise` 置顶成功但置前失败时直接抛错、**永不取消置顶**，
-    且现有测试把该行为固化成了期望。三条都能在 1 小时内修完（②③是同一片代码）。
+11. **`tests/test_core/test_vision.py` 589 行、`tests/test_automation/test_vision.py` 658 行**
+    也在往硬线靠（测试文件同样适用长度建议，见第 1 条）。
+12. **本次评审修复（P1×3 / P2×9 / P3×10）只在单测层面验证过，实机未复测**（提交 `dab9348`→`af52571`）。
+    下一次进游戏前建议按顺序跑：开发者调试页的四项测试（单点 / 连点 / 滑动 / 按键）+ 窗口诊断 +
+    图像识别，重点看 ① 开着「把真实鼠标移回原位置」时点击是否正常（原问题待复测）；② 诊断截图能不能
+    看（应不再是纯黑）；③ 关窗后进程是否干净退出、游戏窗口是否不再浮在最上层（评审 P1-3 的实机面）。
 13. **"某页点不动"已定位并修复（2026-09-20）**：根因是"松手后一次 `SetCursorPos` 把光标跳回另一个
     显示器"，游戏按帧采样指针位置时已经"指针不在窗口内"→ 这次点击被丢弃（用户实测关掉「把真实鼠标
     移回原位置」立刻可点，反证根因）。已改为"延迟 0.35s + 分帧小步移回"（见 ④ 5d 与 ⑤ 第 16 条）。
@@ -553,7 +575,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 
 ---
 
-## 附：快速定位索引（常用符号 → 文件:行，基线 9aea9a9）
+## 附：快速定位索引（常用符号 → 文件:行，基线 af52571）
 
 | 符号 | 位置 | 说明 |
 |---|---|---|
@@ -566,37 +588,46 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `load_template` | `automation/vision.py:81` | 读图（中文路径 + 纯色拒绝） |
 | `is_blank_frame` | `automation/vision.py:383` | 黑帧/纯色判定 |
 | `capture_client_bgr` | `automation/vision.py:393` | 取景入口（含回退链） |
-| `_render_client_bits_bitblt` | `automation/vision.py:534` | **BitBlt 路径（源点必须客户区偏移）** |
-| `_render_client_bits_printwindow` | `automation/vision.py:478` | PrintWindow（整窗渲染 + 裁剪） |
-| `client_area_offset` | `automation/window.py:87` | 客户区在窗口内的偏移（唯一真源） |
-| `build_channel` | `automation/input_sender.py:508` | 干跑/真实通道选择 |
-| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:449` / `:464` | 越界校验 |
+| `_render_client_bits_bitblt` | `automation/vision.py:546` | **BitBlt 路径（源点必须客户区偏移）** |
+| `_render_client_bits_printwindow` | `automation/vision.py:480` | PrintWindow（整窗渲染 + 裁剪） |
+| `client_area_offset` | `automation/window.py:82` | 客户区在窗口内的偏移（唯一真源） |
+| `screenshot_client` | `automation/window.py:96` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
+| `build_channel` | `automation/input_sender.py:516` | 干跑/真实通道选择 |
+| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:457` / `:472` | 越界校验 |
 | `RealInputSender.click_at` / `drag` | `automation/input_sender.py:157` / `:259` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
 | `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:207` / `:222` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
 | `_restore_cursor_after_click` / `_restore_cursor_after_drag` | `automation/input_sender.py:188` / `:323` | 延迟 + 分帧小步还原光标（点击/滑动同一套做法） |
 | `CLICK_CURSOR_TOLERANCE_PX` / `CLICK_MOVE_STEP_SECONDS` / `CLICK_RESTORE_DELAY_SECONDS` | `automation/input_sender.py:26` / `:27` / `:28` | 4px / 30ms / 350ms（输入时间线三档） |
 | `INPUT_SETTLE_SECONDS` / `FRONT_SETTLE_SECONDS` | `automation/real_input.py:58` / `:59` | 80ms（按下前）/ 200ms（置前后） |
-| `send_left_click` | `automation/real_input.py:335` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
+| `send_left_click` | `automation/real_input.py:334` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
 | `window_under_point` / `describe_window` | `automation/real_input.py:157` / `:175` | 命中测试与窗口描述（诊断"点击落在谁身上"） |
-| `run_single_click` | `core/debug.py:80` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
-| `_validate_click_hold` | `core/debug.py:55` | 点击时长校验（0–5000 ms，整数、非布尔） |
+| `run_single_click` | `core/debug.py:98` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
+| `_validate_click_hold` | `core/debug.py:56` | 点击时长校验（0–5000 ms，整数、非布尔） |
 | `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:183` / `:210` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
 | `restore_cursor_box` | `gui/pages/debug.py:89` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
-| `settings_page.developer_box` | `gui/pages/settings.py:44` | 设置页「开发者调试」开关（决定调试页是否挂载/生效） |
-| `run_repeat_click` | `core/debug.py:106` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待） |
-| `ensure_window_front` | `automation/real_input.py:228` | 每次输入前置顶置前 + 复核 |
-| `client_to_screen` | `automation/real_input.py:148` | 客户区→屏幕换算（点击路径） |
-| `build_drag_path` | `automation/real_input.py:415` | 缓出曲线 + 末尾静止帧 |
-| `restore_cursor_smooth` | `automation/real_input.py:435` | 分帧还原光标 |
+| `settings_page.developer_box` | `gui/pages/settings.py:48` | 设置页「开发者调试」开关（决定调试页是否挂载/生效） |
+| `show_hotkey_hint` | `gui/pages/settings.py:89` | 设置页红字提示（急停热键不可用等，评审 P3-9） |
+| `run_repeat_click` | `core/debug.py:124` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待，可被急停打断） |
+| `ensure_window_front` | `automation/real_input.py:227` | 每次输入前置顶置前 + 复核（失败时只取消**本次我们设的**置顶，评审 P1-3） |
+| `client_to_screen` | `automation/real_input.py:147` | 客户区→屏幕换算（点击路径） |
+| `build_drag_path` | `automation/real_input.py:414` | 缓出曲线 + 末尾静止帧 |
+| `restore_cursor_smooth` | `automation/real_input.py:434` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
 | `DebugPage` | `gui/pages/debug.py:62` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `_on_debug_test` / `run_debug_action` | `gui/main_window.py:495` / `:144` | 调试请求接收 / 动作分发（含 `hold_ms`） |
 | `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:529` / `:556` | 框选回填 / 框选入口（门禁 + 后台截图） |
-| `_debug_actions_allowed` | `gui/main_window.py:487` | 开发者调试门禁 |
+| `_debug_actions_allowed` | `gui/main_window.py:546` | 开发者调试门禁 |
+| `_register_hotkey_or_hint` | `gui/main_window.py:381` | 热键注册 + 失败显著提示（评审 P3-9） |
+| `_wait_for_threads` | `gui/main_window.py:338` | 关窗等齐 4 个后台线程（评审 P2-6） |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:169` / `:237` | 布局测量与报告 |
-| `Runner.start` | `core/runner.py:65` | 任务顺序执行/循环/失败计数 |
-| `migrate` / `validate` | `config/validation.py:301` / `:325` | 迁移链与校验 |
+| `Runner.start` | `core/runner.py:68` | 任务顺序执行/循环/失败计数 |
+| `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁，评审 P3-1） |
+| `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样，评审 P1-2） |
+| `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
+| `migrate` / `validate` | `config/validation.py:309` / `:339` | 迁移链（每步独立 try，绝不崩）与校验 |
+| `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
+| `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
 
 > **索引自检**：改完代码后跑 `.venv\Scripts\python tools\check_guide_index.py` —— 它会逐条核对本表
 > 的"符号 → 文件:行"是否还指得准（漂移会打印 `[DRIFT] 符号 文件:行 当前指向…` 并以退出码 1 结束）。

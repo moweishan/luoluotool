@@ -24,11 +24,15 @@
 - [ ] 数值字段有上下限校验（如点击间隔 100–5000ms）。
 - [ ] 存在 `user_data/config.example.json` 且与默认值一致（命令：diff 对比）。
 - [ ] 配置文件不包含任何账号/密码/token 字段（grep 检查）。
+- [ ] ⚠️ 配置迁移"绝不崩"（评审 P1-1）：`config/validation.migrate` 每一步独立 `try/except`（失败记 WARNING 并回退原始 dict），`store.load` 再把整个迁移包一层 `try/except` 走 `_recover`（备份坏文件 + 用默认值）。畸形 `params`（非 dict）也必须能启动。回归：`test_load_survives_malformed_params_during_migration`。
+- [ ] ⚠️ 配置落盘"先校验后写"（评审 P1-2）：`store.save` 校验不通过抛 `ConfigSaveError` 且**磁盘文件保持原样**；GUI 保存路径必须捕获并弹窗 + 状态栏提示。界面可填范围必须与 `config/models.py` 的 `MAX_KEY_STEPS`/`MAX_SWIPE_STEPS`/`MAX_CLICK_POINTS`（＝20）**共用同一常量**，超限时记 WARNING 并回滚输入框（禁止静默截断）。原因：历史上界面比校验器宽松，用户能存下"自己读不回来"的配置，下次启动整份被重置。回归：`test_save_refuses_invalid_config_and_keeps_old_file`、`test_daily_page_rejects_over_limit_keys_text`、`test_daily_page_rejects_over_limit_swipes_text`。
+- [ ] ⚠️ 配置版本保护（评审 P2-1）：磁盘 `schema_version` 比程序新时**只读**（不写盘、返回默认值 + WARNING）；`save` 覆盖前先备份 `config.json.bak-v<磁盘版本>-<时间戳>`。回归：`test_load_keeps_newer_version_file_untouched`、`test_save_backs_up_newer_version_file_before_overwriting`。
+- [ ] 保存失败不留残留：临时文件在任意异常路径下都被清理（评审 P3-6）。
 
 ## 2. 日志
 
 - [ ] 使用标准 logging，模块级 logger，无调试期 `print`（grep `print(` 审查）。
-- [ ] 日志同时输出到控制台与 `logs/` 滚动文件（`max_file_mb`、`backup_count` 生效）。
+- [ ] 日志同时输出到控制台与 `logs/` 滚动文件（`max_file_mb`、`backup_count` 生效）；⚠️ **日志配置必须是活配置（评审 P2-2）**：`setup_logging(level, max_file_mb, backup_count)` 幂等（重复调用不叠加 handler、参数变化时重建 `RotatingFileHandler`），`gui/app.py` 在 `store.load()` 后按 `config.logging.*` 重设一次。回归：`tests/test_utils_logging.py`。
 - [ ] 关键动作有日志：启动/停止、模式切换（干跑/真实）、每次点击坐标、急停触发、异常堆栈。
 - [ ] 日志中不记录敏感信息（无密码、无设备指纹）。
 - [ ] 日志目录被 `.gitignore` 忽略（命令：`git check-ignore logs/`）。
@@ -86,6 +90,7 @@
 - [ ] 用户只需备份 `user_data/config.json` 即可迁移配置（README 写明）。
 - [ ] 配置损坏时自动备份旧文件（`config.json.bak-<时间戳>`）。
 - [ ] （可选，后期）配置导入/导出按钮——未实现前不得宣称有。
+- [ ] ⚠️ 覆盖"更高版本"的配置前自动备份为 `config.json.bak-v<版本>-<时间戳>`（评审 P2-1，见「1. 配置」）。
 
 ## 10. 边界条件
 
@@ -95,6 +100,12 @@
 - [ ] 运行中直接关闭窗口：线程优雅退出，无残留进程。
 - [ ] 分辨率/DPI 非 100%：MVP 阶段至少给出提示（不做静默错位点击）。
 - [ ] 游戏全屏独占模式：提示切回窗口化，而不是盲点。
+- [ ] ⚠️ 置顶必须成对（评审 P1-3）：`input_sender._ensure_front_or_raise` 在"置顶成功但置前失败"时，抛错前必须取消**本次由我们设置的**置顶（旧实现丢弃 `FrontResult`，`finally` 走不到 → 游戏窗口永久浮在最上层）；取消置顶用合并后的 `TOP_FLAGS`（`RELEASE_FLAGS` 已并入），且只在本次真的置顶过时调用。回归：`test_real_sender_refuses_input_when_window_cannot_be_focused`、`test_real_sender_does_not_release_topmost_when_it_was_not_ours`。
+- [ ] ⚠️ 状态机并发安全（评审 P3-1）：状态读写加锁、迁移走 `try_transition`（非法迁移返回 False，不抛异常）、`STOPPING → ERROR` 合法。回归：`test_try_transition_never_raises`、`test_stopping_can_go_to_error`、`test_concurrent_stop_requests_do_not_raise`。
+- [ ] ⚠️ 停止 / 互斥 / 关窗（评审 P2-3/P2-4/P2-5/P2-6）：长等待必须切片可中断；任务与调试测试**双向互斥**；「停止」对调试测试同样有效；`closeEvent` 必须等齐全部后台线程（任务/调试/框选/截图），超时记 ERROR。回归：`test_repeat_click_interval_is_interruptible`、`test_debug_test_rejected_while_task_is_running`、`test_start_rejected_while_debug_test_is_running`、`test_stop_button_works_for_debug_test_without_ever_starting_task`、`test_close_event_waits_for_all_background_threads`。
+- [ ] ⚠️ 急停热键注册失败必须**在界面显著提示**（状态栏 + 设置页红字），不能只写日志；重载/恢复默认后重新注册热键（评审 P3-9）。回归：`test_hotkey_failure_is_visible_in_ui`、`test_reload_and_reset_reapply_hotkey`。
+- [ ] ⚠️ 取景回退必须覆盖"主路径抛异常"（评审 P2-7，最终错误带上主因）；窗口诊断截图必须走同一取景链（真 PNG + 黑帧检测），不得存纯黑图却报成功（评审 P2-9）；框选对话框建目录失败要给提示不崩（评审 P2-8）。回归：`test_capture_client_bgr_falls_back_when_primary_raises`、`test_screenshot_client_saves_real_png_via_capture_chain`、`test_diagnose_window_reports_blank_frame_instead_of_claiming_success`、`test_save_selection_reports_unwritable_dir`。
+- [ ] ⚠️ 滑动每一步移动都要核对返回值（失败即报可读错误，不得当滑过去了）；`send_key_hold` 切片下限钳到 `max(slice, 0.01)`（0 切片会死循环）（评审 P3-8/P3-10）。回归：`test_send_left_drag_reports_failure_when_move_fails`、`test_send_key_hold_tolerates_zero_slice`。
 
 ## 11. 合规与安全红线 ⚠️
 
