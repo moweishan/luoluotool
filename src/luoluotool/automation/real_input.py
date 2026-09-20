@@ -27,6 +27,18 @@ from luoluotool.utils.keys import (  # 键名表与组合键解析（config 层�
     parse_combo,
 )
 
+
+# 滑动路径几何（缓出曲线 / 分帧插值）；ease_out_quad 为兼容旧用法一并再导出
+from luoluotool.automation.drag_path import (
+    DRAG_MIN_STEPS,
+    DRAG_STEP_SECONDS,
+    DRAG_TAIL_HOLD_STEPS,
+    build_drag_path,
+    ease_out_quad,
+    interpolate_points,
+)
+
+
 logger = logging.getLogger(__name__)
 
 # ctypes 入口集中在这里（测试会整体替换为假实现，保证单测零真实输入）
@@ -58,10 +70,8 @@ INPUT_SETTLE_SECONDS = 0.08  # 光标到位后到按下之间的等待（给游�
 FRONT_SETTLE_SECONDS = 0.20  # 置前/置顶后到下一次动作之间的等待
 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN = 76, 77, 78, 79
 
-# ---- 键盘：时序常量（键名表与组合键解析在 utils/keys.py，config 层也要用） ----
-DRAG_STEP_SECONDS = 0.016   # 滑动插值步长（≈60Hz）
-DRAG_MIN_STEPS = 4
-DRAG_TAIL_HOLD_STEPS = 4    # 松手前在终点保持静止的帧数（消除"甩动惯性"导致的画面继续飘）
+
+# ---- 时序常量（键盘 + 滑动等待；滑动路径几何已搬到 drag_path.py） ----
 DRAG_PRESS_SETTLE_SECONDS = 0.05
 DRAG_RELEASE_SETTLE_SECONDS = 0.06
 DRAG_RESTORE_DELAY_SECONDS = 0.25   # 松手后到"还原光标"之间的延迟（等引擎处理完抬起）
@@ -382,53 +392,6 @@ def _key_input(vk: int, up: bool, scan: int | None = None) -> INPUT:
     # 有扫描码时 wVk 传 0（与真实硬件一致）；没有扫描码时回退用虚拟键码
     item.u.ki = KEYBDINPUT(0 if scan else int(vk), scan, flags, 0, None)
     return item
-
-
-def ease_out_quad(t: float) -> float:
-    """缓出曲线（纯函数）：`1 - (1 - t)²`，先快后慢、终点速度为 0。"""
-    return 1 - (1 - float(t)) ** 2
-
-
-def interpolate_points(
-    start: tuple[int, int],
-    end: tuple[int, int],
-    steps: int,
-    easing: Callable[[float], float] | None = None,
-) -> list[tuple[int, int]]:
-    """纯函数：在起点与终点之间插值出 `steps` 个中间点（不含起点、含终点）。
-
-    真实鼠标滑动必须分帧移动：一次跳跃式移动会被很多游戏识别为瞬移而不是拖拽。
-    `easing` 为 None 时线性；给定时按 `easing(进度)` 采样（拖动用缓出曲线）。
-    """
-    count = max(int(steps), 1)
-    sx, sy = int(start[0]), int(start[1])
-    ex, ey = int(end[0]), int(end[1])
-    points: list[tuple[int, int]] = []
-    for index in range(1, count + 1):
-        progress = index / count
-        fraction = easing(progress) if easing is not None else progress
-        points.append((round(sx + (ex - sx) * fraction), round(sy + (ey - sy) * fraction)))
-    return points
-
-
-def build_drag_path(
-    start: tuple[int, int],
-    end: tuple[int, int],
-    steps: int,
-    tail_hold_steps: int = DRAG_TAIL_HOLD_STEPS,
-) -> list[tuple[int, int]]:
-    """生成拖动轨迹（纯函数）：**缓出采样** + 末尾在终点保持静止若干帧。
-
-    为什么要缓出 + 末尾静止：很多游戏把"匀速甩到底再松手"识别成 flick，
-    松手后镜头/画面会带着惯性继续飘。减速到静止再松手，引擎才会判定为"停住后松手"。
-    """
-    ex, ey = int(end[0]), int(end[1])
-    path = interpolate_points(start, end, max(int(steps), DRAG_MIN_STEPS), easing=ease_out_quad)
-    if path:
-        path[-1] = (ex, ey)             # 保证末点精确落在终点
-    hold = max(int(tail_hold_steps), 0)
-    path.extend([(ex, ey)] * hold)      # 末尾静止保持（松手前的"停住"）
-    return path
 
 
 def restore_cursor_smooth(
