@@ -5,7 +5,7 @@ import logging
 import numpy as np
 import pytest
 
-from luoluotool.automation import vision
+from luoluotool.automation import multiscale, vision
 
 
 def _pattern(height: int = 10, width: int = 20) -> np.ndarray:
@@ -414,22 +414,23 @@ def test_default_scale_range_is_fast_then_extended() -> None:
     """默认范围 0.3x–4.0x，且必须**分两档**搜：先 0.3x–2.0x 快搜，找不到才扩到 0.3x–4.0x。"""
     assert vision.DEFAULT_SCALE_RANGE == (0.30, 4.00)
     assert vision.SCALE_FAST_MAX == 2.00
-    assert vision._scale_tiers(vision.DEFAULT_SCALE_RANGE) == [(0.30, 2.00), (0.30, 4.00)]
-    assert vision._scale_tiers((0.8, 1.2)) == [(0.8, 1.2)]        # 范围本来就窄：只有一档
-    assert vision._scale_tiers((2.5, 3.0)) == [(2.5, 3.0)]        # 整段都在快搜上界之上：也一档
-    assert vision._scale_tiers((1.0, 2.5)) == [(1.0, 2.00), (1.0, 2.5)]
+    # 拆分后（2026-09-20）多尺度搜索在 automation.multiscale，vision 只再导出公共名字
+    assert multiscale._scale_tiers(multiscale.DEFAULT_SCALE_RANGE) == [(0.30, 2.00), (0.30, 4.00)]
+    assert multiscale._scale_tiers((0.8, 1.2)) == [(0.8, 1.2)]        # 范围本来就窄：只有一档
+    assert multiscale._scale_tiers((2.5, 3.0)) == [(2.5, 3.0)]        # 整段都在快搜上界之上：也一档
+    assert multiscale._scale_tiers((1.0, 2.5)) == [(1.0, 2.00), (1.0, 2.5)]
 
 
 def _record_scales(monkeypatch, original: np.ndarray) -> list[float]:
     """记录多尺度搜索实际评估过的缩放比例（由候选模板宽度反推）。"""
-    real_score = vision._best_score
+    real_score = multiscale._best_score
     seen: list[float] = []
 
     def recording(source: np.ndarray, template: np.ndarray) -> float:
         seen.append(round(template.shape[1] / original.shape[1], 3))
         return real_score(source, template)
 
-    monkeypatch.setattr(vision, "_best_score", recording)
+    monkeypatch.setattr(multiscale, "_best_score", recording)
     return seen
 
 
