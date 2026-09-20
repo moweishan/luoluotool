@@ -93,6 +93,7 @@ src/luoluotool/
     pages/order_hold.py       56  卡订单页
     pages/planned_feature.py  51  功能三/四公共基类（占位页）
     pages/feature3.py,4.py    13  功能三/四页（占位子类）
+    pages/about.py           213  「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断/打开目录）
     dialogs/crop_dialog.py   273  框选截图生成模板（CropView + TemplateCropDialog）
     layout_measure.py        283  --measure-layout 的测量与报告（ASCII 安全）
     widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
@@ -663,6 +664,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
 | `DebugPage` | `gui/pages/debug.py:67` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
+| `AboutPage` | `gui/pages/about.py:67` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
+| `diagnostics_text` | `gui/pages/about.py:193` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
 | `_on_debug_test` / `run_debug_action` | `gui/main_window.py:429` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
 | `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:470` / `:497` | 框选回填 / 框选入口（门禁 + 后台截图） |
 | `_debug_actions_allowed` | `gui/main_window.py:421` | 开发者调试门禁 |
