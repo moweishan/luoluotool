@@ -110,17 +110,43 @@ def test_settings_page_binds_ask_elevation_switch() -> None:
     page.close()
 
 
-def test_settings_page_binds_restore_cursor_switch() -> None:
-    """设置页「每次点击后把真实鼠标移回原位置」绑定 automation.restore_cursor_after_click。"""
+def test_settings_page_no_longer_has_restore_cursor_switch() -> None:
+    """「点击后还原真实鼠标位置」已按用户要求挪到开发者调试页，设置页不再有该控件。"""
     config = AppConfig.default()
     page = SettingsPage(config, lambda: None)
-    assert page.restore_cursor_box.isChecked() is True  # 默认还原
+    assert not hasattr(page, "restore_cursor_box")
+    page.close()
+
+
+def test_debug_page_binds_restore_cursor_switch() -> None:
+    """调试页「点击后把真实鼠标移回原位置」绑定 automation.restore_cursor_after_click。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = DebugPage(config, lambda: None)
+    assert page.restore_cursor_box.isChecked() is True      # 默认还原
     page.restore_cursor_box.setChecked(False)
     assert config.automation.restore_cursor_after_click is False
+
     config2 = AppConfig.default()
+    config2.automation.developer_mode = True
     config2.automation.restore_cursor_after_click = False
     page.set_config(config2)
     assert page.restore_cursor_box.isChecked() is False
+    page.close()
+
+
+def test_debug_page_restore_cursor_switch_inert_without_developer_mode() -> None:
+    """开发者调试未开启：还原光标开关同样不生效（回滚勾选、不写配置）。"""
+    from luoluotool.gui.pages.debug import DebugPage
+
+    config = AppConfig.default()          # developer_mode 默认 false
+    page = DebugPage(config, lambda: None)
+    page.restore_cursor_box.setChecked(False)
+    assert config.automation.restore_cursor_after_click is True
+    assert page.restore_cursor_box.isChecked() is True
+    assert "不生效" in page.status_label.text()
     page.close()
 
 

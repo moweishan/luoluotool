@@ -85,6 +85,19 @@ class DebugPage(ScrollablePage):
         self.dry_run_box.toggled.connect(self._on_dry_run_toggled)
         layout.addWidget(self.dry_run_box)
 
+        # ---- 还原真实光标（从设置页移入，2026-09-20 用户要求） ----
+        self.restore_cursor_box = QCheckBox(
+            "点击/滑动后把真实鼠标移回原位置（关闭则光标停在操作位置）"
+        )
+        self.restore_cursor_box.setToolTip(
+            "开启：每次操作结束后把真实光标移回原位（滑动会先延迟再分帧移回）；\n"
+            "关闭：光标停在点击/滑动结束的位置 —— 排查「游戏不认这次点击」时建议关掉，\n"
+            "少一个变量（也可能是光标立刻跳走导致游戏把点击当成指针已移出窗口）。\n"
+            "该选项同样需要开启设置页的「开发者调试」才生效。"
+        )
+        self.restore_cursor_box.toggled.connect(self._on_restore_cursor_toggled)
+        layout.addWidget(self.restore_cursor_box)
+
         # ---- 窗口诊断 + 布局测量（从设置页移入 / 布局回归工具） ----
         diagnose_row = QHBoxLayout()
         self.diagnose_button = QPushButton("窗口诊断（查找游戏窗口并截图）")
@@ -275,6 +288,9 @@ class DebugPage(ScrollablePage):
         self.dry_run_box.blockSignals(True)
         self.dry_run_box.setChecked(config.automation.dry_run)
         self.dry_run_box.blockSignals(False)
+        self.restore_cursor_box.blockSignals(True)
+        self.restore_cursor_box.setChecked(config.automation.restore_cursor_after_click)
+        self.restore_cursor_box.blockSignals(False)
         self.vision_annotate_box.blockSignals(True)
         self.vision_annotate_box.setChecked(config.automation.save_vision_annotations)
         self.vision_annotate_box.blockSignals(False)
@@ -335,6 +351,18 @@ class DebugPage(ScrollablePage):
             self.set_status("开发者调试未开启：本页所有选项不生效（干跑开关未修改）")
             return
         self._config.automation.dry_run = self.dry_run_box.isChecked()
+        self._on_changed()
+
+    def _on_restore_cursor_toggled(self) -> None:
+        """还原光标开关（从设置页移入）：仅在「开发者调试」开启时生效；未开启则回滚、不写配置。"""
+        if not self._config.automation.developer_mode:
+            logger.warning("开发者调试未开启，忽略还原光标开关变更（本页选项不生效）")
+            self.restore_cursor_box.blockSignals(True)
+            self.restore_cursor_box.setChecked(self._config.automation.restore_cursor_after_click)
+            self.restore_cursor_box.blockSignals(False)
+            self.set_status("开发者调试未开启：本页所有选项不生效（还原光标开关未修改）")
+            return
+        self._config.automation.restore_cursor_after_click = self.restore_cursor_box.isChecked()
         self._on_changed()
 
     def _on_vision_annotate_toggled(self) -> None:

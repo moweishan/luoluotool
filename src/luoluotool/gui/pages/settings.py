@@ -1,4 +1,4 @@
-"""设置页：点击间隔、失败上限、点击后还原鼠标、提权开关、开发者调试开关；干跑与窗口诊断在调试页。"""
+"""设置页：点击间隔、失败上限、提权开关、开发者调试开关；干跑/还原光标与窗口诊断在调试页。"""
 
 from collections.abc import Callable
 
@@ -23,8 +23,8 @@ FAILURES_MAX = 100
 
 
 class SettingsPage(ScrollablePage):
-    """绑定 automation.click_interval_ms/max_consecutive_failures/restore_cursor_after_click/
-    developer_mode；干跑开关与窗口诊断已移入「开发者调试」页。"""
+    """绑定 automation.click_interval_ms/max_consecutive_failures/developer_mode/
+    ask_elevation_on_start/failsafe_hotkey；干跑开关、还原光标开关与窗口诊断已移入「开发者调试」页。"""
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
@@ -43,8 +43,8 @@ class SettingsPage(ScrollablePage):
         self.elevation_hint_label.setVisible(False)
         self.developer_box = QCheckBox("开发者调试（在顶部显示「开发者调试」标签页）")
         self.developer_box.setToolTip(
-            "勾选后顶部会出现「开发者调试」标签页：窗口诊断、干跑开关，以及鼠标单点/连点、"
-            "屏幕滑动、键盘输入四个测试按钮（真实模式下会真的操作鼠标键盘）。"
+            "勾选后顶部会出现「开发者调试」标签页：窗口诊断、干跑开关、还原光标开关，以及鼠标单点/连点、"
+            "屏幕滑动、键盘输入四个测试按钮，以及图像识别匹配测试（真实模式下会真的操作鼠标键盘）。"
         )
         self.restart_admin_button = QPushButton("以管理员身份重启")
         self.restart_admin_button.setToolTip(
@@ -54,7 +54,6 @@ class SettingsPage(ScrollablePage):
         self.ask_elevation_box = QCheckBox(
             "启动时询问是否提权（取消勾选 = 不再询问，直接以管理员身份重启）"
         )
-        self.restore_cursor_box = QCheckBox("每次点击/滑动后把真实鼠标移回原位置（滑动会松手后延迟再分帧移回）")
         click_row = QHBoxLayout()
         click_row.addWidget(QLabel("点击间隔"))
         click_row.addWidget(self.click_interval_spin)
@@ -71,7 +70,6 @@ class SettingsPage(ScrollablePage):
         layout.addLayout(failures_row)
         layout.addLayout(hotkey_row)
         layout.addWidget(self.ask_elevation_box)
-        layout.addWidget(self.restore_cursor_box)
         layout.addWidget(self.elevation_hint_label)
         layout.addWidget(self.developer_box)
         layout.addWidget(self.restart_admin_button)
@@ -79,7 +77,6 @@ class SettingsPage(ScrollablePage):
         self.click_interval_spin.valueChanged.connect(self._on_click_interval_changed)
         self.failures_spin.valueChanged.connect(self._on_failures_changed)
         self.ask_elevation_box.toggled.connect(self._on_ask_elevation_toggled)
-        self.restore_cursor_box.toggled.connect(self._on_restore_cursor_toggled)
         self.hotkey_combo.currentTextChanged.connect(self._on_hotkey_changed)
         self.developer_box.toggled.connect(self._on_developer_toggled)
         self.set_config(config)
@@ -97,9 +94,6 @@ class SettingsPage(ScrollablePage):
         self.ask_elevation_box.blockSignals(True)
         self.ask_elevation_box.setChecked(automation.ask_elevation_on_start)
         self.ask_elevation_box.blockSignals(False)
-        self.restore_cursor_box.blockSignals(True)
-        self.restore_cursor_box.setChecked(automation.restore_cursor_after_click)
-        self.restore_cursor_box.blockSignals(False)
         self.hotkey_combo.blockSignals(True)
         self.hotkey_combo.setCurrentText(automation.failsafe_hotkey or DEFAULT_HOTKEY_NAME)
         self.hotkey_combo.blockSignals(False)
@@ -117,10 +111,6 @@ class SettingsPage(ScrollablePage):
 
     def _on_ask_elevation_toggled(self) -> None:
         self._config.automation.ask_elevation_on_start = self.ask_elevation_box.isChecked()
-        self._on_changed()
-
-    def _on_restore_cursor_toggled(self) -> None:
-        self._config.automation.restore_cursor_after_click = self.restore_cursor_box.isChecked()
         self._on_changed()
 
     def _on_developer_toggled(self) -> None:
