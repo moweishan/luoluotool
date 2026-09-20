@@ -147,7 +147,7 @@ print('layer check violations =', bad)
 ### 主链路 A：图像识别（框选模板 → 识别 → 坐标）
 
 ```
-调试页「图片识别匹配测试」          gui/pages/debug.py:408   _on_vision_clicked()
+调试页「图片识别匹配测试」          gui/pages/debug.py:413   _on_vision_clicked()
   → 发信号 test_requested("vision", {images, threshold, max_results})
 主窗口分发                          gui/main_window.py:429  _on_debug_test()
   后台线程 _DebugTestThread.run     gui/workers.py:41  （不阻塞 GUI）
@@ -164,7 +164,7 @@ print('layer check violations =', bad)
 **框选生成模板**链路：
 
 ```
-调试页「框选截图生成模板」          gui/pages/debug.py:146   crop_button → crop_requested 信号
+调试页「框选截图生成模板」          gui/pages/debug.py:151   crop_button → crop_requested 信号
 主窗口门禁 + 后台截图               gui/main_window.py:497   _on_crop_requested()
   截图线程                          gui/workers.py:100   _CaptureThread → core/vision.py:212 capture_window()
   弹框（GUI 线程）                  gui/main_window.py:470   _on_capture_ready() → TemplateCropDialog
@@ -176,8 +176,8 @@ print('layer check violations =', bad)
 ### 主链路 C：鼠标单点 / 连点（含"点击时长"）
 
 ```
-调试页「鼠标单点测试」              gui/pages/debug.py:183   single_hold_spin（点击时长，ms）
-调试页「鼠标连点测试」              gui/pages/debug.py:210   repeat_hold_spin（连点每次都用它）
+调试页「鼠标单点测试」              gui/pages/debug.py:188   single_hold_spin（点击时长，ms）
+调试页「鼠标连点测试」              gui/pages/debug.py:215   repeat_hold_spin（连点每次都用它）
   → _on_single_clicked / _on_repeat_clicked 发信号 test_requested(kind, {...})
     载荷：single {x, y, hold_ms}｜repeat {x, y, count, interval_ms, hold_ms}
 主窗口分发                          gui/workers.py:69   run_debug_action
@@ -239,7 +239,7 @@ print('layer check violations =', bad)
 | 窗口坐标/屏幕坐标 | Windows 原生坐标 | 只在 `client_to_screen` / `ClientToScreen` 处出现 |
 
 - 客户区左上角在屏幕上的位置：`win32gui.ClientToScreen(hwnd, (0, 0))`。
-- **客户区在窗口内的偏移**：`automation/window.py:82 client_area_offset(hwnd)` =
+- **客户区在窗口内的偏移**：`automation/window.py:80 client_area_offset(hwnd)` =
   `ClientToScreen(0,0) - GetWindowRect左上角` = 标题栏高度 + 边框宽度。
   实测本作窗口 1618×1070 / 客户区 1600×1024 → **(9, 37)**；无边框全屏窗口为 (0, 0)。
 
@@ -307,6 +307,7 @@ capture_client_bgr (vision.py:393)
 | 19 | 占位任务只允许"日志 + 心跳 + 响应停止"，禁止任何输入/读 params | 占位功能偷偷干活 | `test_placeholder_feature_tasks_do_not_touch_input_protocol` |
 | 20 | 分层：`core` 不 import PySide6/win32；`automation` 不 import PySide6 | 层次崩坏、单测无法脱离 GUI | 第 ② 节的自检命令 |
 | 21 | 构建产物（`dist/ build/ *.exe *.pyd *.dll *.zip`）不入库 | 仓库被几十 MB 二进制污染 | `test_no_build_artifacts_are_tracked`、`test_gitignore_covers_build_artifacts` |
+| 22 | **同一件事只有一份**：模块级 import 不被同名赋值遮蔽；上限/范围常量只在 `core`/`config` 定义一处（界面导入它）；`PW_*` 只定义一处；测试夹具只有 `tests/gui_helpers.py` 一份；源文件与测试文件都 ≤ 600 行 | "改一处漏一处"：界面与校验各用一份常量 → 存得下、读不回来 | `tests/test_source_guards.py` 四条守卫（import 遮蔽 / 行数硬线 / `PW_*` 单一定义 / 调试页范围与 `core.debug` 同一对象） |
 
 ---
 
@@ -350,6 +351,16 @@ capture_client_bgr (vision.py:393)
 | 22 | 调试测试跑着**「停止」按不动**；任务与调试测试能同时跑；关窗后线程还在注入输入 | 「停止」只认任务线程；两条启动路径互不检查；`closeEvent` 不等线程；空闲等待是整段 `sleep` | 停止按钮按 `_long_job_running`（任务或调试）判定；`_start`/`_on_debug_test` 双向互斥；`closeEvent` 走 `_wait_for_threads()`（4 个线程，超时记 ERROR）；调试等待改可中断分片 | `test_stop_button_works_for_debug_test_without_ever_starting_task`、`test_debug_test_rejected_while_task_is_running`、`test_close_event_waits_for_all_background_threads`、`test_repeat_click_interval_is_interruptible` / `501c039`、`af52571` |
 | 23 | 窗口诊断报"成功"，但存下来的截图是**纯黑图**；取景主路径一抛异常就整体失败 | 诊断截图自带一套 PrintWindow 实现（本作必黑却报成功）；`capture_client_bgr` 的回退链只处理"黑帧"不处理"异常" | 诊断截图改为复用 `capture_client_bgr`（真 PNG + 黑帧检测，全失败给可读错误）；回退链把主路径包进 `try/except` 并在错误里带主因 | `test_screenshot_client_saves_real_png_via_capture_chain`、`test_diagnose_window_reports_blank_frame_instead_of_claiming_success`、`test_capture_client_bgr_falls_back_when_primary_raises` / `082468b` |
 | 24 | 并发点击"停止"会抛异常；`STOPPING → ERROR` 被当成非法（真实错误被状态机掩盖）；滑动某帧 move 失败却当滑过去了 | 状态读写无锁且迁移表有死路；`SendInput` 返回值被忽略 | `state` 加锁 + `try_transition`（非法迁移返回 False 不抛）、放行 `STOPPING → ERROR`；滑动逐帧核对返回值、失败即报错；`send_key_hold` 切片下限钳到 0.01s | `test_try_transition_never_raises`、`test_stopping_can_go_to_error`、`test_send_left_drag_reports_failure_when_move_fails`、`test_send_key_hold_tolerates_zero_slice` / `501c039`、`082468b` |
+
+> **第 25–27 条来自 2026-09-20 的第三轮审查（`reports/CODE_REVIEW_REPORT_20260920_3.md`，拆分重构复核：P2×1 / P3×4）**。
+> 这一轮的共同特征是**"同一件事被写了两份"**：常量两份、夹具三份、文档与签名不一致 ——
+> 单独看都不会立刻出错，但**改一处漏一处**时就会退化成第 18 条那种"配置被自己写坏"。
+
+| # | 症状（用户视角） | 根因 | 修法 | 回归测试 / 提交 |
+|---|---|---|---|---|
+| 25 | （**潜在**）"以后把按键步数上限调大"时，界面上能存下 25 步的配置，**下次启动却判它损坏并整份恢复默认** | `validation.py` 先 `from ...models import MAX_KEY_STEPS`，第 15 行又写了 `MAX_KEY_STEPS = 20` —— **同名赋值遮蔽了 import**；写入路径用 models 的、校验路径用本地的，两边今天都是 20 所以没暴露 | 删掉那行遮蔽（保留 import），上限只留 `config/models.py` 一份；并新增仓库级守卫：**任何模块级 import 都不得被同名赋值遮蔽** | `tests/test_source_guards.py::test_no_module_level_import_is_shadowed` / `a07b42a` |
+| 26 | （**潜在**）调试页允许填的坐标/间隔/次数与校验器各走各的，填进去了却在执行时被拒 | 同一组业务常量在两处各定义一份：`PW_*` 在 `vision.py` 与 `window.py` 各一份（后者是**死常量**）；`COORDINATE_MAX`/`INTERVAL_RANGE_MS`/`DURATION_RANGE_MS` 在 `core/debug.py` 与 `gui/pages/debug.py` 各一份 | 删掉 `window.py` 的死常量；调试页改为从 `core.debug` **导入**这些范围（`COUNT_RANGE` 由 `MAX_REPEAT` 推导）；守卫测试锁住"只允许定义一处 / 必须是同一个对象" | `test_printwindow_flags_are_defined_once`、`test_debug_page_limits_come_from_core_debug`、`test_sources_stay_under_line_limit` / `a07b42a` |
+| 27 | 三处"小而真"的债：接口表写了不存在的参数、共享夹具抽了但旧文件仍各有副本（三份行为已分歧）、跨模块 `from ... import _prepare` 引用私有名 | 拆分时只搬了代码，没顺手收敛"文档/夹具/私有名"这三类**隐形重复** | 接口表改成真实签名 `capture_client_bgr(hwnd)`；`test_gui_config/test_gui_layout/test_gui_smoke` 改用 `gui_helpers.window_factory`（并给它补 `tmp_path`/`developer_mode` 支持，全仓库只剩一份夹具）；`_prepare` → 公开名 `prepare_for_match` 并写进 §8 接口表 | 三个测试文件全绿（116 passed）；`gui_helpers.window_factory` 唯一副本 / `a07b42a`、`00a348b` |
 
 ---
 
@@ -612,8 +623,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `capture_client_bgr` | `automation/vision.py:58` | 取景入口（含回退链） |
 | `_render_client_bits_bitblt` | `automation/vision.py:211` | **BitBlt 路径（源点必须客户区偏移）** |
 | `_render_client_bits_printwindow` | `automation/vision.py:155` | PrintWindow（整窗渲染 + 裁剪） |
-| `client_area_offset` | `automation/window.py:82` | 客户区在窗口内的偏移（唯一真源） |
-| `screenshot_client` | `automation/window.py:96` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
+| `client_area_offset` | `automation/window.py:80` | 客户区在窗口内的偏移（唯一真源） |
+| `screenshot_client` | `automation/window.py:94` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
 | `build_channel` | `automation/input_sender.py:516` | 干跑/真实通道选择 |
 | `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:457` / `:472` | 越界校验 |
 | `RealInputSender.click_at` / `drag` | `automation/input_sender.py:149` / `:273` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长） |
@@ -625,8 +636,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `window_under_point` / `describe_window` | `automation/real_input.py:166` / `:184` | 命中测试与窗口描述（诊断"点击落在谁身上"） |
 | `run_single_click` | `core/debug.py:98` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
 | `_validate_click_hold` | `core/debug.py:56` | 点击时长校验（0–5000 ms，整数、非布尔） |
-| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:183` / `:210` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
-| `restore_cursor_box` | `gui/pages/debug.py:89` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
+| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:188` / `:210` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
+| `restore_cursor_box` | `gui/pages/debug.py:94` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
 | `settings_page.developer_box` | `gui/pages/settings.py:48` | 设置页「开发者调试」开关（决定调试页是否挂载/生效） |
 | `show_hotkey_hint` | `gui/pages/settings.py:89` | 设置页红字提示（急停热键不可用等，评审 P3-9） |
 | `run_repeat_click` | `core/debug.py:124` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待，可被急停打断） |
@@ -636,7 +647,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_dialog.py:45` / `:167` | 框选几何与保存 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:233` / `:249` | **只保存选区** |
-| `DebugPage` | `gui/pages/debug.py:62` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
+| `DebugPage` | `gui/pages/debug.py:67` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `_on_debug_test` / `run_debug_action` | `gui/main_window.py:429` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
 | `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:470` / `:497` | 框选回填 / 框选入口（门禁 + 后台截图） |
 | `_debug_actions_allowed` | `gui/main_window.py:421` | 开发者调试门禁 |

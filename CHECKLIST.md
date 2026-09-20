@@ -140,6 +140,7 @@
 - [ ] `git diff --stat` 只涉及该阶段允许的文件。
 - [ ] 净增代码 ≤ 300 行。
 - [ ] 无新增依赖（或已在 requirements 中声明并说明理由）。
+- [ ] ⚠️ **同一件事只有一份**（第三轮评审 P2-1/P3-3）：模块级 import 不得被同名赋值遮蔽；上限/范围常量只在 `config/models.py` 或 `core/*` 定义一处（GUI 从那里导入，**不得再写一遍数字**）；死常量删掉；测试夹具全仓库只有 `tests/gui_helpers.py` 一份。四条守卫在 `tests/test_source_guards.py`（import 遮蔽 / 600 行硬线 / `PW_*` 单一定义 / 调试页范围与 `core.debug` 同一对象），必须全绿。
 - [ ] 无文件超过 600 行（`src/` 与 `tests/` 都算；2026-09-20 拆完 `vision.py`(319)/`real_input.py`(583)/`main_window.py`(532) 之后，源文件全部在硬线内）。
 - [ ] ⚠️ 拆文件时按 AGENTS §2「文件长度控制」执行：脚本按 AST 行区间纯搬运 + AST 逐定义比对一致 + 旧名字再导出 + **测试里 `monkeypatch.setattr(模块, "名字")` 的目标同步搬**（否则补丁静默失效）+ 重跑全量/冒烟/布局测量 + 刷新 `BUG_HUNT_GUIDE.md` 附录索引（`python tools/check_guide_index.py` 0 漂移）。
 - [ ] `git status` 干净：无 `user_data/config.json`、`logs/`、截图、构建产物混入。
