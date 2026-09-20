@@ -433,6 +433,30 @@ def test_debug_page_vision_remove_and_clear_templates() -> None:
     page.close()
 
 
+def test_debug_page_vision_add_dialog_opens_templates_dir(monkeypatch) -> None:
+    """「添加图片…」对话框默认打开识别图片目录 assets/templates（用户 2026-09-20 要求）。"""
+    from luoluotool.gui.pages import debug as debug_page
+    from luoluotool.utils.paths import get_templates_dir
+
+    config = AppConfig.default()
+    config.automation.developer_mode = True
+    page = debug_page.DebugPage(config, lambda: None)
+    seen: list[tuple] = []
+
+    def fake_dialog(parent, title, directory, filter_text):
+        seen.append((title, directory, filter_text))
+        return ([], "")
+
+    monkeypatch.setattr(debug_page.QFileDialog, "getOpenFileNames", fake_dialog)
+
+    page.vision_add_button.click()
+
+    assert len(seen) == 1, "「添加图片…」应该弹出一次文件选择对话框"
+    assert seen[0][1] == str(get_templates_dir()), "对话框的起始目录必须是识别图片目录"
+    assert "*.png" in seen[0][2]
+    page.close()
+
+
 def test_debug_page_vision_group_is_visible_without_scrolling() -> None:
     """回归：图片识别匹配测试必须排在最前面（曾排在页尾，需要滚动才能看到）。"""
     from PySide6.QtWidgets import QGroupBox

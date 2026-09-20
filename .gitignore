@@ -33,7 +33,14 @@ logs/
 user_data/config.json
 user_data/config.json.bak-*
 user_data/debug/
+# 图像识别图片（个人素材，不入库；目录靠 .gitkeep 入库）
+# assets/templates/：用户自己整理/命名的识别图片；assets/anchors/：框选截图生成模板的落盘目录
 assets/anchors/*.png
+assets/templates/*.png
+assets/templates/*.jpg
+assets/templates/*.jpeg
+assets/templates/*.bmp
+assets/templates/*.webp
 
 # 编辑器
 .idea/

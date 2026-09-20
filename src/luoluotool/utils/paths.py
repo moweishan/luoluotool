@@ -1,4 +1,4 @@
-"""运行时路径解析：user_data/ 与 logs/ 目录。"""
+"""运行时路径解析：user_data/ 与 logs/ 目录，以及 assets/ 下的图片目录。"""
 
 import logging
 from pathlib import Path
@@ -48,3 +48,16 @@ def get_anchors_dir() -> Path:
     该目录已在 .gitignore 中排除 *.png：模板属于个人素材，不入库。
     """
     return _ensure_dir(PROJECT_ROOT / "assets" / "anchors")
+
+
+def get_templates_dir() -> Path:
+    """返回图像识别图片目录 assets/templates（不存在则创建）。
+
+    与 `get_anchors_dir()` 的分工（2026-09-20 用户要求）：
+    - `assets/templates/`：**用户自己整理/命名的识别图片**（如 `鸡舍_白天.png`）——
+      调试页「添加图片…」对话框默认打开这里；
+    - `assets/anchors/`：**框选截图生成模板**的落盘目录（`anchor_<时间戳>.png`）。
+
+    两个目录里的图片都是个人素材，已在 .gitignore 中排除（目录本身靠 `.gitkeep` 入库）。
+    """
+    return _ensure_dir(PROJECT_ROOT / "assets" / "templates")

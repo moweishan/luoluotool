@@ -45,6 +45,7 @@ from luoluotool.core.debug import (
     MAX_REPEAT,
 )
 from luoluotool.gui.widgets import ScrollablePage
+from luoluotool.utils.paths import get_templates_dir
 
 logger = logging.getLogger(__name__)
 
@@ -422,9 +423,16 @@ class DebugPage(ScrollablePage):
         })
 
     def _on_vision_add_clicked(self) -> None:
-        """添加模板图片（可多选）；多张之间按列表顺序逐张尝试。"""
+        """添加模板图片（可多选）；多张之间按列表顺序逐张尝试。
+
+        对话框默认打开识别图片目录 `assets/templates`（用户 2026-09-20 要求）——
+        平时把要用的识别图片放进那个文件夹，这里直接挑选即可。
+        """
         paths, _ = QFileDialog.getOpenFileNames(
-            self, "选择模板图片（可多选）", "", "图片 (*.png *.jpg *.jpeg *.bmp)"
+            self,
+            "选择模板图片（可多选）",
+            str(get_templates_dir()),
+            "图片 (*.png *.jpg *.jpeg *.bmp *.webp)",
         )
         added = sum(1 for path in paths if path and self.add_vision_template(path))
         if paths:
