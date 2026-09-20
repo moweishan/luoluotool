@@ -101,8 +101,12 @@ def load_template(path: str | Path) -> np.ndarray:
     return image
 
 
-def _prepare(image: np.ndarray, grayscale: bool) -> np.ndarray:
-    """按匹配需要准备图像：灰度化（默认）或保持 BGR；灰度输入原样返回。"""
+def prepare_for_match(image: np.ndarray, grayscale: bool) -> np.ndarray:
+    """按匹配需要准备图像：灰度化（默认）或保持 BGR；灰度输入原样返回。
+
+    公开名字（原 `_prepare`）：`automation/multiscale.py` 也要用同一种预处理，
+    跨模块引用私有名下划线名会让"这只是内部实现"的意图失效（评审 P3-4）。
+    """
     if not grayscale:
         return image
     if image.ndim == 2:
@@ -124,8 +128,8 @@ def locate_all(
     - 结果按匹配度降序，并用 NMS 去掉互相重叠的重复命中（同一个目标只留一个）；
     - 模板比截图还大时抛 `VisionError`（这种调用没有意义，容易掩盖配置错误）。
     """
-    source = _prepare(haystack, grayscale)
-    target = _prepare(template, grayscale)
+    source = prepare_for_match(haystack, grayscale)
+    target = prepare_for_match(template, grayscale)
     source_h, source_w = source.shape[:2]
     target_h, target_w = target.shape[:2]
     if target_h > source_h or target_w > source_w:

@@ -36,15 +36,20 @@ from luoluotool.core.debug import (
 from luoluotool.core.debug import (
     DEFAULT_CLICK_HOLD_MS as DEFAULT_CLICK_HOLD_MS_UI,
 )
+# 界面输入范围必须是 core.debug 那一份常量（评审 P3-3）：否则"界面允许填的"与"校验接受的"
+# 可能各走各的，用户能存下自己读不回来的参数（P1-2 同类根因）。
+from luoluotool.core.debug import (
+    COORDINATE_MAX,
+    DURATION_RANGE_MS,
+    INTERVAL_RANGE_MS,
+    MAX_REPEAT,
+)
 from luoluotool.gui.widgets import ScrollablePage
 
 logger = logging.getLogger(__name__)
 
 PAGE_TITLE = "开发者调试"
-COORDINATE_MAX = 10000
-COUNT_RANGE = (1, 200)
-INTERVAL_RANGE_MS = (50, 5000)
-DURATION_RANGE_MS = (50, 10000)
+COUNT_RANGE = (1, MAX_REPEAT)
 VISION_THRESHOLD_MIN = 0.30
 VISION_MAX_RESULTS_LIMIT = 500
 VISION_LIST_MIN_HEIGHT = 72

@@ -12,8 +12,6 @@ from luoluotool.utils.keys import parse_combo
 
 logger = logging.getLogger(__name__)
 
-MAX_KEY_STEPS = 20
-
 _LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
 _SECTIONS = (
     "features.daily_tasks",

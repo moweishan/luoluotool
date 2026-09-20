@@ -20,8 +20,8 @@ from luoluotool.automation.template_match import (
     DEFAULT_THRESHOLD,
     MIN_TEMPLATE_SIDE,
     Match,
-    _prepare,
     locate_all,
+    prepare_for_match,
 )
 
 
@@ -182,8 +182,8 @@ def locate_all_scaled(
     搜索分两档（`_scale_tiers`）：先 0.3x–2.0x 快搜，**没命中才**把范围扩到 0.3x–4.0x 继续搜；
     第二档不重复扫第一档的档位。返回的 `Match.scale` 是命中时用的缩放比例，坐标仍是**客户区坐标**。
     """
-    source = _prepare(haystack, grayscale)
-    target = _prepare(template, grayscale)
+    source = prepare_for_match(haystack, grayscale)
+    target = prepare_for_match(template, grayscale)
 
     strong_score = float(threshold) + SCALE_STRONG_MARGIN
     best: tuple[float, float] | None = None

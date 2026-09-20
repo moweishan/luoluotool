@@ -13,8 +13,6 @@ from luoluotool.automation.elevation import is_process_elevated, is_window_eleva
 
 logger = logging.getLogger(__name__)
 
-PW_CLIENTONLY = 1
-PW_RENDERFULLCONTENT = 2
 ERROR_ACCESS_DENIED = 5
 
 
