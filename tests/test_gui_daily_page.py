@@ -18,11 +18,13 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSpinBox,
+    QWidget,
 )
 
 from luoluotool.config.models import AppConfig
 from luoluotool.gui.pages.daily import (
     BUILDINGS,
+    DESIGN_CONTROL_IDS,
     LOOP_INTERVAL_DEFAULT,
     LOOP_INTERVAL_RANGE,
     DailyPage,
@@ -58,9 +60,9 @@ def test_daily_page_has_every_control_from_the_design() -> None:
     assert page.auto_produce_least.objectName() == "auto_produce_least"
     assert isinstance(page.auto_produce_least, QCheckBox)
 
-    for _title, prefix, _word, capture_id in BUILDINGS:
+    for _title, prefix, _word, ref_id, capture_id in BUILDINGS:
         island = page.findChild(QComboBox, f"{prefix}_island")
-        ref_edit = page.findChild(QLineEdit, f"{prefix}_ref_image")
+        ref_edit = page.findChild(QLineEdit, ref_id)
         pick = page.findChild(QPushButton, f"{prefix}_pick_image")
         capture = page.findChild(QPushButton, capture_id)
         assert island is not None and ref_edit is not None, prefix
@@ -70,6 +72,19 @@ def test_daily_page_has_every_control_from_the_design() -> None:
         assert ref_edit.isReadOnly() is True              # 只能通过「选择图片…」填
         assert page.findChild(QFrame, f"{prefix}_island_map") is not None
         assert page.findChild(QFrame, f"{prefix}_sample_image") is not None
+    page.close()
+
+
+def test_daily_page_control_names_match_the_design_ids() -> None:
+    """控件名必须**逐一等于设计稿的 id**（`DESIGN_CONTROL_IDS`）—— 设计稿与页面的对号契约。
+
+    这条是为了拦住"照设计稿抄名字时抄错/自己派生"：鸡舍那个文件框在设计稿里叫
+    `coop_island_ref_image`，按前缀派生成 `coop_ref_image` 就会被这里抓住。
+    """
+    page = _page()
+
+    missing = [name for name in DESIGN_CONTROL_IDS if page.findChild(QWidget, name) is None]
+    assert missing == [], f"这些设计稿里的 id 在页面里找不到：{missing}"
     page.close()
 
 
@@ -94,7 +109,7 @@ def test_daily_page_keeps_the_designed_tooltips() -> None:
     assert page.findChild(QComboBox, "coop_island").toolTip() == "选择鸡舍所在的岛屿编号"
     assert page.findChild(QComboBox, "land_island").toolTip() == "选择土地所在的岛屿编号"
     assert page.findChild(QComboBox, "aqua_island").toolTip() == "选择水产养殖所在的岛屿编号"
-    assert "只能选择图片" in page.findChild(QLineEdit, "coop_ref_image").toolTip()
+    assert "只能选择图片" in page.findChild(QLineEdit, "coop_island_ref_image").toolTip()
     assert "最少" in page.auto_produce_least.toolTip()
     page.close()
 
@@ -115,31 +130,39 @@ def test_daily_page_keeps_the_designed_labels_verbatim() -> None:
     page.close()
 
 
-def test_produce_check_is_read_only() -> None:
-    """用户 2026-09-21 要求：「自动识别那个产物少造那个」**只读** —— 看得见、点不动（也不灰掉）。
+def test_produce_check_is_read_only_today_but_is_a_saveable_switch() -> None:
+    """「自动识别那个产物少造那个」**当前只读**，但它是一个**要入库的开关**（用户 2026-09-21 明确）。
 
-    只读 ≠ 禁用：外观保持正常、tooltip 照常；但点不动、键盘也改不动，
-    而**程序里仍可改**（第 2 批按配置/程序判断来设置它的状态）。
+    - 只读 ≠ 禁用：看得见、点不动、tooltip 照常，但控件没被灰掉；
+    - **程序里仍可 `setChecked()`** —— 第 2 批要按配置（`data-key=auto_produce_least`，默认 False）把值写进去；
+    - 以后开放给用户＝把 `AUTO_PRODUCE_LEAST_READONLY` 改成 False（一行），
+      本用例前半段会跟着变、后半段（"它是要入库的开关"）永远成立。
     """
     from PySide6.QtCore import QPoint, Qt
     from PySide6.QtTest import QTest
+
+    from luoluotool.gui.pages.daily import AUTO_PRODUCE_LEAST_READONLY
 
     page = _page()
     box = page.auto_produce_least
     page.show()
     _APP.processEvents()
 
-    before = box.isChecked()
-    QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=QPoint(box.width() // 2, box.height() // 2))
-    _APP.processEvents()
+    if AUTO_PRODUCE_LEAST_READONLY:
+        before = box.isChecked()
+        QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=QPoint(box.width() // 2, box.height() // 2))
+        _APP.processEvents()
+        assert box.isChecked() is before                      # 点击不改变状态
+        assert box.isEnabled() is True                        # 但没有灰掉（不是"禁用"）
+        assert box.focusPolicy() == Qt.FocusPolicy.NoFocus    # 键盘也拿不到焦点
+        assert "只读" in box.text() and "只读" in box.toolTip()
+        assert box in page.read_only_widgets()
+    else:
+        assert "只读" not in box.text()                       # 已开放给用户：不再带只读标记
+        assert box not in page.read_only_widgets()
 
-    assert box.isChecked() is before                      # 点击不改变状态
-    assert box.isEnabled() is True                        # 但没有灰掉（不是"禁用"）
-    assert box.focusPolicy() == Qt.FocusPolicy.NoFocus    # 键盘也拿不到焦点
-    assert "只读" in box.text() and "只读" in box.toolTip()
-
-    box.setChecked(not before)                            # 程序里照样能设置（第 2 批要用）
-    assert box.isChecked() is not before
+    box.setChecked(True)                                      # 无论如何，程序里都能设置它的值
+    assert box.isChecked() is True
     page.close()
 
 
@@ -147,8 +170,10 @@ def test_daily_page_action_buttons_are_present_but_disabled_in_this_batch() -> N
     """本批只做界面：要动游戏的按钮（选择图片 / 截取游戏画面）摆好但**禁用**，并说明原因。"""
     page = _page()
 
-    buttons = [page.findChild(QPushButton, f"{prefix}_pick_image") for _t, prefix, _w, _c in BUILDINGS]
-    buttons += [page.findChild(QPushButton, capture_id) for _t, _p, _w, capture_id in BUILDINGS]
+    buttons = [page.findChild(QPushButton, f"{prefix}_pick_image")
+               for _t, prefix, _w, _r, _c in BUILDINGS]
+    buttons += [page.findChild(QPushButton, capture_id)
+                for _t, _p, _w, _r, capture_id in BUILDINGS]
     assert len(buttons) == 6
     for button in buttons:
         assert button.isEnabled() is False, button.objectName()
@@ -170,9 +195,9 @@ def test_daily_page_does_not_touch_config_in_the_ui_only_batch() -> None:
     page.daily_enabled.setChecked(True)
     page.loop_interval_minutes.setValue(600)
     page.auto_produce_least.setChecked(True)
-    for _title, prefix, _word, _capture in BUILDINGS:
+    for _title, prefix, _word, ref_id, _capture in BUILDINGS:
         page.findChild(QComboBox, f"{prefix}_island").setCurrentIndex(4)
-        page.findChild(QLineEdit, f"{prefix}_ref_image").setText("D:/somewhere/shot.png")
+        page.findChild(QLineEdit, ref_id).setText("D:/somewhere/shot.png")
 
     assert config.to_dict() == before          # 配置一个字段都没变
     assert changes == []                       # 也没有请求保存
@@ -184,7 +209,7 @@ def test_daily_page_set_config_does_not_raise_and_resets_controls() -> None:
     page = _page()
     page.daily_enabled.setChecked(True)
     page.loop_interval_minutes.setValue(600)
-    page.findChild(QLineEdit, "coop_ref_image").setText("D:/x.png")
+    page.findChild(QLineEdit, "coop_island_ref_image").setText("D:/x.png")
 
     config2 = AppConfig.default()
     config2.features.daily_tasks.enabled = True
@@ -192,5 +217,5 @@ def test_daily_page_set_config_does_not_raise_and_resets_controls() -> None:
 
     assert page.daily_enabled.isChecked() is False          # 第 2 批才会读配置
     assert page.loop_interval_minutes.value() == LOOP_INTERVAL_DEFAULT
-    assert page.findChild(QLineEdit, "coop_ref_image").text() == ""
+    assert page.findChild(QLineEdit, "coop_island_ref_image").text() == ""
     page.close()

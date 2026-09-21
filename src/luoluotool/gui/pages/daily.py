@@ -54,17 +54,32 @@ LOOP_INTERVAL_DEFAULT = 30
 ISLAND_COUNT = 10                    # 岛屿编号下拉：1–10
 
 # 三个生产建筑分组（设计稿里是三段重复结构，这里用一份定义避免抄三遍）
-# (标题, 控件名前缀, "截取…位置" 的中间词, 截取按钮的 id)
-BUILDINGS: tuple[tuple[str, str, str, str], ...] = (
-    ("鸡舍", "coop", "鸡舍", "capture_game_screen"),
-    ("土地", "land", "土地", "land_capture_screen"),
-    ("水产养殖", "aqua", "水产养殖", "aqua_capture_screen"),
+# (标题, 控件名前缀, "截取…位置" 的中间词, 参考图输入框 id, 截取按钮 id)
+# **id 一律照抄设计稿**：鸡舍那个文件框在设计稿里叫 `coop_island_ref_image`（不是 coop_ref_image）
+BUILDINGS: tuple[tuple[str, str, str, str, str], ...] = (
+    ("鸡舍", "coop", "鸡舍", "coop_island_ref_image", "capture_game_screen"),
+    ("土地", "land", "土地", "land_ref_image", "land_capture_screen"),
+    ("水产养殖", "aqua", "水产养殖", "aqua_ref_image", "aqua_capture_screen"),
 )
 
 IMAGE_PENDING_NOTE = "（图片待放入）"
 BUTTON_PENDING_TIP = "第 1 批只做界面：这个按钮的功能还没接入（计划第 2/3 批实现）"
 READONLY_MARK = "（只读）"                       # 只读项统一在文案后加这个标记
 AUTO_PRODUCE_LEAST_TEXT = "自动识别那个产物少造那个"
+# 「自动识别那个产物少造那个」**暂定只读**（用户 2026-09-21 要求）：它仍然是一个**要入库的开关**
+# （设计稿 data-key＝`auto_produce_least`，第 2 批按它绑配置、默认 False），只是暂时不给用户改。
+# **以后开放给用户＝把这里改成 False**（文案上的「（只读）」标记与点击拦截一起生效）；
+# 别直接删只读逻辑，留着开关才能一行放开。
+AUTO_PRODUCE_LEAST_READONLY = True
+
+# 设计稿里所有可交互控件的 id（控件名必须逐一对应，有测试钉住）—— 改设计稿时同步这张表
+DESIGN_CONTROL_IDS: tuple[str, ...] = (
+    "daily_enabled",
+    "loop_interval_minutes",
+    *(name for _t, prefix, _w, ref_id, cap_id in BUILDINGS
+      for name in (f"{prefix}_island", ref_id, f"{prefix}_pick_image", cap_id)),
+    "auto_produce_least",
+)
 
 
 class DailyPage(ScrollablePage):
@@ -122,11 +137,12 @@ class DailyPage(ScrollablePage):
         box.setObjectName("group_buildings")
         layout = QVBoxLayout(box)
         layout.addWidget(_hint("功能说明：自动寻找生产建筑时由于每个人的建筑位置都不一样，所以需要手动配置"))
-        for title, prefix, label_word, capture_id in BUILDINGS:
-            layout.addWidget(self._building_box(title, prefix, label_word, capture_id))
+        for title, prefix, label_word, ref_id, capture_id in BUILDINGS:
+            layout.addWidget(self._building_box(title, prefix, label_word, ref_id, capture_id))
         return box
 
-    def _building_box(self, title: str, prefix: str, label_word: str, capture_id: str) -> QGroupBox:
+    def _building_box(self, title: str, prefix: str, label_word: str,
+                      ref_id: str, capture_id: str) -> QGroupBox:
         """一个生产建筑分组（鸡舍 / 土地 / 水产养殖共用同一套结构）。"""
         box = QGroupBox(title)
         box.setObjectName(f"group_{prefix}")
@@ -154,7 +170,7 @@ class DailyPage(ScrollablePage):
         left.addWidget(QLabel(f"截取{label_word}位置"))
 
         ref_edit = QLineEdit()
-        ref_edit.setObjectName(f"{prefix}_ref_image")
+        ref_edit.setObjectName(ref_id)                 # 照抄设计稿的 id（鸡舍那个带 island 字样）
         ref_edit.setReadOnly(True)
         ref_edit.setPlaceholderText("尚未选择图片")
         ref_edit.setMinimumWidth(180)
@@ -197,16 +213,20 @@ class DailyPage(ScrollablePage):
         box = QGroupBox("产物制造")
         box.setObjectName("group_produce")
         layout = QVBoxLayout(box)
-        # 用户 2026-09-21 要求：这一项**只读**（由程序自动判断，不给用户改）。
-        # 用事件过滤器"吃掉点击"而不是 setEnabled(False)：禁用的控件会灰掉（看着像"暂时不可用"），
-        # 而只读只需要"看得见、点不动、tooltip 照常能看"。
-        self.auto_produce_least = QCheckBox(f"{AUTO_PRODUCE_LEAST_TEXT}{READONLY_MARK}")
+        # 用户 2026-09-21 要求：这一项**暂时只读**（值仍要入库，以后开放给用户 —— 见
+        # `AUTO_PRODUCE_LEAST_READONLY` 的说明：把那个常量改成 False 就恢复可编辑）。
+        # 只读用"吃掉鼠标点击"而不是 setEnabled(False)：禁用会灰掉（看着像"暂时不可用"），
+        # 只读要的是"看得见、点不动、tooltip 照常"。
+        mark = READONLY_MARK if AUTO_PRODUCE_LEAST_READONLY else ""
+        self.auto_produce_least = QCheckBox(f"{AUTO_PRODUCE_LEAST_TEXT}{mark}")
         self.auto_produce_least.setObjectName("auto_produce_least")
         self.auto_produce_least.setToolTip(
-            "自动识别库存最少的产物并优先制造它（本项只读：由程序自动判断，不能手动修改）"
+            "自动识别库存最少的产物并优先制造它"
+            + ("（本项只读：暂由程序自动判断，不能手动修改）" if AUTO_PRODUCE_LEAST_READONLY else "")
         )
-        self.auto_produce_least.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # 空格/方向键也改不动它
-        self.auto_produce_least.installEventFilter(self)
+        self._read_only_widgets: set[QWidget] = set()
+        if AUTO_PRODUCE_LEAST_READONLY:
+            self._make_read_only(self.auto_produce_least)
         row = QHBoxLayout()
         row.addWidget(self.auto_produce_least)
         row.addStretch(1)
@@ -214,19 +234,30 @@ class DailyPage(ScrollablePage):
         return box
 
     # ---------------------------------------------------------------- 只读控件
-    def eventFilter(self, watched, event) -> bool:        # noqa: N802 (Qt 命名)
-        """拦住只读控件的鼠标交互（点击/双击/滚轮都不改它的值）。
+    def _make_read_only(self, widget: QWidget) -> None:
+        """把一个控件变成"只读"：看得见、点不动、tooltip 照常，但**不灰掉**。
 
-        只读与"禁用"的区别：**外观保持正常**（不灰掉），tooltip 与悬停照常，只是点不动；
-        程序里仍可 `setChecked()` 改它（第 2 批按配置/程序判断来设置）。
+        只读 ≠ 禁用：`setEnabled(False)` 会把控件灰掉（看着像"暂时不可用"），而只读要的是
+        "能看清、但不给改"。这里用事件过滤器吃掉鼠标交互，并让键盘也拿不到焦点；
+        程序里仍可 `setChecked()` —— 第 2 批要按配置/程序判断把值写进去。
         """
-        if watched is self.auto_produce_least and event.type() in (
+        widget.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        widget.installEventFilter(self)
+        self._read_only_widgets.add(widget)
+
+    def eventFilter(self, watched, event) -> bool:        # noqa: N802 (Qt 命名)
+        """拦住只读控件的鼠标交互（点击/双击都不会改它的值）。"""
+        if watched in self._read_only_widgets and event.type() in (
             QEvent.Type.MouseButtonPress,
             QEvent.Type.MouseButtonRelease,
             QEvent.Type.MouseButtonDblClick,
         ):
             return True
         return super().eventFilter(watched, event)
+
+    def read_only_widgets(self) -> tuple[QWidget, ...]:
+        """当前被设为只读的控件（测试与文档用；以后开放某项就把它的 `_make_read_only` 去掉）。"""
+        return tuple(sorted(self._read_only_widgets, key=lambda item: item.objectName()))
 
     # ---------------------------------------------------------------- 配置绑定
     def set_config(self, config: AppConfig) -> None:
@@ -239,11 +270,11 @@ class DailyPage(ScrollablePage):
         self.daily_enabled.setChecked(False)
         self.loop_interval_minutes.setValue(LOOP_INTERVAL_DEFAULT)
         self.auto_produce_least.setChecked(False)
-        for _title, prefix, _word, _capture in BUILDINGS:
+        for _title, prefix, _word, ref_id, _capture in BUILDINGS:
             island = self.findChild(QComboBox, f"{prefix}_island")
             if island is not None:
                 island.setCurrentIndex(0)
-            ref_edit = self.findChild(QLineEdit, f"{prefix}_ref_image")
+            ref_edit = self.findChild(QLineEdit, ref_id)
             if ref_edit is not None:
                 ref_edit.clear()
 
