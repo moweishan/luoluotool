@@ -58,8 +58,12 @@ class ZoomPanMixin:
         return int(round(self._scale() * 100))
 
     def zoom_relative_percent(self) -> int:
-        """相对"整图适配"的缩放百分比（100%＝整图刚好铺满；弹窗滑条用这个口径）。"""
+        """相对"整图适配"的缩放百分比（100%＝整图刚好铺满；弹窗滑条的**显示**用这个口径）。"""
         return int(round(self._zoom * 100))
+
+    def zoom_relative(self) -> float:
+        """相对"整图适配"的缩放倍数（浮点，不取整；滑条位置换算用它，避免来回丢精度）。"""
+        return float(self._zoom)
 
     def set_zoom_relative(self, zoom: float) -> bool:
         """按"相对整图适配的倍数"设置缩放，锚点＝选区中心（没选区则图像中心），画面不跳走。"""
@@ -100,10 +104,6 @@ class ZoomPanMixin:
             int(round(display.x() + target.x() * scale)),
             int(round(display.y() + target.y() * scale)),
         )
-
-    def set_zoom(self, zoom: float, anchor_widget: QPoint | None = None) -> bool:
-        """设置缩放倍数（夹在 [MIN_ZOOM, MAX_ZOOM]），`anchor_widget` 处的图像像素保持不动。"""
-        return self._set_zoom(zoom, anchor_widget=anchor_widget)
 
     def _set_zoom(self, zoom: float, anchor_widget: QPoint | None = None) -> bool:
         zoom = max(MIN_ZOOM, min(float(zoom), MAX_ZOOM))

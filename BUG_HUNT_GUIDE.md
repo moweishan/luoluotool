@@ -185,10 +185,10 @@ print('layer check violations =', bad)
   可辨识度提示 / 保存前检查（批 3） automation/template_match.py:101 assess_region_quality()（对比度 + 边缘占比）
      ↑ 界面侧                      gui/dialogs/crop_dialog.py:127  selection_quality() → selection_text():139
                                     几乎是纯色（is_blank_frame）时：不写文件、不关窗口，只说明原因
-  在本图试识别（D1）                gui/dialogs/crop_dialog.py:208  run_probe() → 后台线程 gui/workers.py:140
-     ↑ 判据                        core/vision.py:288  probe_region_on_image()（1:1 试匹配，看除自己外还有几处）
+  在本图试识别（D1）                gui/dialogs/crop_dialog.py:278  run_probe() → start_probe_thread()（workers.py）
+     ↑ 判据                        core/vision.py:288  probe_region_on_image()（1:1 试匹配，看除自己外还有几处；阈值＝调试页当前值）
      ↑ 结论展示                    gui/dialogs/crop_view.py:532  set_probe_rects()（橙色框 + 序号标注其它位置）
-                                    关窗必须等线程：crop_dialog.py:268 done() → _wait_for_probe_thread():260
+                                    关窗不阻塞：crop_dialog.py done() → _release_probe_thread()（request_stop + 交 ACTIVE_PROBES）
   缩放滑条（相对整图适配 50%–800%）  gui/dialogs/crop_dialog.py:123  zoom_slider → _on_zoom_slider_changed():237
      刻度换算（对数，互为反函数）    gui/dialogs/crop_dialog.py:65   zoom_slider_to_percent / zoom_percent_to_slider:77
   重置（视图归位 + 清空选区）        gui/dialogs/crop_dialog.py:249  reset_all()（含 zoom_to_fit + clear_selection）
@@ -391,6 +391,9 @@ capture_client_bgr (vision.py:393)
 | 30 | 模板要框的细节太小，**截图缩放后看不见自己在框哪个像素**；想核对坐标只能松手看信息行（用户同批选的批 2） | 视图只有"整图适配"一档缩放：没有放大/缩小（滚轮无效）、没有平移（`_pan` 字段还不存在）、没有倍率与鼠标坐标显示、没有像素级放大镜 | 批 2 五项视图功能：**滚轮缩放**（`_set_zoom` 以鼠标处图像像素为锚点，`[0.5, 8]` 夹取）、**中键/空格拖拽平移**（`_clamp_pan` 至少留 60px 可见）、「**适配窗口**」/「**1:1 显示**」（1 图像像素＝1 控件像素）、**HUD**（选区 + 缩放% + 鼠标客户区坐标）、**放大镜**（132px、6 倍整数放大、十字 + 坐标、贴鼠标靠边翻转、`leaveEvent` 收起）；期间修掉三个真 bug：`QRect.center()` 奇数尺寸少 1 像素导致整图适配偏 `(-1, -1)`、放大镜可见性误用选区矩形（没框选时永不显示）、悬停不重绘（放大镜停在上一帧） | `tests/test_gui_crop_zoom.py` 11 条（`test_wheel_zoom_scales_and_keeps_cursor_anchor`、`test_zoom_actual_makes_one_image_pixel_one_widget_pixel`、`test_zoom_fit_restores_the_initial_view`、`test_zoom_is_clamped_to_limits`、`test_middle_button_drag_pans_the_image`、`test_magnifier_follows_cursor_and_stays_inside_view`、`test_magnifier_source_rect_is_clamped_to_image`、`test_magnifier_paints_the_pixel_under_the_cursor`、`test_info_label_shows_zoom_and_cursor_position`、`test_hovering_repaints_so_the_magnifier_follows_the_cursor`、`test_mouse_leave_hides_the_magnifier_and_the_coordinate_hint`）+ `test_crop_view_fits_image_inside_widget`（居中回归）/ 本条提交 |
 | 31 | 框到一大块**没有细节的背景**（纯色/一片模糊）也照样存成模板；等到识别时才发现刷出一堆"匹配度 1.000"的假坐标（用户同批选的批 3；历史上实测过纯色 260x260 命中 20 处） | 保存路径只查"有没有选区、够不够 8px"，**不看选区长什么样**；`load_template` 的纯色守卫只在**读图**时生效 —— 用户白框一次、存下一个永远读不进来的文件（轻噪声/平滑渐变连读图都过得去，照样满屏误匹配） | 新增 `assess_region_quality()`：**对比度**（灰度标准差）+ **结构**（Canny 边缘占比），大图按步长抽样到 ≤128px（拖动时每次鼠标移动都要算，整图 ~10ms → 抽样 1.4ms）；三档 —— `flat`（几乎是纯色，判据**复用 `is_blank_frame`**）**拒绝保存**、`low`（一个或两个信号弱）**只提示**、`ok`；界面侧信息行常驻「辨识度…」，保存按钮与 `save_selection()` 双层拦截（纯色时不写文件、不关窗口）；阈值拿真实素材标定并加守卫测试 | `tests/test_automation/test_template_quality.py` 9 条（`test_pure_color_region_is_unusable`、`test_light_noise_region_is_unusable`、`test_flat_region_with_small_noise_is_flagged_but_allowed`、`test_large_noisy_flat_region_is_flagged_but_allowed`、`test_textured_region_is_usable`、`test_single_glyph_region_is_usable`、`test_smooth_gradient_is_reported_as_low_not_flat`、`test_real_templates_are_all_rated_usable`、`test_report_carries_size_and_metrics`）+ `tests/test_gui_crop.py` 4 条 / 本条提交 |
 | 32 | 框完还是**心里没数**："这块区域在画面里是不是独一无二？会不会一识别就选中别的地方？"（用户 2026-09-21 指定做 D1） | 弹窗只能"框 → 保存 → 关掉 → 去调试页识别"才知道结果；而模板就是从这张图裁的，**"命中 1 处"是必然的**，所以直接报命中数等于没说 | 新增「**在本图试识别**」（`core.vision.probe_region_on_image`）：把选区当模板在同图做 **1:1** 试匹配，`self_index` 标出"自己那一处"，**结论只看"除自己以外还有几处"**（0 处＝独一无二 / >0 处＝列出其它位置中心坐标并警告可能选错，触顶提示"可能还有更多"）；命中的别处用**橙框 + 序号**直接画在图上（`CropView.set_probe_rects`）；匹配走后台线程 `TemplateProbeThread`（全屏大模板 1–2s），**关窗口等它结束**（`done()` → `_wait_for_probe_thread`）；选区一变旧结论作废；纯色选区不试、直接提示换一块；零命中（理论不该发生）报成"异常请反馈" | `tests/test_core/test_vision_probe.py` 7 条 + `tests/test_gui_crop_probe.py` 6 条（`test_probe_marks_the_other_places_on_the_image`、`test_closing_waits_for_the_probe_thread` 等）/ 本条提交 |
+| 33 | 评审第四轮 P2-1（**可稳定复现的用户可见缺陷**）：**点一下再拖拽**，拖出来的框被丢弃，反而在图像左上角留下一个**看不见的 8×8 选区**，点保存就会存下这块 | 单击（按下→松开、没移动）留下 `QRect(x, y, 0, 0)` 的退化选区：`selection_in_image()` 判它无效、界面也画不出来，但它**还在内部状态里** → 下一次在附近按下时 `handle_rects()` 把 8 个手柄算成**完全重合**的一小块 → `hit_test` 判成 "nw"（拖手柄）→ `_start_rect` 因 `(QRect(0,0,0,0) or QRect())` 退化成空矩形 | 三处一起改（评审给的三条建议全采纳）：① `mouseReleaseEvent` 松手时丢弃小于 `MIN_SELECTION_SIZE` 的退化选区（`_discard_degenerate_selection`）；② `handle_rects()` 在绘制矩形小于 `HANDLE_SIZE_PX` 时返回 `{}`（不给手柄），`hit_test` 同步按"没有手柄"处理；③ 顺手把 `hit_test` 里重复算 8 次的手柄矩形收敛成一次（评审 P3-9）| `tests/test_gui_crop_edit.py::test_click_then_drag_frames_a_visible_selection`（离屏按评审的原始步骤复现）/ 本条提交 |
+| 34 | 评审第四轮 P2-2/P2-3/P2-4（试识别的**口径与生命周期**）：① 结论写着"识别不会认错"，但试识别是 1:1 + 固定阈值，正式识别是多尺度 + 用户阈值 —— 只会更乐观；② 跑的过程中改选区，旧结论会永久留在界面上；③ 关窗在 GUI 线程里 `wait(10 秒)`，超时照样关闭 = 把在跑的 QThread 丢给 GC；按钮还按 `isRunning()` 判定，可能把新线程引用清掉 | 试识别的三个"边界条件"都没对齐：阈值没往下传、结论没写成立条件、线程身份与销毁时机没管 | ① 阈值从调试页传进弹窗（`debug_page.vision_threshold()` → `TemplateCropDialog(..., threshold=...)`），结论措辞改成"**本图 1:1 匹配（阈值 X.XX）下**只命中你框的这一处"并说明正式识别还会搜缩放版本；② `_on_probe_finished` 比对 `result.region` 与当前选区，不一致就丢弃并提示"已作废"；③ 关窗改为 `request_stop()` + **只断开本弹窗的槽**（保住 `finished` 上的 `_unregister`）+ 线程由模块级 `ACTIVE_PROBES` 强引用到自然结束（`start_probe_thread()` 登记），按钮按 `probe_in_flight()` 判定、槽里按 `self.sender() is self._probe_thread` 保护置空 | `tests/test_gui_crop_probe.py` 的 `test_probe_uses_the_threshold_it_was_given`、`test_probe_result_is_dropped_when_the_selection_changes_while_running`、`test_probe_thread_is_registered_until_it_finishes`、`test_closing_releases_the_probe_thread_without_blocking` / 本条提交 |
+| 35 | 评审第四轮 P2-5 + P3 一批：换台机器跑测试会误报"模板图片还没入库"；滑条拖完旋钮会被写回一个略不同的值；细纹理可能被抽样判成"纯色"而误拦保存；`assets/anchors/*.jpg` 不被忽略；关于页复制出的诊断信息带 `C:\Users\<用户名>`、打开关于页就建目录、读不到版本号不记日志 | 都是"本机恰好通过 / 只在边界上出错"类问题：① `git ls-files` 的 `core.quotePath` 默认 true，CJK 文件名被转义；② 滑条换算中间过了一道"整数百分比"（402/1001 个刻度回不到原位）；③ `assess_region_quality` 用跨步抽样判 `flat`，而 `flat` 是唯一会拦住保存的档位；④ `.gitignore` 只写了 anchors 的 `*.png`；⑤ 诊断信息贴绝对路径、目录按钮构造时就 `mkdir`、`except` 静默返回"未知" | ① 测试里的 git 调用统一加 `-c core.quotePath=false`；② 滑条换算改成**以 2 为底的浮点倍数**（`zoom_slider_to_zoom`/`zoom_to_slider`），101 个刻度逐点往返一致；③ 抽样判 `flat` 时用**全分辨率复核**一次（`_quality_metrics`）；④ anchors 补齐 5 种图片后缀；⑤ 诊断信息改相对程序目录（并断言不含盘符/`Users`）、目录按钮的 tooltip 延迟到悬停（`eventFilter`）、`_pyside_version` 失败记 WARNING；另按 P3-2 删除零调用的 `set_zoom()`、把 1:1 做成**双击滑条**；按 P3-8 把三个框选测试各自复制的 `_image()` 收敛进 `tests/gui_helpers.py` | `tests/test_paths.py`（能扛 `core.quotePath=true`）、`tests/test_gui_crop_zoom.py::test_zoom_slider_round_trips_at_every_position`、`test_automation/test_template_quality.py::test_fine_stripes_are_not_misjudged_by_the_sampling`、`tests/test_gui_about.py` 4 条 / 本条提交 |
 
 ---
 
@@ -670,7 +673,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `locate_all_scaled` | `automation/multiscale.py:169` | 两档多尺度匹配主流程 |
 | `_scale_tiers` | `automation/multiscale.py:104` | 档位拆分（0.3–2.0 → 0.3–4.0） |
 | `_scan_coarse` / `_refine_scale` | `automation/multiscale.py:116` / `:149` | 粗搜（峰值回落才停）/ 精修 |
-| `load_template` | `automation/template_match.py:148` | 读图（中文路径 + 纯色拒绝） |
+| `load_template` | `automation/template_match.py:161` | 读图（中文路径 + 纯色拒绝） |
 | `is_blank_frame` | `automation/template_match.py:74` | 黑帧/纯色判定 |
 | `capture_client_bgr` | `automation/vision.py:58` | 取景入口（含回退链） |
 | `_render_client_bits_bitblt` | `automation/vision.py:211` | **BitBlt 路径（源点必须客户区偏移）** |
@@ -698,29 +701,29 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `build_drag_path` | `automation/drag_path.py:49` | 缓出曲线 + 末尾静止帧 |
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_view.py:66` / `gui/dialogs/crop_dialog.py:51` | 框选几何与保存 |
-| `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:192` / `:202` / `:214` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
-| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:366` / `:567` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
-| `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:415` / `:477` | 方向键微调 / Ctrl 调单边 |
+| `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:206` / `:218` / `:230` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
+| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:396` / `:590` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
+| `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:445` / `:507` | 方向键微调 / Ctrl 调单边 |
 | `image_rect` / `_set_zoom` / `wheelEvent` | `gui/dialogs/crop_view_zoom.py:42` / `:108` / `:149` | 图像显示矩形（缩放+平移）/ 以鼠标为锚点缩放 / 滚轮缩放 |
 | `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:160` / `:177` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
-| `zoom_slider` / `zoom_reset_button` | `gui/dialogs/crop_dialog.py:123` / `:136` | 缩放滑条（相对整图适配 50%–800%）/ 「重置」按钮 |
-| `zoom_slider_to_percent` / `zoom_percent_to_slider` | `gui/dialogs/crop_dialog.py:65` / `:77` | 滑条刻度换算（对数：每 1/4 行程翻一倍，互为反函数）|
-| `reset_all` / `_sync_zoom_controls` | `gui/dialogs/crop_dialog.py:249` / `:241` | 重置（视图归位 + 清空选区）/ 缩放状态同步回滑条 |
-| `clear_selection` | `gui/dialogs/crop_view.py:132` | 清空选区（双击 / Esc / 重置共用）|
-| `zoom_relative_percent` / `set_zoom_relative` | `gui/dialogs/crop_view_zoom.py:60` / `:64` | 相对整图适配的缩放百分比 / 按倍数设置（锚点＝选区中心）|
-| `selection_quality` / `selection_text` | `gui/dialogs/crop_dialog.py:196` / `:208` | 可辨识度评估（`RegionQuality`）/ 信息行文案（含辨识度） |
-| `view_status_text` | `gui/dialogs/crop_dialog.py:335` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
-| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:344` / `:371` | **只保存选区**；纯色（`flat`）时拒绝保存 |
+| `zoom_slider` / `zoom_reset_button` | `gui/dialogs/crop_dialog.py:147` / `:161` | 缩放滑条（相对整图适配 50%–800%）/ 「重置」按钮 |
+| `zoom_slider_to_zoom` / `zoom_to_slider` | `gui/dialogs/crop_dialog.py:81` / `:98` | 滑条刻度换算（对数：每 1/4 行程翻一倍，互为反函数）|
+| `reset_all` / `_sync_zoom_controls` | `gui/dialogs/crop_dialog.py:279` / `:266` | 重置（视图归位 + 清空选区）/ 缩放状态同步回滑条 |
+| `clear_selection` | `gui/dialogs/crop_view.py:131` | 清空选区（双击 / Esc / 重置共用）|
+| `zoom_relative_percent` / `set_zoom_relative` | `gui/dialogs/crop_view_zoom.py:60` / `:68` | 相对整图适配的缩放百分比 / 按倍数设置（锚点＝选区中心）|
+| `selection_quality` / `selection_text` | `gui/dialogs/crop_dialog.py:221` / `:233` | 可辨识度评估（`RegionQuality`）/ 信息行文案（含辨识度） |
+| `view_status_text` | `gui/dialogs/crop_dialog.py:406` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
+| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:415` / `:442` | **只保存选区**；纯色（`flat`）时拒绝保存 |
 | `assess_region_quality` / `RegionQuality` | `automation/template_match.py:101` / `:85` | 模板区域可辨识度（对比度 + 边缘占比；`flat` 拒存，`low` 只提示） |
 | `probe_region_on_image` / `TemplateProbeResult` | `core/vision.py:288` / `:253` | **「在本图试识别」（D1）**：选区当模板在同图 1:1 试匹配；`duplicates`＝除自己以外的命中数 |
-| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:270` / `:263` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
+| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:306` / `:293` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
 | `TemplateProbeThread` | `gui/workers.py:140` | 试识别后台线程（匹配是 CPU 密集的，不许放 GUI 线程） |
-| `set_probe_rects` / `_paint_probe_rects` | `gui/dialogs/crop_view.py:534` / `:546` | 把试识别命中的**其它**位置画成橙框 + 序号（图像像素坐标） |
+| `set_probe_rects` / `_paint_probe_rects` | `gui/dialogs/crop_view.py:564` / `:576` | 把试识别命中的**其它**位置画成橙框 + 序号（图像像素坐标） |
 | `DebugPage` | `gui/pages/debug.py:68` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
-| `AboutPage` | `gui/pages/about.py:67` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
-| `diagnostics_text` | `gui/pages/about.py:193` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
+| `AboutPage` | `gui/pages/about.py:79` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
+| `diagnostics_text` | `gui/pages/about.py:222` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
 | `_on_debug_test` / `run_debug_action` | `gui/main_window.py:429` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
-| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:473` / `:504` | 框选回填 / 框选入口（门禁 + 后台截图） |
+| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:473` / `:509` | 框选回填 / 框选入口（门禁 + 后台截图） |
 | `_debug_actions_allowed` | `gui/main_window.py:424` | 开发者调试门禁 |
 | `_register_hotkey_or_hint` | `gui/main_window.py:259` | 热键注册 + 失败显著提示（评审 P3-9） |
 | `_wait_for_threads` | `gui/main_window.py:216` | 关窗等齐 4 个后台线程（评审 P2-6） |
@@ -732,8 +735,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `migrate` / `validate` | `config/validation.py:307` / `:337` | 迁移链（每步独立 try，绝不崩）与校验 |
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
 | `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:64` / `:54` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
-| `prepare_for_match` | `automation/template_match.py:174` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
-| `_on_vision_add_clicked` | `gui/pages/debug.py:425` | 「添加图片…」对话框默认打开 `assets/templates` |
+| `prepare_for_match` | `automation/template_match.py:187` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
+| `_on_vision_add_clicked` | `gui/pages/debug.py:429` | 「添加图片…」对话框默认打开 `assets/templates` |
 | `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
 | `ease_out_quad` / `interpolate_points` | `automation/drag_path.py:22` / `:27` | 滑动缓出曲线 / 分帧插值（纯函数） |
 | `scale_candidates` | `automation/multiscale.py:45` | 粗搜档位生成（按步长枚举比例） |

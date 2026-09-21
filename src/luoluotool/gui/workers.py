@@ -145,6 +145,12 @@ class TemplateProbeThread(QThread):
 
     公共名字（无下划线）：它被 `gui/dialogs/crop_dialog.py` 使用，
     跨模块共用私有名是明令禁止的（AGENTS §2「同一件事只允许有一份」第 ③ 条）。
+
+    **生命周期（评审 P2-4）**：线程体是一次 `cv2.matchTemplate`，中途**没法打断**，
+    所以关窗时不能靠 `wait()` 在 GUI 线程里干等（最坏会卡住几秒）。这里的做法是：
+    `request_stop()` 置停止位（线程结束后就别再发结果），线程对象在跑完之前由
+    `ACTIVE_PROBES` 这个模块级集合**持有强引用** —— 弹窗即使先被销毁，也不会出现
+    "QThread: Destroyed while thread is still running"。`finished` 时自动从集合里摘掉。
     """
 
     finished_probe = Signal(object)            # TemplateProbeResult
@@ -157,6 +163,15 @@ class TemplateProbeThread(QThread):
         self._region = region
         self._threshold = threshold
         self._max_results = max_results
+        self._stop_event = threading.Event()
+        self.finished.connect(self._unregister)
+
+    def request_stop(self) -> None:
+        """请求停止：本次匹配跑完后就别再发结果（GUI 线程不会因此被阻塞）。"""
+        self._stop_event.set()
+
+    def stop_requested(self) -> bool:
+        return self._stop_event.is_set()
 
     def run(self) -> None:
         try:
@@ -166,6 +181,26 @@ class TemplateProbeThread(QThread):
             )
         except Exception as exc:   # 越界/太小/匹配异常都转成可读提示，不抛给 GUI
             logger.exception("框选自检失败：%s", exc)
-            self.failed_message.emit(f"{type(exc).__name__}: {exc}")
+            if not self.stop_requested():
+                self.failed_message.emit(f"{type(exc).__name__}: {exc}")
         else:
+            if self.stop_requested():
+                logger.info("框选自检已结束但已被请求停止：结果不再回传")
+                return
             self.finished_probe.emit(result)
+
+    def _unregister(self) -> None:
+        ACTIVE_PROBES.discard(self)
+
+
+ACTIVE_PROBES: set[TemplateProbeThread] = set()
+"""在飞的试识别线程（模块级强引用，防止线程没跑完就被 GC）。见 `TemplateProbeThread` 文档。"""
+
+
+def start_probe_thread(image, region: tuple[int, int, int, int], threshold: float,
+                        max_results: int) -> TemplateProbeThread:
+    """建好并启动一个试识别线程（登记进 `ACTIVE_PROBES`，由调用方连接信号）。"""
+    thread = TemplateProbeThread(image, region, threshold, max_results)
+    ACTIVE_PROBES.add(thread)
+    thread.start()
+    return thread

@@ -12,11 +12,12 @@
 
 from __future__ import annotations
 
+import logging
 import platform
 import struct
 import sys
 
-from PySide6.QtCore import Qt, QUrl
+from PySide6.QtCore import QEvent, Qt, QUrl
 from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -31,9 +32,16 @@ from PySide6.QtWidgets import (
 from luoluotool import __version__
 from luoluotool.automation.elevation import is_process_elevated
 from luoluotool.gui.widgets import ScrollablePage
-from luoluotool.utils.paths import get_logs_dir, get_templates_dir, get_user_data_dir
+from luoluotool.utils.paths import (
+    PROJECT_ROOT,
+    get_logs_dir,
+    get_templates_dir,
+    get_user_data_dir,
+)
 
 PAGE_TITLE = "关于"
+
+logger = logging.getLogger(__name__)
 
 APP_NAME = "LuoLuoTool"
 AUTHOR = "moweishan"
@@ -54,6 +62,10 @@ RISK_LINES: tuple[str, ...] = (
     "· 仅限个人学习自用：不发布、不售卖、不用于工作室多开打金。",
     "· 不提供任何未成年人防沉迷规避功能。",
     "· 本工具不读写游戏内存、不拦截或伪造网络封包、不修改游戏文件。",
+    # 评审 P3-7：PROJECT_SPEC §5 要求把"误操作风险"写进 GUI（真实模式确认弹窗里有，关于页也该有）
+    "· **误操作风险**：真实模式下每次输入前会先把游戏窗口置顶/置前（会抢走当前前台窗口），"
+    "并且会真实移动你的鼠标光标；识别到的坐标若因画面变化而失准，可能点到非预期位置。"
+    "请先小范围试跑、随时准备用 F8 或「停止」按钮中断。",
 )
 
 PRIVACY_LINES: tuple[str, ...] = (
@@ -69,6 +81,7 @@ class AboutPage(ScrollablePage):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
+        self._dir_getters: dict[QPushButton, object] = {}
         layout = QVBoxLayout(self.content)
         layout.setSpacing(10)
 
@@ -156,12 +169,27 @@ class AboutPage(ScrollablePage):
         return box
 
     def _dir_button(self, row: QHBoxLayout, text: str, path_getter) -> QPushButton:
-        """目录按钮：提示里显示真实路径，点一下用系统默认方式打开。"""
+        """目录按钮：点一下用系统默认方式打开。
+
+        提示里的路径**延迟到悬停时才取**（评审 P3-6③）：`get_*_dir()` 会顺带 `mkdir`，
+        在构造时调用意味着"一打开关于页就建目录"，与"本页只做展示与本地动作"不符。
+        """
         button = QPushButton(text)
-        button.setToolTip(str(path_getter()))
+        button.setToolTip("点击用系统默认方式打开；鼠标移上来可看完整路径")
         button.clicked.connect(lambda _=False, getter=path_getter: self._open_dir(getter))
+        button.installEventFilter(self)
+        self._dir_getters[button] = path_getter
         row.addWidget(button)
         return button
+
+    def eventFilter(self, watched, event) -> bool:        # noqa: N802 (Qt 命名)
+        """悬停目录按钮时才去取路径（顺带建目录）填进提示。"""
+        if (
+            event.type() == QEvent.Type.Enter
+            and watched in getattr(self, "_dir_getters", {})
+        ):
+            watched.setToolTip(str(self._dir_getters[watched]()))
+        return super().eventFilter(watched, event)
 
     # ---------------------------------------------------------------- 行为
     def environment_summary(self) -> str:
@@ -187,18 +215,33 @@ class AboutPage(ScrollablePage):
         try:
             import PySide6
             return PySide6.__version__
-        except Exception:      # pragma: no cover - 仅在 PySide6 元数据缺失时
+        except Exception as exc:       # 元数据缺失时降级显示，但必须留痕（AGENTS §3.5）
+            logger.warning("读取 PySide6 版本失败：%s", exc)
             return "未知"
 
     def diagnostics_text(self) -> str:
-        """可复制的诊断信息（不含任何个人数据；只含版本与环境）。"""
+        """可复制的诊断信息：只含版本与环境，**目录一律写成相对程序目录的路径**。
+
+        评审 P3-6①：早先这里贴的是绝对路径，项目若被放在 `C:\\Users\\<用户名>\\…` 下就会把
+        账号名带进剪贴板（而按钮提示还邀请用户"报 bug 时贴给我"）。改成相对路径后，
+        既够定位问题，又不泄露用户名/家目录结构。
+        """
         return (
             f"{APP_NAME} v{__version__}\n"
             f"{self.environment_summary()}\n"
-            f"数据目录：{get_user_data_dir()}\n"
-            f"日志目录：{get_logs_dir()}\n"
-            f"识别图片目录：{get_templates_dir()}"
+            f"程序目录：{self._relative_path(PROJECT_ROOT)}\n"
+            f"数据目录：{self._relative_path(get_user_data_dir())}\n"
+            f"日志目录：{self._relative_path(get_logs_dir())}\n"
+            f"识别图片目录：{self._relative_path(get_templates_dir())}"
         )
+
+    @staticmethod
+    def _relative_path(path) -> str:
+        """尽量给出相对程序目录的路径；实在在程序目录之外（例如打包后指到别处）只给末级目录名。"""
+        try:
+            return str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+        except ValueError:
+            return f"<程序目录外>/{path.name}"
 
     def _on_copy_diagnostics(self) -> None:
         QApplication.clipboard().setText(self.diagnostics_text())

@@ -5,14 +5,36 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
 
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
+from luoluotool.gui.dialogs.crop_view import CropView
 from luoluotool.gui.main_window import MainWindow
 
 _APP = QApplication.instance() or QApplication([])
+
+
+def crop_image(width: int = 400, height: int = 300) -> np.ndarray:
+    """框选用测试底图：每个像素的 B 通道 = x、G 通道 = y（坐标可反推）。
+
+    评审 P3-8：三个框选测试文件各抄了一份同名辅助，这里统一成全仓库唯一的一份
+    （与 `window_factory` 同样的收敛规则）。
+    """
+    image = np.zeros((height, width, 3), dtype=np.uint8)
+    image[:, :, 0] = np.arange(width, dtype=np.uint8)
+    image[:, :, 1] = np.arange(height, dtype=np.uint8).reshape(-1, 1)
+    return image
+
+
+def scaled_crop_view(image_size: tuple[int, int], scale: int = 2) -> CropView:
+    """按固定倍数显示的 `CropView`（图像坐标 = 控件坐标 / scale），方便写几何断言。"""
+    width, height = image_size
+    view = CropView(crop_image(width, height))
+    view.resize(width * scale, height * scale)
+    return view
 
 
 @pytest.fixture

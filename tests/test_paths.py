@@ -32,11 +32,18 @@ IMAGE_SUFFIXES = (".png", ".jpg", ".jpeg", ".bmp", ".webp")
 
 
 def _git(*args: str) -> str:
+    """跑一条 git 命令。
+
+    **必须显式 `-c core.quotePath=false`**（评审 P2-5）：git 默认会把非 ASCII 路径转义成
+    `"assets/templates/\\351\\270\\241..."` 这种八进制串，于是 `ls-files` 的输出里没有真文件名，
+    入库守卫在本机"恰好"通过（全局配置是 false），换台机器就误报"图片还没入库"。
+    """
     git = shutil.which("git")
     if git is None:
         pytest.skip("环境没有 git，跳过索引检查")
     result = subprocess.run(
-        [git, *args], cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8"
+        [git, "-c", "core.quotePath=false", *args],
+        cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8",
     )
     assert result.returncode == 0, f"git {' '.join(args)} 失败：{result.stderr}"
     return result.stdout

@@ -34,7 +34,6 @@ from luoluotool.gui.dialogs.crop_view_zoom import (      # 再导出：旧导入
 
 
 MIN_SELECTION_SIZE = 8          # 选区小于该像素数视为无效（点一下、手抖）
-NEAR_FULL_RATIO = 0.95          # 选区面积 ≥ 整屏的该比例时提示"几乎等于整屏"
 BACKGROUND_COLOR = QColor(32, 32, 32)
 SELECTION_COLOR = QColor(0, 220, 255)
 HANDLE_SIZE_PX = 10             # 手柄命中范围（控件像素）：缩放后也要好点中
@@ -148,15 +147,25 @@ class CropView(ZoomPanMixin, QWidget):
         """图像坐标选区 → 控件坐标矩形（仅用于绘制）。"""
         if self._image_selection is None:
             return QRect()
+        return self._image_rect_to_widget(self._image_selection)
+
+    def _image_rect_to_widget(self, rect: QRect, *, clip_to_display: bool = True) -> QRect:
+        """任意**图像坐标**矩形 → 控件坐标矩形（选区与试识别标记共用这一套换算）。
+
+        评审 P3-9：试识别标记原来另写了一份同样的换算；统一到这里，改缩放时不会只改一处。
+        """
         display = self.image_rect()
+        if display.isEmpty():
+            return QRect()
         scale = self._scale() or 1.0
-        rect = self._image_selection.normalized()
-        return QRect(
+        rect = rect.normalized()
+        target = QRect(
             display.x() + int(round(rect.left() * scale)),
             display.y() + int(round(rect.top() * scale)),
             max(1, int(round(rect.width() * scale))),
             max(1, int(round(rect.height() * scale))),
-        ).intersected(display)
+        )
+        return target.intersected(display) if clip_to_display else target
 
     def _set_selection_from_points(self, start: QPoint, end: QPoint) -> None:
         """用两个图像坐标点更新选区。
@@ -171,9 +180,14 @@ class CropView(ZoomPanMixin, QWidget):
 
     # ------------------------------------------------------------- 手柄与命中
     def handle_rects(self) -> dict[str, QRect]:
-        """当前选区八个手柄的控件矩形（命中判定与绘制共用）。"""
+        """当前选区八个手柄的控件矩形（命中判定与绘制共用）。
+
+        **绘制矩形比手柄还小的时候不给手柄**（评审 P2-1）：单击留下的退化选区（0×0）会把 8 个
+        手柄算成**完全重合**的一小块，于是"点一下再在附近拖拽"会被判成"拖手柄改大小"，
+        产出一个 8×8 且不可见的选区。
+        """
         rect = self._image_rect_on_widget()
-        if rect.isEmpty():
+        if rect.isEmpty() or rect.width() < HANDLE_SIZE_PX or rect.height() < HANDLE_SIZE_PX:
             return {}
         half = HANDLE_SIZE_PX // 2
         left, right = rect.left(), rect.right()
@@ -194,8 +208,10 @@ class CropView(ZoomPanMixin, QWidget):
         rect = self._image_rect_on_widget()
         if rect.isEmpty():
             return "outside"
+        handles = self.handle_rects()          # 只算一次（每个悬停事件都会走到这里）
         for name in ("nw", "ne", "sw", "se", "n", "e", "s", "w"):
-            if self.handle_rects()[name].contains(point):
+            handle = handles.get(name)
+            if handle is not None and handle.contains(point):
                 return name
         return "inside" if rect.contains(point) else "outside"
 
@@ -350,9 +366,23 @@ class CropView(ZoomPanMixin, QWidget):
             Qt.MouseButton.RightButton,
             Qt.MouseButton.MiddleButton,
         ):
+            self._discard_degenerate_selection()
             self._reset_drag_state()
             self._update_cursor(event.position().toPoint())
             self.selection_changed.emit()
+
+    def _discard_degenerate_selection(self) -> None:
+        """松手时丢掉"没框出东西"的退化选区（评审 P2-1）。
+
+        单击（按下→松开，没移动）会留下一个 0×0 的选区：`selection_in_image()` 认为它无效、
+        界面上也看不见，但它**还留在内部状态里** —— 于是下一次拖拽会被它劫持（判定成拖手柄），
+        真正的拖拽被丢弃，反而在图像左上角留下一个看不见的 8×8 选区，点保存就会存下这块。
+        """
+        if self._image_selection is None:
+            return
+        rect = self._image_selection.normalized()
+        if rect.width() < MIN_SELECTION_SIZE or rect.height() < MIN_SELECTION_SIZE:
+            self._image_selection = None
 
     def _reset_drag_state(self) -> None:
         self._origin = None
@@ -547,16 +577,9 @@ class CropView(ZoomPanMixin, QWidget):
         """把试识别命中的其它位置画成橙色框 + 序号（自己那处就是选区本身，不重复画）。"""
         if not self._probe_rects:
             return
-        display = self.image_rect()
-        scale = self._scale() or 1.0
         painter.setPen(QPen(PROBE_COLOR, 2))
         for number, rect in enumerate(self._probe_rects, start=1):
-            target = QRect(
-                display.x() + int(round(rect.left() * scale)),
-                display.y() + int(round(rect.top() * scale)),
-                max(1, int(round(rect.width() * scale))),
-                max(1, int(round(rect.height() * scale))),
-            ).intersected(display)
+            target = self._image_rect_to_widget(rect)
             if target.isEmpty():
                 continue
             painter.drawRect(target)

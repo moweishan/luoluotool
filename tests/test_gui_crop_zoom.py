@@ -1,36 +1,20 @@
-"""框选弹窗的**视图变换**用例（离屏）：滚轮缩放、中键/空格平移、1:1 显示、滚动夹取、
+"""框选弹窗的**视图变换**用例（离屏）：滚轮缩放、中键/空格平移、缩放滑条与重置、滚动夹取、
 放大镜（位置/取样/真的画出像素）以及信息行的缩放倍率与鼠标客户区坐标。
 
 与 `tests/test_gui_crop_edit.py` 的分工：那边测"选区怎么改"，这边测"画面怎么看"。
-本文件自带最小夹具（`_image`/`_scaled_view`），与兄弟文件一致，避免跨文件共享夹具。
+测试底图与视图辅助统一用 `tests/gui_helpers.py` 里那一份（评审 P3-8：三个文件曾各抄一份）。
 """
 
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import numpy as np
 from PySide6.QtWidgets import QApplication
 
+from gui_helpers import crop_image as _image, scaled_crop_view as _scaled_view
 from luoluotool.gui.dialogs.crop_dialog import CropView, TemplateCropDialog
 
 _APP = QApplication.instance() or QApplication([])
-
-
-def _image(width: int = 400, height: int = 300) -> np.ndarray:
-    """造一张有明确坐标特征的图：每个像素的 B 通道 = x，G 通道 = y。"""
-    image = np.zeros((height, width, 3), dtype=np.uint8)
-    image[:, :, 0] = np.arange(width, dtype=np.uint8)
-    image[:, :, 1] = np.arange(height, dtype=np.uint8).reshape(-1, 1)
-    return image
-
-
-def _scaled_view(image_size: tuple[int, int], scale: int = 2) -> CropView:
-    """造一个 1:scale 显示的视图（图像坐标 = 控件坐标 / scale），方便写断言。"""
-    width, height = image_size
-    view = CropView(_image(width, height))
-    view.resize(width * scale, height * scale)
-    return view
 
 
 # ------------------------------------------- 批 2：滚轮缩放 / 平移 / 1:1 / HUD / 放大镜
@@ -217,7 +201,7 @@ def test_info_label_shows_zoom_and_cursor_position() -> None:
     """HUD：信息行要同时给出选区、缩放倍率与鼠标处的客户区坐标。"""
     from PySide6.QtCore import QPoint
 
-    from luoluotool.gui.dialogs.crop_dialog import zoom_percent_to_slider
+    from luoluotool.gui.dialogs.crop_dialog import zoom_to_slider
 
     dialog = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=None)
     dialog.view.resize(400, 400)
@@ -230,7 +214,7 @@ def test_info_label_shows_zoom_and_cursor_position() -> None:
     assert "鼠标客户区 (60, 60)" in text
 
     # 滑条拖到"相对整图适配 50%" → 显示倍率变成 100%（适配是 200%）
-    dialog.zoom_slider.setValue(zoom_percent_to_slider(50))
+    dialog.zoom_slider.setValue(zoom_to_slider(0.5))
     assert "缩放 100%" in dialog.info_label.text()
     dialog.deleteLater()
 
@@ -290,28 +274,67 @@ def test_zoom_slider_scale_maps_to_relative_percent() -> None:
     """滑条刻度换算：两端是 50% / 800%，1/4 处是整图适配（100%），每 1/4 行程翻一倍。"""
     from luoluotool.gui.dialogs.crop_dialog import (
         ZOOM_SLIDER_STEPS,
-        zoom_percent_to_slider,
-        zoom_slider_to_percent,
+        zoom_slider_to_zoom,
+        zoom_to_slider,
     )
 
-    assert zoom_slider_to_percent(0) == 50                       # 最左＝缩到适配的一半
-    assert zoom_slider_to_percent(ZOOM_SLIDER_STEPS) == 800      # 最右＝放大到适配的 8 倍
-    assert zoom_slider_to_percent(ZOOM_SLIDER_STEPS // 4) == 100  # 1/4 处＝整图适配
-    assert zoom_slider_to_percent(ZOOM_SLIDER_STEPS // 2) == 200  # 中点＝2 倍
-    assert zoom_slider_to_percent(ZOOM_SLIDER_STEPS * 3 // 4) == 400
-    for percent in (50, 60, 75, 100, 125, 150, 200, 400, 800):   # 往返一致（拖出去再拖回来不漂移）
-        assert zoom_slider_to_percent(zoom_percent_to_slider(percent)) == percent
+    assert zoom_slider_to_zoom(0) == 0.5                        # 最左＝缩到适配的一半
+    assert zoom_slider_to_zoom(ZOOM_SLIDER_STEPS) == 8.0        # 最右＝放大到适配的 8 倍
+    assert zoom_slider_to_zoom(ZOOM_SLIDER_STEPS // 4) == 1.0   # 1/4 处＝整图适配
+    assert zoom_slider_to_zoom(ZOOM_SLIDER_STEPS // 2) == 2.0   # 中点＝2 倍
+    assert zoom_slider_to_zoom(ZOOM_SLIDER_STEPS * 3 // 4) == 4.0
+
+
+def test_zoom_slider_round_trips_at_every_position() -> None:
+    """全行程往返一致（评审 P3-3）：101 个刻度拖出去再拖回来，位置不许漂。
+
+    旧实现中间过了一道"整数百分比"，1001 个刻度里有 402 个回不到原位（最大偏 3 刻），
+    表现为"拖完旋钮又被同步逻辑写回一个略不同的值"。现在两个函数互为精确反函数。
+    """
+    from luoluotool.gui.dialogs.crop_dialog import (
+        ZOOM_SLIDER_STEPS,
+        zoom_slider_to_zoom,
+        zoom_to_slider,
+    )
+
+    drifted = [
+        position for position in range(ZOOM_SLIDER_STEPS + 1)
+        if zoom_to_slider(zoom_slider_to_zoom(position)) != position
+    ]
+    assert drifted == [], f"这些刻度回不到原位：{drifted[:10]}"
+
+
+def test_zoom_slider_double_click_goes_to_actual_size(tmp_path) -> None:
+    """评审 P3-2：滑条双击＝1:1 显示（1 图像像素＝1 控件像素），不再是"没人调用的死 API"。"""
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    dialog = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=tmp_path)
+    dialog.view.resize(400, 400)                     # 适配 2 倍 → 1:1 需要相对 50%
+    dialog.view.show()
+    _APP.processEvents()
+
+    QTest.mouseDClick(dialog.zoom_slider, Qt.MouseButton.LeftButton,
+                      pos=QPoint(dialog.zoom_slider.width() // 2, dialog.zoom_slider.height() // 2))
+    _APP.processEvents()
+
+    assert dialog.view.zoom_percent() == 100         # 显示倍率 1:1
+    assert dialog.view.zoom_relative_percent() == 50
+    assert dialog.zoom_slider.value() == 0           # 滑条同步到"适配 50%"
+    assert "50%" in dialog.zoom_value_label.text()
+    dialog.close()
+    dialog.deleteLater()
 
 
 def test_zoom_slider_drag_sets_the_view_zoom(tmp_path) -> None:
     """拖滑条＝改缩放：相对适配 200% 时显示倍率是适配比例的两倍，数值标签同步。"""
-    from luoluotool.gui.dialogs.crop_dialog import zoom_percent_to_slider
+    from luoluotool.gui.dialogs.crop_dialog import zoom_to_slider
 
     dialog = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=tmp_path)
     dialog.view.resize(400, 400)                     # 适配比例 2 倍 → 显示 200%
     dialog.set_selection_in_image(40, 40, 60, 60)
 
-    dialog.zoom_slider.setValue(zoom_percent_to_slider(200))
+    dialog.zoom_slider.setValue(zoom_to_slider(2.0))
 
     assert dialog.view.zoom_relative_percent() == 200
     assert dialog.view.zoom_percent() == 400         # 显示倍率 = 适配 200% × 相对 2 倍
@@ -321,14 +344,14 @@ def test_zoom_slider_drag_sets_the_view_zoom(tmp_path) -> None:
 
 def test_zoom_slider_drag_keeps_the_selection_in_place(tmp_path) -> None:
     """拖滑条时以选区中心为锚点：选区在图片里的坐标不该被缩放带跑。"""
-    from luoluotool.gui.dialogs.crop_dialog import zoom_percent_to_slider
+    from luoluotool.gui.dialogs.crop_dialog import zoom_to_slider
 
     dialog = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=tmp_path)
     dialog.view.resize(400, 400)
     dialog.set_selection_in_image(40, 40, 60, 60)
     center_before = dialog.view._image_rect_on_widget().center()      # noqa: SLF001（离屏用例）
 
-    dialog.zoom_slider.setValue(zoom_percent_to_slider(200))
+    dialog.zoom_slider.setValue(zoom_to_slider(2.0))
     center_after = dialog.view._image_rect_on_widget().center()
 
     assert dialog.selection() == (40, 40, 60, 60)                     # 选区（图像坐标）没变
@@ -366,16 +389,13 @@ def test_zoom_slider_follows_wheel_zoom(tmp_path) -> None:
 
 def test_zoom_controls_are_a_slider_and_a_reset_button(tmp_path) -> None:
     """界面收敛：只留 [滑条] + [重置]，原来的「适配窗口 / 1:1 显示」两个按钮已撤掉。"""
-    from luoluotool.gui.dialogs.crop_dialog import (
-        ZOOM_SLIDER_STEPS,
-        zoom_percent_to_slider,
-    )
+    from luoluotool.gui.dialogs.crop_dialog import ZOOM_SLIDER_STEPS, zoom_to_slider
 
     dialog = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=tmp_path)
 
     assert dialog.zoom_slider.minimum() == 0
     assert dialog.zoom_slider.maximum() == ZOOM_SLIDER_STEPS
-    assert dialog.zoom_slider.value() == zoom_percent_to_slider(100)   # 打开就是整图适配
+    assert dialog.zoom_slider.value() == zoom_to_slider(1.0)   # 打开就是整图适配
     assert dialog.zoom_reset_button.text() == "重置"
     assert not hasattr(dialog, "zoom_fit_button")
     assert not hasattr(dialog, "zoom_actual_button")
@@ -410,10 +430,7 @@ def test_reset_button_restores_the_initial_dialog_state(tmp_path) -> None:
     """「重置」＝恢复弹窗初始状态：缩放回整图适配、画面归位、选区清空。"""
     from PySide6.QtCore import QPoint
 
-    from luoluotool.gui.dialogs.crop_dialog import (
-        ZOOM_SLIDER_STEPS,
-        zoom_percent_to_slider,
-    )
+    from luoluotool.gui.dialogs.crop_dialog import ZOOM_SLIDER_STEPS, zoom_to_slider
 
     dialog = TemplateCropDialog(_image(200, 200), (200, 200), save_dir=tmp_path)
     dialog.view.resize(400, 400)
@@ -421,14 +438,14 @@ def test_reset_button_restores_the_initial_dialog_state(tmp_path) -> None:
     _APP.processEvents()
     fit_rect = dialog.view.image_rect()
     dialog.set_selection_in_image(40, 40, 60, 60)
-    dialog.zoom_slider.setValue(zoom_percent_to_slider(800))
+    dialog.zoom_slider.setValue(zoom_to_slider(8.0))
     _wheel(dialog.view, -1, QPoint(200, 200))        # 再平移一下，确认会被归零
     dialog.view.set_probe_rects([dialog.view.image_rect()])   # 假装刚试识别过
 
     dialog.zoom_reset_button.click()
 
     assert dialog.view.zoom_relative_percent() == 100
-    assert dialog.zoom_slider.value() == zoom_percent_to_slider(100)
+    assert dialog.zoom_slider.value() == zoom_to_slider(1.0)
     assert dialog.view.image_rect() == fit_rect                     # 缩放与平移都归位
     assert dialog.selection() is None                               # 选区也一起清掉
     assert dialog.view.probe_rects() == []                          # 试识别结论作废

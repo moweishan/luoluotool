@@ -2,16 +2,16 @@
 键盘微调（方向键 / Ctrl 单边）、Esc 撤销、双击清空、选区外压暗、拖拽尺寸气泡。
 
 与 `tests/test_gui_crop.py` 的分工：那边测"几何换算 + 保存落盘"，这边测"怎么把选区改对"。
-两边共用同一套最小夹具（本文件自带 `_image`/`_scaled_view`/拖拽辅助，避免跨文件共享夹具）。
+测试底图与视图辅助统一用 `tests/gui_helpers.py` 里那一份（评审 P3-8：三个文件曾各抄一份）。
 """
 
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-import numpy as np
 from PySide6.QtWidgets import QApplication
 
+from gui_helpers import crop_image as _image, scaled_crop_view as _scaled_view
 from luoluotool.automation.vision import load_template
 from luoluotool.gui.dialogs.crop_dialog import (
     MIN_SELECTION_SIZE,
@@ -20,22 +20,6 @@ from luoluotool.gui.dialogs.crop_dialog import (
 )
 
 _APP = QApplication.instance() or QApplication([])
-
-
-def _image(width: int = 400, height: int = 300) -> np.ndarray:
-    """造一张有明确坐标特征的图：每个像素的 B 通道 = x，G 通道 = y。"""
-    image = np.zeros((height, width, 3), dtype=np.uint8)
-    image[:, :, 0] = np.arange(width, dtype=np.uint8)
-    image[:, :, 1] = np.arange(height, dtype=np.uint8).reshape(-1, 1)
-    return image
-
-
-def _scaled_view(image_size: tuple[int, int], scale: int = 2) -> CropView:
-    """造一个 1:scale 显示的视图（图像坐标 = 控件坐标 / scale），方便写断言。"""
-    width, height = image_size
-    view = CropView(_image(width, height))
-    view.resize(width * scale, height * scale)
-    return view
 
 
 def _drag(view: CropView, start: tuple[int, int], end: tuple[int, int]) -> None:
@@ -73,27 +57,6 @@ def _send_mouse(view: CropView, kind: str, pos, *, modifiers=None) -> None:
 
 
 # ------------------------------------------- 修改已有选区（移动 / 改大小，用户 2026-09-20 要求）
-
-
-def _drag(view: CropView, start: tuple[int, int], end: tuple[int, int]) -> None:
-    """在控件坐标里模拟一次真实左键拖拽（按下 → 移动 → 松开）。"""
-    from PySide6.QtCore import QPoint, Qt
-    from PySide6.QtTest import QTest
-
-    view.show()
-    _APP.processEvents()
-    QTest.mousePress(view, Qt.MouseButton.LeftButton, pos=QPoint(*start))
-    QTest.mouseMove(view, QPoint(*end))
-    QTest.mouseRelease(view, Qt.MouseButton.LeftButton, pos=QPoint(*end))
-    _APP.processEvents()
-
-
-def _scaled_view(image_size: tuple[int, int], scale: int = 2) -> CropView:
-    """造一个 1:scale 显示的视图（图像坐标 = 控件坐标 / scale），方便写断言。"""
-    width, height = image_size
-    view = CropView(_image(width, height))
-    view.resize(width * scale, height * scale)
-    return view
 
 
 def test_hit_test_distinguishes_handles_inside_and_outside() -> None:
@@ -184,6 +147,35 @@ def test_drag_outside_selection_starts_a_new_one() -> None:
     _drag(view, (20, 20), (60, 40))                  # 控件 → 图像 (10,10) 拖到 (30,20)
 
     assert view.selection_in_image() == (10, 10, 20, 10)
+    view.close()
+    view.deleteLater()
+
+
+def test_click_then_drag_frames_a_visible_selection() -> None:
+    """评审 P2-1：单击（没移动）留下的退化选区不许劫持紧接其后的拖拽。
+
+    旧行为（可稳定复现）：单击留下 `QRect(x, y, 0, 0)`（界面看不出有选区，但内部还在）→
+    下一次在 5 像素内按下会被判成"拖手柄"（8 个手柄重合）→ 拖出来的框被丢弃，
+    反而在图像左上角产生一个**看不见的** 8×8 选区，点「保存为模板」就会存下这块。
+    """
+    from PySide6.QtCore import QPoint
+
+    view = _scaled_view((400, 300))          # 控件 800x600 → 2 倍
+    view.show()
+    _APP.processEvents()
+
+    _drag(view, (50, 50), (50, 50))          # 纯单击：按下、松开，没移动
+
+    assert view.selection_in_image() is None
+    assert view.handle_rects() == {}                        # 退化选区不给手柄
+    assert view.hit_test(QPoint(50, 50)) == "outside"       # 也不吃"内部拖拽"
+
+    _drag(view, (52, 54), (152, 154))        # 紧接着在 5 像素内重新拖
+
+    selection = view.selection_in_image()
+    assert selection is not None
+    assert selection[2] >= MIN_SELECTION_SIZE and selection[3] >= MIN_SELECTION_SIZE
+    assert view._image_rect_on_widget().isEmpty() is False   # 而且界面上看得见
     view.close()
     view.deleteLater()
 

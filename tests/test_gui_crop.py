@@ -1,6 +1,7 @@
 """gui.dialogs.crop_dialog 测试：框选几何换算、越界裁剪、选区保存为模板（离屏，不碰真实窗口）。
 
 与 `tests/test_gui_crop_edit.py` 的分工：那边测"怎么改选区"（拖动/手柄/键盘微调/Esc/遮罩/气泡）。
+测试底图统一用 `tests/gui_helpers.py` 里那一份（评审 P3-8：三个文件曾各抄一份）。
 """
 
 import os
@@ -10,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 import numpy as np
 from PySide6.QtWidgets import QApplication
 
+from gui_helpers import crop_image as _image
 from luoluotool.automation.vision import load_template
 from luoluotool.gui.dialogs.crop_dialog import (
     MIN_SELECTION_SIZE,
@@ -18,14 +20,6 @@ from luoluotool.gui.dialogs.crop_dialog import (
 )
 
 _APP = QApplication.instance() or QApplication([])
-
-
-def _image(width: int = 400, height: int = 300) -> np.ndarray:
-    """造一张有明确坐标特征的图：每个像素的 B 通道 = x，G 通道 = y。"""
-    image = np.zeros((height, width, 3), dtype=np.uint8)
-    image[:, :, 0] = np.arange(width, dtype=np.uint8)
-    image[:, :, 1] = np.arange(height, dtype=np.uint8).reshape(-1, 1)
-    return image
 
 
 

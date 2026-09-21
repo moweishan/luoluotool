@@ -477,7 +477,12 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         该目录放开发者调试页框选功能的产出）。
         """
         self.debug_page.set_status("请在弹窗里拖拽框选要识别的区域…")
-        dialog = TemplateCropDialog(image, window_size, get_anchors_dir(), self)
+        # 阈值用调试页当前设定的那个（评审 P2-2）：弹窗里的「在本图试识别」必须和正式识别同口径，
+        # 否则用户把阈值调到 0.95 之后，试识别还按默认 0.85 报"只有你框的这一处"，是误导。
+        dialog = TemplateCropDialog(
+            image, window_size, get_anchors_dir(), self,
+            threshold=self.debug_page.vision_threshold(),
+        )
         try:
             accepted = dialog.exec() == QDialog.DialogCode.Accepted
         finally:

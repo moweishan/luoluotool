@@ -79,8 +79,8 @@ def test_crop_flow_saves_template_and_fills_path(window_factory, tmp_path, monke
     saved = tmp_path / "anchor_test.png"
 
     class _FakeDialog:
-        def __init__(self, image, window_size, save_dir, parent=None):
-            opened.append((image.shape, window_size, save_dir))
+        def __init__(self, image, window_size, save_dir, parent=None, threshold=None):
+            opened.append((image.shape, window_size, save_dir, threshold))
             self.saved_path = saved
 
         def selection(self):          # 与真实对话框接口一致（保存后主窗口会用它拼提示）
@@ -95,9 +95,11 @@ def test_crop_flow_saves_template_and_fills_path(window_factory, tmp_path, monke
             return None
 
     monkeypatch.setattr(mw, "TemplateCropDialog", _FakeDialog)
+    window.debug_page.vision_threshold_spin.setValue(0.93)     # 评审 P2-2：阈值要往下传
     window._on_capture_ready(np.zeros((50, 100, 3), dtype=np.uint8), (100, 50))
 
     assert opened and opened[0][0] == (50, 100, 3) and opened[0][1] == (100, 50)
+    assert opened[0][3] == 0.93                 # 弹窗拿到的就是调试页当前阈值（试识别同口径）
     assert window.debug_page.vision_templates() == [str(saved)]
     assert "模板已保存" in window.debug_page.status_label.text()
     assert "选区 30x40" in window.debug_page.status_label.text()

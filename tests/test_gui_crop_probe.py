@@ -124,9 +124,83 @@ def test_probe_result_is_dropped_when_the_selection_changes(tmp_path) -> None:
     dialog.deleteLater()
 
 
-def test_closing_waits_for_the_probe_thread(tmp_path, monkeypatch) -> None:
-    """关窗口时必须等后台线程（正在跑也不许把 QThread 丢了，否则会崩）。"""
+def test_probe_result_is_dropped_when_the_selection_changes_while_running(
+    tmp_path, monkeypatch
+) -> None:
+    """评审 P2-3：**线程还在跑**的时候改选区，那份旧结论必须丢掉，不能留在界面上。
+
+    旧行为：改选区 → `_clear_probe_result()` 把 `_probe_region` 归零 → 线程随后完成时
+    无条件写入旧选区的结论与橙框，而此时 `_probe_region` 已是 None，**后续任何选区变化都清不掉**。
+    """
     from luoluotool.core.vision import probe_region_on_image as real_probe
+
+    dialog = _dialog(_scene(STAMP_POSITIONS), tmp_path)
+    _select_stamp(dialog, STAMP_POSITIONS[1])
+
+    def _slow(image, region, **kwargs):
+        time.sleep(0.3)
+        return real_probe(image, region, **kwargs)
+
+    monkeypatch.setattr("luoluotool.core.vision.probe_region_on_image", _slow)
+    dialog.probe_button.click()
+    _APP.processEvents()
+
+    dialog.set_selection_in_image(10, 10, *STAMP_SIZE)      # 跑的过程中换选区
+    assert _wait_for(lambda: dialog.probe_thread is None, 3000), "线程没有收尾"
+
+    assert dialog.view.probe_rects() == []                   # 旧橙框不许留在图上
+    assert "作废" in dialog.probe_result_label.text()         # 明确告诉用户这次结果已作废
+    dialog.deleteLater()
+
+
+def test_probe_uses_the_threshold_it_was_given(tmp_path) -> None:
+    """评审 P2-2：试识别必须用**传进来的阈值**（＝调试页当前设定），不能固定用默认 0.85。"""
+    from luoluotool.gui.dialogs.crop_dialog import TemplateCropDialog
+
+    scene = _scene([STAMP_POSITIONS[0]])
+    region = (STAMP_POSITIONS[0][0], STAMP_POSITIONS[0][1], *STAMP_SIZE)
+
+    strict = TemplateCropDialog(scene, (scene.shape[1], scene.shape[0]), save_dir=tmp_path,
+                                threshold=0.999)
+    strict.set_selection_in_image(*region)
+    assert strict._threshold == 0.999
+    strict.probe_button.click()
+    assert _wait_for(lambda: strict.probe_thread is None, 3000)
+    assert "阈值 1.00" in strict.probe_result_label.text()    # 结论里写明用的是哪个阈值
+
+    loose = TemplateCropDialog(scene, (scene.shape[1], scene.shape[0]), save_dir=tmp_path,
+                               threshold=0.85)
+    loose.set_selection_in_image(*region)
+    loose.probe_button.click()
+    assert _wait_for(lambda: loose.probe_thread is None, 3000)
+    assert "阈值 0.85" in loose.probe_result_label.text()
+    strict.deleteLater()
+    loose.deleteLater()
+
+
+def test_probe_thread_is_registered_until_it_finishes(tmp_path) -> None:
+    """评审 P2-4：线程在飞的时候必须有人持有强引用（否则弹窗一销毁就可能崩）。"""
+    from luoluotool.gui import workers
+
+    dialog = _dialog(_scene([STAMP_POSITIONS[0]]), tmp_path)
+    _select_stamp(dialog, STAMP_POSITIONS[0])
+
+    dialog.probe_button.click()
+    thread = dialog.probe_thread
+    assert thread is not None
+    assert thread in workers.ACTIVE_PROBES
+    assert _wait_for(lambda: thread not in workers.ACTIVE_PROBES, 3000)
+    dialog.deleteLater()
+
+
+def test_closing_releases_the_probe_thread_without_blocking(tmp_path, monkeypatch) -> None:
+    """评审 P2-4：关窗**不阻塞 GUI** —— 请求停止 + 断开本弹窗的信号 + 交给线程自己收尾。
+
+    旧实现是在 GUI 线程里 `wait(10 秒)`：一来违反"禁止主线程阻塞"，二来超时后照样关闭，
+    等于把还在跑的 QThread 丢给 GC（正是那次等待想避免的崩溃）。
+    """
+    from luoluotool.core.vision import probe_region_on_image as real_probe
+    from luoluotool.gui import workers
 
     dialog = _dialog(_scene([STAMP_POSITIONS[0]]), tmp_path)
     _select_stamp(dialog, STAMP_POSITIONS[0])
@@ -142,9 +216,15 @@ def test_closing_waits_for_the_probe_thread(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("luoluotool.core.vision.probe_region_on_image", _slow)
     dialog.probe_button.click()
     assert _wait_for(lambda: started["called"], 2000), "试识别线程没有起来"
-
-    dialog.done(int(TemplateCropDialog.DialogCode.Rejected))
-
     thread = dialog.probe_thread
-    assert thread is None or not thread.isRunning()
+    assert thread is not None and thread in workers.ACTIVE_PROBES      # 跑的时候有人持有强引用
+
+    closed_at = time.monotonic()
+    dialog.done(int(TemplateCropDialog.DialogCode.Rejected))
+    elapsed = time.monotonic() - closed_at
+
+    assert elapsed < 0.3                                   # 没在 GUI 线程里干等线程跑完
+    assert dialog.probe_thread is None                     # 弹窗不再持有它（信号已断开）
+    assert thread.stop_requested() is True                 # 已请求停止
+    assert _wait_for(lambda: thread not in workers.ACTIVE_PROBES, 3000), "线程跑完必须自动摘掉"
     dialog.deleteLater()

@@ -8,10 +8,10 @@ import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QEvent
 from PySide6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
 
 from luoluotool import __version__
-from luoluotool.config.models import AppConfig
 from luoluotool.gui.pages import about as about_module
 from luoluotool.gui.pages.about import PAGE_TITLE, AboutPage
 from luoluotool.gui.widgets import PAGE_SIZE_HINT, ScrollablePage
@@ -124,3 +124,68 @@ def test_about_page_reports_when_directory_cannot_be_opened(monkeypatch) -> None
     page.open_data_dir_button.click()
     assert "打不开目录" in page.status_label.text()
     page.close()
+
+
+# ------------------------------------------------- 第四轮评审 P3-6 / P3-7 的回归
+
+
+def test_diagnostics_text_has_no_absolute_user_path() -> None:
+    """评审 P3-6①：诊断信息里**不许出现绝对路径**（否则会把 C:\\Users\\<用户名> 贴出去）。"""
+    text = AboutPage().diagnostics_text()
+
+    assert "程序目录：" in text and "数据目录：" in text
+    assert "user_data" in text and "logs" in text and "assets/templates" in text
+    assert ":\\" not in text and ":/" not in text          # 没有任何盘符 / 绝对路径
+    assert "Users" not in text                             # 也不带家目录那一段
+    assert "用户" not in text
+
+
+def test_about_page_states_misoperation_risk() -> None:
+    """评审 P3-7：PROJECT_SPEC §5 要求的"误操作风险"必须出现在关于页。"""
+    text = _page_text(AboutPage())
+
+    assert "误操作风险" in text
+    assert "置顶" in text or "前台" in text        # 会抢前台
+    assert "光标" in text                          # 会真实移动鼠标
+    assert "停止" in text                          # 给了退路
+
+
+def test_dir_buttons_do_not_create_directories_until_used(monkeypatch) -> None:
+    """评审 P3-6③：构造关于页不该顺带建目录（`get_*_dir()` 会 mkdir）。"""
+    from pathlib import Path
+
+    calls: list[Path] = []
+    fake = Path(os.environ["TEMP"]) / "about_dir_probe"      # 刻意不创建
+
+    def fake_getter() -> Path:
+        calls.append(fake)
+        return fake
+
+    monkeypatch.setattr(about_module, "get_user_data_dir", fake_getter)
+    page = AboutPage()
+
+    assert calls == []                       # 构造时一次都没调用
+    assert not fake.exists()                 # 也就不会建目录
+
+    QApplication.sendEvent(page.open_data_dir_button, QEvent(QEvent.Type.Enter))
+    assert calls == [fake]                   # 悬停时才取路径
+    assert str(fake) in page.open_data_dir_button.toolTip()
+    assert not fake.exists()                 # 取路径本身不建目录（建目录是 get_*_dir 的事）
+    page.close()
+
+
+def test_pyside_version_failure_is_logged_not_swallowed(monkeypatch, caplog) -> None:
+    """评审 P3-6②：读不到版本号时要记日志，不能 `except: return "未知"` 一声不响。"""
+    import logging as _logging
+    import sys
+
+    class _Broken:
+        @property
+        def __version__(self):
+            raise RuntimeError("元数据缺失")
+
+    monkeypatch.setitem(sys.modules, "PySide6", _Broken())
+    caplog.set_level(_logging.WARNING)
+
+    assert AboutPage._pyside_version() == "未知"
+    assert any("PySide6 版本" in record.message for record in caplog.records)

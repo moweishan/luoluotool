@@ -411,6 +411,10 @@ class DebugPage(ScrollablePage):
             "interval_ms": self.key_interval_spin.value(),
         })
 
+    def vision_threshold(self) -> float:
+        """当前识别阈值（评审 P2-2：框选弹窗的「在本图试识别」要与正式识别同口径）。"""
+        return float(self.vision_threshold_spin.value())
+
     def _on_vision_clicked(self) -> None:
         images = self.vision_templates()
         if not images:
@@ -418,7 +422,7 @@ class DebugPage(ScrollablePage):
             return
         self.test_requested.emit("vision", {
             "images": images,
-            "threshold": self.vision_threshold_spin.value(),
+            "threshold": self.vision_threshold(),
             "max_results": self.vision_max_spin.value(),
         })
 

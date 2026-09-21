@@ -331,7 +331,12 @@ def probe_region_on_image(
 
 
 def _probe_message(result: TemplateProbeResult, max_listed: int = PROBE_MAX_LISTED) -> str:
-    """组织「在本图试识别」的人读结论（分成：独一无二 / 有多处 / 异常零命中）。"""
+    """组织「在本图试识别」的人读结论（分成：独一无二 / 有多处 / 异常零命中）。
+
+    措辞必须**限定在这次试识别成立的条件上**（评审 P2-2）：试识别用的是 **1:1 匹配 + 当前阈值**，
+    而正式识别还会搜缩放版本（0.3x–4.0x）且阈值可能被调低，两种差异都只会让正式识别**命中更多处**。
+    因此这里只说"本图 1:1 匹配（阈值 …）下只命中你框的这一处"，**不许**写成"识别时不会认错"。
+    """
     if not result.matches:
         return (
             "试识别异常：连你框的这块都没找到（模板就是从这张图裁下来的，正常情况下必然命中）——"
@@ -341,18 +346,20 @@ def _probe_message(result: TemplateProbeResult, max_listed: int = PROBE_MAX_LIST
     best_score = self_match.score if self_match is not None else result.matches[0].score
     if result.duplicates == 0:
         return (
-            f"试识别：本图只命中你框的这一处（匹配度 {best_score:.3f}）——"
-            f"这块区域在画面里是独一无二的，存成模板后识别不会认错"
+            f"试识别：本图 1:1 匹配（阈值 {result.threshold:.2f}）下只命中你框的这一处"
+            f"（匹配度 {best_score:.3f}）—— 这块区域在这张图上没有重复；"
+            f"正式识别还会搜缩放版本、阈值也可能更低，所以仍要挑画面里不会变的细节"
         )
     listed = "、".join(
         f"({match.center[0]}, {match.center[1]})" for match in result.others[:max_listed]
     )
+    if result.duplicates > max_listed:
+        remaining = result.duplicates - max_listed
+        listed += f" 等（另有 {remaining} 处未列出）"
     head = (
-        f"试识别：本图共 {len(result.matches)} 处相似（阈值 {result.threshold:.2f}），"
+        f"试识别：本图 1:1 匹配（阈值 {result.threshold:.2f}）共 {len(result.matches)} 处相似，"
         f"除你框的还有 {result.duplicates} 处：{listed}"
     )
-    if result.duplicates > max_listed:
-        head += f" 等 {result.duplicates} 处"
     lines = [
         head,
         "⚠ 识别时可能选中其中任意一处：建议把选区改小到只包含独特细节（例如数字/图标），或改用更靠得住的特征",

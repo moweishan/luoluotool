@@ -115,22 +115,25 @@ def assess_region_quality(image_bgr: np.ndarray) -> RegionQuality:
     取样：边长超过 `QUALITY_SAMPLE_PX` 时按**步长抽样**而不是整图计算 —— 界面上拖动选区时
     每移动一次鼠标都会调用它，整图算一次 800x478 要 ~10ms，抽样是 ~1ms（1600x1024 实测 1.4ms），
     而"纯色/噪声仍然是平的、纹理仍然有边缘"这两个性质在抽样后不变。
+
+    **但 `flat` 是唯一会拦住保存的档位**，抽样理论上可能把细周期纹理抽成"平"（评审 P3-4）：
+    所以抽样判为 `flat` 时再用**全分辨率复核一次** —— 这条路径很少走，成本可忽略；
+    复核结果不是 `flat` 就按复核结果走（宁可放过，也不误拦用户的模板）。
     """
     height, width = image_bgr.shape[:2]
     step = max(1, -(-max(height, width) // QUALITY_SAMPLE_PX))     # 向上取整的整数步长
-    sample = np.ascontiguousarray(image_bgr[::step, ::step])
-    gray = cv2.cvtColor(sample, cv2.COLOR_BGR2GRAY).astype(np.float32)
-    std = float(gray.std())
-    edges = cv2.Canny(sample, QUALITY_CANNY_LOW, QUALITY_CANNY_HIGH)
-    edge_ratio = float(edges.mean()) / 255.0
+    std, edge_ratio, blank = _quality_metrics(image_bgr[::step, ::step])
+    if blank and step > 1:
+        std, edge_ratio, blank = _quality_metrics(image_bgr)        # 全分辨率复核，别误拦
 
     weak_contrast = std < QUALITY_LOW_STD
     weak_structure = edge_ratio < QUALITY_LOW_EDGE_RATIO
     metrics = f"对比度 {std:.1f}、边缘 {edge_ratio:.1%}"
-    if is_blank_frame(sample):
+    if blank:
         level = "flat"
         message = f"几乎没有可辨识的细节（{metrics}，几乎是纯色）"
     elif weak_contrast and weak_structure:
+        # 两个信号都弱：措辞用更重的"几乎没有"（仍允许保存，见上面的取舍）
         level = "low"
         message = f"几乎没有可辨识的细节（{metrics}）"
     elif weak_contrast or weak_structure:
@@ -140,6 +143,16 @@ def assess_region_quality(image_bgr: np.ndarray) -> RegionQuality:
         level = "ok"
         message = f"辨识度良好（{metrics}）"
     return RegionQuality(width, height, std, edge_ratio, level, message)
+
+
+def _quality_metrics(image_bgr: np.ndarray) -> tuple[float, float, bool]:
+    """算**对比度**（灰度标准差）、**边缘占比**，以及"是不是几乎是纯色"（`is_blank_frame`）。
+
+    单独抽出来是为了让 `assess_region_quality` 能在抽样判"纯色"时用全分辨率复核一次（评审 P3-4）。
+    """
+    gray = cv2.cvtColor(np.ascontiguousarray(image_bgr), cv2.COLOR_BGR2GRAY).astype(np.float32)
+    edges = cv2.Canny(np.ascontiguousarray(image_bgr), QUALITY_CANNY_LOW, QUALITY_CANNY_HIGH)
+    return float(gray.std()), float(edges.mean()) / 255.0, is_blank_frame(image_bgr)
 
 
 # ---------------------------------------------------------------- 模板与匹配

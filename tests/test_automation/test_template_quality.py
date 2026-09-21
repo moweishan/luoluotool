@@ -101,10 +101,27 @@ def test_large_noisy_flat_region_is_flagged_but_allowed() -> None:
     assert quality.width == 1600 and quality.height == 1024
 
 
+def test_fine_stripes_are_not_misjudged_by_the_sampling(monkeypatch) -> None:
+    """评审 P3-4：抽样可能把细周期纹理抽成"平" —— 判"纯色"时要用**全分辨率复核**一次。
+
+    构造一幅 1 像素周期的黑白条纹大图，并把取样边长压到 8（步长 8 的抽样会把条纹抽成同一列、
+    看起来像纯色）；复核后应当按真实结构判为可用，而不是误拦用户的模板。
+    """
+    from luoluotool.automation import template_match
+
+    stripes = np.zeros((64, 64, 3), dtype=np.uint8)
+    stripes[::2, :, :] = 255                     # 1 像素周期黑白条纹
+    monkeypatch.setattr(template_match, "QUALITY_SAMPLE_PX", 8)   # 强制步长 > 1
+
+    quality = assess_region_quality(stripes)
+
+    assert quality.level == "ok", quality.message          # 复核后按真实结构判，不误拦
+    assert quality.edge_ratio > 0
+
+
 def test_textured_region_is_usable() -> None:
     """斜条纹（对比度和结构都够）：判为 ok。"""
     quality = assess_region_quality(_texture())
-
     assert quality.level == "ok"
     assert quality.is_usable is True
     assert quality.std >= QUALITY_LOW_STD
