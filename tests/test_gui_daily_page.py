@@ -111,7 +111,35 @@ def test_daily_page_keeps_the_designed_labels_verbatim() -> None:
     assert "截取鸡舍位置" in text and "截取土地位置" in text and "截取水产养殖位置" in text
     assert "示例图片：" in text
     assert "功能说明：" in text
-    assert page.auto_produce_least.text() == "自动识别那个产物少造那个"
+    assert page.auto_produce_least.text() == "自动识别那个产物少造那个（只读）"
+    page.close()
+
+
+def test_produce_check_is_read_only() -> None:
+    """用户 2026-09-21 要求：「自动识别那个产物少造那个」**只读** —— 看得见、点不动（也不灰掉）。
+
+    只读 ≠ 禁用：外观保持正常、tooltip 照常；但点不动、键盘也改不动，
+    而**程序里仍可改**（第 2 批按配置/程序判断来设置它的状态）。
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    page = _page()
+    box = page.auto_produce_least
+    page.show()
+    _APP.processEvents()
+
+    before = box.isChecked()
+    QTest.mouseClick(box, Qt.MouseButton.LeftButton, pos=QPoint(box.width() // 2, box.height() // 2))
+    _APP.processEvents()
+
+    assert box.isChecked() is before                      # 点击不改变状态
+    assert box.isEnabled() is True                        # 但没有灰掉（不是"禁用"）
+    assert box.focusPolicy() == Qt.FocusPolicy.NoFocus    # 键盘也拿不到焦点
+    assert "只读" in box.text() and "只读" in box.toolTip()
+
+    box.setChecked(not before)                            # 程序里照样能设置（第 2 批要用）
+    assert box.isChecked() is not before
     page.close()
 
 

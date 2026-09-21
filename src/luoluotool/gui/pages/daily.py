@@ -28,7 +28,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -63,6 +63,8 @@ BUILDINGS: tuple[tuple[str, str, str, str], ...] = (
 
 IMAGE_PENDING_NOTE = "（图片待放入）"
 BUTTON_PENDING_TIP = "第 1 批只做界面：这个按钮的功能还没接入（计划第 2/3 批实现）"
+READONLY_MARK = "（只读）"                       # 只读项统一在文案后加这个标记
+AUTO_PRODUCE_LEAST_TEXT = "自动识别那个产物少造那个"
 
 
 class DailyPage(ScrollablePage):
@@ -195,14 +197,36 @@ class DailyPage(ScrollablePage):
         box = QGroupBox("产物制造")
         box.setObjectName("group_produce")
         layout = QVBoxLayout(box)
-        self.auto_produce_least = QCheckBox("自动识别那个产物少造那个")
+        # 用户 2026-09-21 要求：这一项**只读**（由程序自动判断，不给用户改）。
+        # 用事件过滤器"吃掉点击"而不是 setEnabled(False)：禁用的控件会灰掉（看着像"暂时不可用"），
+        # 而只读只需要"看得见、点不动、tooltip 照常能看"。
+        self.auto_produce_least = QCheckBox(f"{AUTO_PRODUCE_LEAST_TEXT}{READONLY_MARK}")
         self.auto_produce_least.setObjectName("auto_produce_least")
-        self.auto_produce_least.setToolTip("自动识别库存最少的产物并优先制造它")
+        self.auto_produce_least.setToolTip(
+            "自动识别库存最少的产物并优先制造它（本项只读：由程序自动判断，不能手动修改）"
+        )
+        self.auto_produce_least.setFocusPolicy(Qt.FocusPolicy.NoFocus)   # 空格/方向键也改不动它
+        self.auto_produce_least.installEventFilter(self)
         row = QHBoxLayout()
         row.addWidget(self.auto_produce_least)
         row.addStretch(1)
         layout.addLayout(row)
         return box
+
+    # ---------------------------------------------------------------- 只读控件
+    def eventFilter(self, watched, event) -> bool:        # noqa: N802 (Qt 命名)
+        """拦住只读控件的鼠标交互（点击/双击/滚轮都不改它的值）。
+
+        只读与"禁用"的区别：**外观保持正常**（不灰掉），tooltip 与悬停照常，只是点不动；
+        程序里仍可 `setChecked()` 改它（第 2 批按配置/程序判断来设置）。
+        """
+        if watched is self.auto_produce_least and event.type() in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.MouseButtonDblClick,
+        ):
+            return True
+        return super().eventFilter(watched, event)
 
     # ---------------------------------------------------------------- 配置绑定
     def set_config(self, config: AppConfig) -> None:
