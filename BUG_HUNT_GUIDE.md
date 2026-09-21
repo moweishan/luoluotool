@@ -89,7 +89,7 @@ src/luoluotool/
     icons.py                  50  窗口图标加载（魔数校验 + 降级为空图标）
     pages/debug.py           434  开发者调试页（识别入口/模板列表/干跑/测试按钮）
     pages/settings.py        135  设置页（含开发者调试开关 + 急停热键提示）
-    pages/daily.py           180  日常任务页（任务勾选、点击序列）
+    pages/daily.py          258  日常任务页（按用户设计稿重建；第 1 批只做界面）
     pages/order_hold.py       56  卡订单页
     pages/planned_feature.py  51  功能三/四公共基类（占位页）
     pages/feature3.py,4.py    13  功能三/四页（占位子类）
@@ -224,7 +224,7 @@ print('layer check violations =', bad)
 ### 主链路 B：任务执行与输入注入
 
 ```
-日常任务页/卡订单页勾选 → 任务进队列（core/registry.py 注册表）
+卡订单页勾选 → 任务进队列（core/registry.py 注册表）；日常任务页 2026-09-21 起为界面版（尚未绑配置）
 主窗口「启动」                      gui/main_window.py:315   _start()
   真实模式确认弹窗                  gui/main_window.py:342   _real_mode_warning_text()/_confirm_real_mode()
   运行线程 _RunnerThread            gui/workers.py:30

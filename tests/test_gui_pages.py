@@ -1,4 +1,9 @@
-"""配置页绑定测试（offscreen）：控件→配置写回、set_config 刷新、加载不触发脏标记。"""
+"""配置页绑定测试（offscreen）：控件→配置写回、set_config 刷新、加载不触发脏标记。
+
+**日常任务页**（2026-09-21 按用户设计稿整页替换后）本批只做界面、不绑定配置，
+它的测试单独放在 `tests/test_gui_daily_page.py`；这里的 daily 相关用例已随旧界面删除
+（解析器语法/非法输入仍在 `tests/test_config/test_models.py` 覆盖，步数上限也补到了那边）。
+"""
 
 import os
 
@@ -7,37 +12,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PySide6.QtWidgets import QApplication
 
 from luoluotool.config.models import AppConfig
-from luoluotool.gui.pages.daily import DailyPage
 from luoluotool.gui.pages.feature3 import Feature3Page
 from luoluotool.gui.pages.feature4 import Feature4Page
 from luoluotool.gui.pages.order_hold import OrderHoldPage
 from luoluotool.gui.pages.settings import SettingsPage
 
 _APP = QApplication.instance() or QApplication([])
-
-
-def test_daily_page_binds_fields_and_refreshes() -> None:
-    config = AppConfig.default()
-    changes: list[str] = []
-    page = DailyPage(config, lambda: changes.append("dirty"))
-    assert page.enabled_box.isChecked() is False
-    page.enabled_box.setChecked(True)
-    assert config.features.daily_tasks.enabled is True
-    page.task_a_box.setChecked(True)
-    assert config.features.daily_tasks.tasks["placeholder_task_a"].enabled is True
-    page.loop_box.setChecked(True)
-    page.interval_spin.setValue(600)
-    assert config.features.daily_tasks.loop.enabled is True
-    assert config.features.daily_tasks.loop.interval_seconds == 600
-    assert changes == ["dirty"] * 4
-    config2 = AppConfig.default()
-    config2.features.daily_tasks.enabled = True
-    config2.features.daily_tasks.loop.interval_seconds = 1234
-    page.set_config(config2)
-    assert page.enabled_box.isChecked() is True
-    assert page.interval_spin.value() == 1234
-    assert changes == ["dirty"] * 4  # 刷新控件不触发脏标记
-    page.close()
 
 
 def test_order_hold_page_binds_reserved_switches() -> None:
@@ -147,111 +127,6 @@ def test_debug_page_restore_cursor_switch_inert_without_developer_mode() -> None
     assert config.automation.restore_cursor_after_click is True
     assert page.restore_cursor_box.isChecked() is True
     assert "不生效" in page.status_label.text()
-    page.close()
-
-
-def test_daily_page_rejects_over_limit_keys_text(caplog) -> None:
-    """回归（评审 P1-2 + P3-2）：超过步数上限的输入被拒绝，保留原值并记日志（不写坏配置）。"""
-    import logging
-
-    from luoluotool.config.models import MAX_KEY_STEPS
-    from luoluotool.gui.pages.daily import DailyPage
-
-    caplog.set_level(logging.WARNING)
-    config = AppConfig.default()
-    page = DailyPage(config, lambda: None)
-
-    too_many = ", ".join(["a"] * (MAX_KEY_STEPS + 5))
-    page.keys_edit.setText(too_many)
-    page.keys_edit.editingFinished.emit()
-
-    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["keys"]
-    assert stored == []                                  # 配置未被写坏
-    assert page.keys_edit.text() == ""                   # 输入被回退
-    assert "按键序列输入被丢弃" in caplog.text            # 不再静默回退
-    page.close()
-
-
-def test_daily_page_rejects_over_limit_swipes_text(caplog) -> None:
-    """回归（评审 P1-2 + P3-2）：滑动步骤超限同样被拒绝并记日志。"""
-    import logging
-
-    from luoluotool.config.models import MAX_SWIPE_STEPS
-    from luoluotool.gui.pages.daily import DailyPage
-
-    caplog.set_level(logging.WARNING)
-    config = AppConfig.default()
-    page = DailyPage(config, lambda: None)
-
-    too_many = "; ".join([f"{i},{i} > {i + 1},{i + 1}" for i in range(MAX_SWIPE_STEPS + 3)])
-    page.swipes_edit.setText(too_many)
-    page.swipes_edit.editingFinished.emit()
-
-    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["swipes"]
-    assert stored == []
-    assert page.swipes_edit.text() == ""
-    assert "滑动步骤输入被丢弃" in caplog.text
-    page.close()
-
-
-def test_daily_page_binds_keys_text() -> None:
-    """日常任务页「按键序列」输入框：文本 ↔ params.keys 双向绑定，非法输入回退不写坏配置。"""
-    from luoluotool.gui.pages.daily import DailyPage
-
-    config = AppConfig.default()
-    page = DailyPage(config, lambda: None)
-    assert page.keys_edit.text() == ""  # 默认空
-
-    page.keys_edit.setText("ctrl+s, w*800")
-    page.keys_edit.editingFinished.emit()
-    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["keys"]
-    assert [(item["combo"], item["hold_ms"]) for item in stored] == [("ctrl+s", 0), ("w", 800)]
-
-    # 非法文本：回退显示已保存的内容，配置不被破坏
-    page.keys_edit.setText("ctrl+")
-    page.keys_edit.editingFinished.emit()
-    assert page.keys_edit.text() == "ctrl+s, w*800"
-    assert len(config.features.daily_tasks.tasks["placeholder_task_a"].params["keys"]) == 2
-
-    # set_config 会按配置刷新显示
-    config2 = AppConfig.default()
-    config2.features.daily_tasks.tasks["placeholder_task_a"].params = {
-        "click_points": [], "keys": [{"combo": "enter"}], "wait_after_ms": 500,
-    }
-    page.set_config(config2)
-    assert page.keys_edit.text() == "enter"
-    page.close()
-
-
-def test_daily_page_binds_swipes_text() -> None:
-    """日常任务页「滑动序列」输入框：文本 ↔ params.swipes 双向绑定，非法输入回退。"""
-    from luoluotool.gui.pages.daily import DailyPage
-
-    config = AppConfig.default()
-    page = DailyPage(config, lambda: None)
-    assert page.swipes_edit.text() == ""
-
-    page.swipes_edit.setText("100,200 > 400,600; 10,10 > 20,20*800")
-    page.swipes_edit.editingFinished.emit()
-    stored = config.features.daily_tasks.tasks["placeholder_task_a"].params["swipes"]
-    assert [(item["from"], item["to"], item["duration_ms"]) for item in stored] == [
-        ([100, 200], [400, 600], 400),
-        ([10, 10], [20, 20], 800),
-    ]
-
-    # 非法文本：回退显示已保存内容，配置不被破坏
-    page.swipes_edit.setText("100,200 >")
-    page.swipes_edit.editingFinished.emit()
-    assert page.swipes_edit.text() == "100,200 > 400,600; 10,10 > 20,20*800"
-    assert len(config.features.daily_tasks.tasks["placeholder_task_a"].params["swipes"]) == 2
-
-    config2 = AppConfig.default()
-    config2.features.daily_tasks.tasks["placeholder_task_a"].params = {
-        "click_points": [], "keys": [], "swipes": [{"from": [1, 1], "to": [2, 2]}],
-        "wait_after_ms": 500,
-    }
-    page.set_config(config2)
-    assert page.swipes_edit.text() == "1,1 > 2,2"
     page.close()
 
 

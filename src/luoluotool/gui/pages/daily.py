@@ -1,38 +1,77 @@
-"""日常任务配置页：启用、占位任务 A、按键序列、滑动序列、循环开关与间隔。"""
+"""日常任务页：按用户设计稿（`日常任务设计稿.html`）重建的界面。
+
+**本文件当前只做界面（第 1 批）**：分组、控件、文案、默认值、提示都与设计稿一一对应，
+但**不读写配置、不含任何业务逻辑**（控件改动不会写回 `AppConfig`，也不会触发脏标记）；
+需要动作的按钮（选择图片 / 截取游戏画面）已按设计稿摆好但**禁用**，等第 2/3 批接入。
+
+设计稿 → Qt 的对应关系（推导规则，改设计稿时照此翻译）：
+
+| 设计稿 | Qt |
+|---|---|
+| `<fieldset><legend>` | `QGroupBox`（可嵌套） |
+| `<input type="checkbox">` | `QCheckBox` |
+| `<select>` | `QComboBox` |
+| `<input type="number" min/max/step/value>` | `QSpinBox`（单位写成 `setSuffix`） |
+| `<input type="file">` | 只读 `QLineEdit` + `QPushButton`（Qt 没有文件输入框） |
+| `<button>` | `QPushButton`（本批禁用） |
+| `<small>` | 灰色小字 `QLabel` |
+| `<img>` | 占位框（`QLabel` + 边框），真实图片后续放进 `assets/` |
+| `title="…"` | `setToolTip(…)` |
+| `.two-col` | `QHBoxLayout` 两列 |
+
+控件名直接用设计稿的 `id`（`objectName`），所以"设计稿里的 id ↔ 页面里的控件"可以逐条对号；
+配置字段名（设计稿 `data-key`）留到第 2 批绑定，见文件末尾的对照注释。
+"""
+
+from __future__ import annotations
 
 import logging
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
+    QFrame,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSpinBox,
     QVBoxLayout,
+    QWidget,
 )
 
-from luoluotool.config.models import (
-    AppConfig,
-    PlaceholderTaskParams,
-    TaskConfig,
-    format_keys_text,
-    format_swipes_text,
-    parse_keys_text,
-    parse_swipes_text,
-)
-
-logger = logging.getLogger(__name__)
+from luoluotool.config.models import AppConfig
 from luoluotool.gui.widgets import ScrollablePage
 
-LOOP_MIN_SECONDS = 1
-LOOP_MAX_SECONDS = 86400
+logger = logging.getLogger(__name__)
+
+# 循环间隔范围与默认值（照设计稿 data-* 里的 min/max/value）
+LOOP_INTERVAL_RANGE = (1, 720)
+LOOP_INTERVAL_DEFAULT = 30
+ISLAND_COUNT = 10                    # 岛屿编号下拉：1–10
+
+# 三个生产建筑分组（设计稿里是三段重复结构，这里用一份定义避免抄三遍）
+# (标题, 控件名前缀, "截取…位置" 的中间词, 截取按钮的 id)
+BUILDINGS: tuple[tuple[str, str, str, str], ...] = (
+    ("鸡舍", "coop", "鸡舍", "capture_game_screen"),
+    ("土地", "land", "土地", "land_capture_screen"),
+    ("水产养殖", "aqua", "水产养殖", "aqua_capture_screen"),
+)
+
+IMAGE_PENDING_NOTE = "（图片待放入）"
+BUTTON_PENDING_TIP = "第 1 批只做界面：这个按钮的功能还没接入（计划第 2/3 批实现）"
 
 
 class DailyPage(ScrollablePage):
-    """绑定 features.daily_tasks.*；控件改动写回内存配置并回调脏标记。
+    """日常任务页（界面版）：照设计稿搭出控件与布局。
 
-    按键序列只做「文本 ↔ 配置」的转换与展示，解析规则在 `config.models.parse_keys_text`。
+    第 1 批**只画界面**：
+    - `set_config()` 存在（主窗口加载/恢复默认时会调），但只把控件刷回设计稿默认值，
+      **不读配置**；控件改动也**不写配置**、不触发 `on_changed`（有守卫测试钉住）。
+    - 这样你能先看真实外观，第 2 批再把控件与配置双向绑定（并带 schema 迁移）。
     """
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
@@ -40,141 +79,180 @@ class DailyPage(ScrollablePage):
         self._config = config
         self._on_changed = on_changed
         layout = QVBoxLayout(self.content)
-        self.enabled_box = QCheckBox("启用日常任务")
-        self.task_a_box = QCheckBox("占位任务 A")
-        self.loop_box = QCheckBox("循环执行")
-        self.interval_spin = QSpinBox()
-        self.interval_spin.setRange(LOOP_MIN_SECONDS, LOOP_MAX_SECONDS)
-        self.interval_spin.setSuffix(" 秒")
-        self.keys_edit = QLineEdit()
-        self.keys_edit.setPlaceholderText("例如：ctrl+s, w*800, enter（*后为长按毫秒）")
-        self.keys_edit.setToolTip(
-            "按顺序执行的按键序列，用逗号分隔：\n"
-            "· 组合键：ctrl+s、alt+f4、shift+space\n"
-            "· 长按：w*800 表示按住 800 毫秒后松开\n"
-            "· 可用键名见 automation/real_input.py 的 KEY_NAME_TO_VK（a-z、0-9、f1-f24、"
-            "enter/esc/tab/space/up/down/left/right 等）\n"
-            "执行时每次按键前都会校验并把游戏窗口置于最顶层；无法确保时不会按键。"
-        )
-        self.swipes_edit = QLineEdit()
-        self.swipes_edit.setPlaceholderText("例如：100,200 > 400,600; 400,600 > 100,200*800")
-        self.swipes_edit.setToolTip(
-            "鼠标滑动（按住左键拖拽）序列，用分号分隔：\n"
-            "· 基本写法：x1,y1 > x2,y2（从起点滑到终点，默认 400 毫秒）\n"
-            "· 指定时长：x1,y1 > x2,y2*800（用时 800 毫秒，范围 50–10000）\n"
-            "坐标是游戏客户区坐标；执行时每次滑动前都会校验并把游戏窗口置于最顶层，"
-            "无法确保时不会滑动；滑动期间按急停键会立即中断并松开左键。"
-        )
-        loop_row = QHBoxLayout()
-        loop_row.addWidget(self.loop_box)
-        loop_row.addWidget(QLabel("间隔"))
-        loop_row.addWidget(self.interval_spin)
-        loop_row.addStretch(1)
-        keys_row = QHBoxLayout()
-        keys_row.addWidget(QLabel("按键序列"))
-        keys_row.addWidget(self.keys_edit)
-        swipes_row = QHBoxLayout()
-        swipes_row.addWidget(QLabel("滑动序列"))
-        swipes_row.addWidget(self.swipes_edit)
-        layout.addWidget(self.enabled_box)
-        layout.addWidget(self.task_a_box)
-        layout.addLayout(keys_row)
-        layout.addLayout(swipes_row)
-        layout.addLayout(loop_row)
+        layout.setSpacing(10)
+
+        layout.addWidget(self._general_box())
+        layout.addWidget(self._buildings_box())
+        layout.addWidget(self._produce_box())
         layout.addStretch(1)
-        self.enabled_box.toggled.connect(self._on_enabled_toggled)
-        self.task_a_box.toggled.connect(self._on_task_a_toggled)
-        self.loop_box.toggled.connect(self._on_loop_toggled)
-        self.interval_spin.valueChanged.connect(self._on_interval_changed)
-        self.keys_edit.editingFinished.connect(self._on_keys_edited)
-        self.swipes_edit.editingFinished.connect(self._on_swipes_edited)
-        self.set_config(config)
 
+    # ---------------------------------------------------------------- 总开关
+    def _general_box(self) -> QGroupBox:
+        box = QGroupBox("总开关与循环时长")
+        box.setObjectName("group_general")
+        layout = QVBoxLayout(box)
+
+        self.daily_enabled = QCheckBox("启用日常任务")
+        self.daily_enabled.setObjectName("daily_enabled")
+        self.daily_enabled.setToolTip("总开关，关闭后本页所有配置都不生效")
+        row = QHBoxLayout()
+        row.addWidget(self.daily_enabled)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        self.loop_interval_minutes = QSpinBox()
+        self.loop_interval_minutes.setObjectName("loop_interval_minutes")
+        self.loop_interval_minutes.setRange(*LOOP_INTERVAL_RANGE)
+        self.loop_interval_minutes.setSingleStep(1)
+        self.loop_interval_minutes.setValue(LOOP_INTERVAL_DEFAULT)
+        self.loop_interval_minutes.setMaximumWidth(120)     # 设计稿里数字框是窄的（90px）
+        self.loop_interval_minutes.setToolTip("仅在执行方式为「按固定间隔循环」时生效")
+        row2 = QHBoxLayout()
+        row2.addWidget(QLabel("循环间隔（分钟）"))           # 单位跟设计稿一样写在标签里
+        row2.addWidget(self.loop_interval_minutes)
+        row2.addStretch(1)
+        layout.addLayout(row2)
+        return box
+
+    # ------------------------------------------------- 关键建筑位置与识别图片
+    def _buildings_box(self) -> QGroupBox:
+        box = QGroupBox("关键建筑位置以及图像识别所需图片")
+        box.setObjectName("group_buildings")
+        layout = QVBoxLayout(box)
+        layout.addWidget(_hint("功能说明：自动寻找生产建筑时由于每个人的建筑位置都不一样，所以需要手动配置"))
+        for title, prefix, label_word, capture_id in BUILDINGS:
+            layout.addWidget(self._building_box(title, prefix, label_word, capture_id))
+        return box
+
+    def _building_box(self, title: str, prefix: str, label_word: str, capture_id: str) -> QGroupBox:
+        """一个生产建筑分组（鸡舍 / 土地 / 水产养殖共用同一套结构）。"""
+        box = QGroupBox(title)
+        box.setObjectName(f"group_{prefix}")
+        layout = QVBoxLayout(box)
+
+        island = QComboBox()
+        island.setObjectName(f"{prefix}_island")
+        island.addItems([str(number) for number in range(1, ISLAND_COUNT + 1)])
+        island.setFixedWidth(80)                      # 设计稿把下拉收窄到只放得下数字
+        island.setToolTip(f"选择{title}所在的岛屿编号")
+        island_row = QHBoxLayout()
+        island_row.addWidget(QLabel("位于那个岛屿上"))
+        island_row.addWidget(island)
+        island_row.addStretch(1)
+        layout.addLayout(island_row)
+
+        layout.addWidget(QLabel("岛屿编号见下图"))
+        layout.addWidget(_image_placeholder(
+            f"{prefix}_island_map", "岛屿编号参考图「临时占位」",
+            tip="岛屿编号参考图，后续替换为真实截图",
+        ))
+
+        # 两列：左＝选择/截取参考图，右＝示例图片
+        left = QVBoxLayout()
+        left.addWidget(QLabel(f"截取{label_word}位置"))
+
+        ref_edit = QLineEdit()
+        ref_edit.setObjectName(f"{prefix}_ref_image")
+        ref_edit.setReadOnly(True)
+        ref_edit.setPlaceholderText("尚未选择图片")
+        ref_edit.setMinimumWidth(180)
+        ref_edit.setToolTip(f"只能选择图片文件（{label_word}所在岛屿参考截图，本批只做界面）")
+
+        pick_button = QPushButton("选择图片…")
+        pick_button.setObjectName(f"{prefix}_pick_image")
+        pick_button.setEnabled(False)                  # 第 1 批：按钮先摆好，功能未接入
+        pick_button.setToolTip(BUTTON_PENDING_TIP)
+
+        capture_button = QPushButton("截取游戏画面")
+        capture_button.setObjectName(capture_id)
+        capture_button.setEnabled(False)
+        capture_button.setToolTip(BUTTON_PENDING_TIP)
+
+        ref_row = QHBoxLayout()
+        ref_row.addWidget(ref_edit, 1)
+        ref_row.addWidget(pick_button)
+        ref_row.addWidget(capture_button)
+        ref_row.addStretch(1)
+        left.addLayout(ref_row)
+        left.addStretch(1)
+
+        right = QVBoxLayout()
+        right.addWidget(QLabel("示例图片："))
+        right.addWidget(_image_placeholder(
+            f"{prefix}_sample_image", "示例图片「临时占位」",
+            tip="示例图片，后续替换为真实示例",
+        ))
+        right.addStretch(1)
+
+        columns = QHBoxLayout()
+        columns.addLayout(left, 1)
+        columns.addLayout(right, 1)
+        layout.addLayout(columns)
+        return box
+
+    # ---------------------------------------------------------------- 产物制造
+    def _produce_box(self) -> QGroupBox:
+        box = QGroupBox("产物制造")
+        box.setObjectName("group_produce")
+        layout = QVBoxLayout(box)
+        self.auto_produce_least = QCheckBox("自动识别那个产物少造那个")
+        self.auto_produce_least.setObjectName("auto_produce_least")
+        self.auto_produce_least.setToolTip("自动识别库存最少的产物并优先制造它")
+        row = QHBoxLayout()
+        row.addWidget(self.auto_produce_least)
+        row.addStretch(1)
+        layout.addLayout(row)
+        return box
+
+    # ---------------------------------------------------------------- 配置绑定
     def set_config(self, config: AppConfig) -> None:
-        """重新绑定配置并刷新控件（不触发脏标记）。"""
+        """重新绑定配置（主窗口在加载/重载/恢复默认时调用）。
+
+        **第 1 批：只把控件刷回设计稿默认值，不读配置**；第 2 批改成真正的双向绑定。
+        """
         self._config = config
-        daily = config.features.daily_tasks
-        task = daily.tasks.get("placeholder_task_a")
-        self.enabled_box.blockSignals(True)
-        self.enabled_box.setChecked(daily.enabled)
-        self.enabled_box.blockSignals(False)
-        self.task_a_box.blockSignals(True)
-        self.task_a_box.setChecked(bool(task and task.enabled))
-        self.task_a_box.blockSignals(False)
-        self.loop_box.blockSignals(True)
-        self.loop_box.setChecked(daily.loop.enabled)
-        self.loop_box.blockSignals(False)
-        self.interval_spin.blockSignals(True)
-        self.interval_spin.setValue(daily.loop.interval_seconds)
-        self.interval_spin.blockSignals(False)
-        self.keys_edit.blockSignals(True)
-        self.keys_edit.setText(self._keys_text())
-        self.keys_edit.blockSignals(False)
-        self.swipes_edit.blockSignals(True)
-        self.swipes_edit.setText(self._swipes_text())
-        self.swipes_edit.blockSignals(False)
+        logger.debug("日常任务页（界面版）收到配置刷新：本批不读取配置内容")
+        self.daily_enabled.setChecked(False)
+        self.loop_interval_minutes.setValue(LOOP_INTERVAL_DEFAULT)
+        self.auto_produce_least.setChecked(False)
+        for _title, prefix, _word, _capture in BUILDINGS:
+            island = self.findChild(QComboBox, f"{prefix}_island")
+            if island is not None:
+                island.setCurrentIndex(0)
+            ref_edit = self.findChild(QLineEdit, f"{prefix}_ref_image")
+            if ref_edit is not None:
+                ref_edit.clear()
 
-    def _params(self) -> PlaceholderTaskParams:
-        task = self._config.features.daily_tasks.tasks.get("placeholder_task_a")
-        return PlaceholderTaskParams.from_dict(task.params if task else None)
 
-    def _keys_text(self) -> str:
-        return format_keys_text(self._params().keys)
+# ------------------------------------------------------------------ 小工具
 
-    def _swipes_text(self) -> str:
-        return format_swipes_text(self._params().swipes)
 
-    def _on_swipes_edited(self) -> None:
-        """把滑动输入框写回配置；格式非法则回退显示（不写坏配置），并说明被丢弃的原因。"""
-        text = self.swipes_edit.text()
-        try:
-            steps = parse_swipes_text(text, self._params().wait_after_ms)
-        except ValueError as exc:
-            # 评审 P3-2：静默回退违反"不许吞异常"，必须写日志 + 给出可读提示
-            logger.warning("滑动步骤输入被丢弃（保留原值）：%s（输入：%r）", exc, text)
-            self._rollback_swipes()
-            return
-        task = self._config.features.daily_tasks.tasks.setdefault("placeholder_task_a", TaskConfig())
-        params = PlaceholderTaskParams.from_dict(task.params)
-        params.swipes = steps
-        task.params = params.to_dict()
-        self._on_changed()
+def _hint(text: str) -> QLabel:
+    """设计稿 `<small>` 对应的灰色小字说明。"""
+    label = QLabel(text)
+    label.setWordWrap(True)
+    label.setStyleSheet("color: #666;")
+    return label
 
-    def _rollback_swipes(self) -> None:
-        self.swipes_edit.blockSignals(True)
-        self.swipes_edit.setText(self._swipes_text())
-        self.swipes_edit.blockSignals(False)
 
-    def _on_keys_edited(self) -> None:
-        """把输入框文本写回配置；格式非法则回退显示（不写坏配置），并说明被丢弃的原因。"""
-        text = self.keys_edit.text()
-        try:
-            steps = parse_keys_text(text, self._params().wait_after_ms)
-        except ValueError as exc:
-            logger.warning("按键序列输入被丢弃（保留原值）：%s（输入：%r）", exc, text)
-            self.keys_edit.blockSignals(True)
-            self.keys_edit.setText(self._keys_text())
-            self.keys_edit.blockSignals(False)
-            return
-        task = self._config.features.daily_tasks.tasks.setdefault("placeholder_task_a", TaskConfig())
-        params = PlaceholderTaskParams.from_dict(task.params)
-        params.keys = steps
-        task.params = params.to_dict()
-        self._on_changed()
+def _image_placeholder(object_name: str, text: str, *, tip: str = "") -> QWidget:
+    """设计稿 `<img>` 占位：带虚线边框的灰底方框，写清这里以后要放什么图。
 
-    def _on_enabled_toggled(self) -> None:
-        self._config.features.daily_tasks.enabled = self.enabled_box.isChecked()
-        self._on_changed()
-
-    def _on_task_a_toggled(self) -> None:
-        task = self._config.features.daily_tasks.tasks.setdefault("placeholder_task_a", TaskConfig())
-        task.enabled = self.task_a_box.isChecked()
-        self._on_changed()
-
-    def _on_loop_toggled(self) -> None:
-        self._config.features.daily_tasks.loop.enabled = self.loop_box.isChecked()
-        self._on_changed()
-
-    def _on_interval_changed(self, value: int) -> None:
-        self._config.features.daily_tasks.loop.interval_seconds = value
-        self._on_changed()
+    真实图片（岛屿编号参考图 / 示例图）后续放进 `assets/` 再换成本地文件加载；
+    本批先占位，免得界面里出现一个"空的洞"而看不出缺什么。
+    """
+    frame = QFrame()
+    frame.setObjectName(object_name)
+    frame.setFrameShape(QFrame.Shape.StyledPanel)
+    frame.setStyleSheet("background: #f2f2f2; border: 1px dashed #b8b8b8;")
+    frame.setMinimumHeight(84)
+    frame.setMinimumWidth(160)
+    if tip:
+        frame.setToolTip(tip)
+    label = QLabel(text)
+    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    label.setWordWrap(True)
+    label.setStyleSheet("color: #888; border: none;")
+    inner = QVBoxLayout(frame)
+    inner.addWidget(label)
+    return frame

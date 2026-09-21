@@ -161,6 +161,24 @@ def test_swipe_step_text_rejects_bad_input() -> None:
             models.parse_swipes_text(bad)
 
 
+def test_step_text_enforces_step_limits() -> None:
+    """步数上限（`MAX_KEY_STEPS`/`MAX_SWIPE_STEPS`＝20）在**解析阶段**就挡住；正好 20 步可以通过。
+
+    这条原来挂在日常任务页的两个输入框测试上（评审 P1-2/P3-2 的回归）；2026-09-21 该页按用户
+    设计稿整页替换、不再有这两个文本框，于是把覆盖移到 config 层 —— 上限本来就是配置模型的规则，
+    界面只是它的一个入口。
+    """
+    ok_keys = ", ".join(["w"] * models.MAX_KEY_STEPS)
+    assert len(models.parse_keys_text(ok_keys)) == models.MAX_KEY_STEPS
+    with pytest.raises(ValueError, match="最多"):
+        models.parse_keys_text(", ".join(["w"] * (models.MAX_KEY_STEPS + 1)))
+
+    ok_swipes = "; ".join(["1,1 > 2,2"] * models.MAX_SWIPE_STEPS)
+    assert len(models.parse_swipes_text(ok_swipes)) == models.MAX_SWIPE_STEPS
+    with pytest.raises(ValueError, match="最多"):
+        models.parse_swipes_text("; ".join(["1,1 > 2,2"] * (models.MAX_SWIPE_STEPS + 1)))
+
+
 def test_placeholder_params_roundtrip_with_swipes() -> None:
     """params 含 swipes 时 to_dict → from_dict 必须一致。"""
     params = models.PlaceholderTaskParams(

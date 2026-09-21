@@ -17,8 +17,10 @@ from gui_helpers import window_factory  # 共享夹具（评审 P3-2：不再各
 def test_toggle_marks_dirty_and_writes_back(window_factory, tmp_path) -> None:
     window = window_factory(tmp_path / "config.json")
     assert window.windowTitle() == WINDOW_TITLE
-    window.daily_page.task_a_box.setChecked(True)
-    assert window._config.features.daily_tasks.tasks["placeholder_task_a"].enabled is True
+    # 日常任务页 2026-09-21 按用户设计稿整页替换后**本批只做界面**（不绑定配置），
+    # 所以这里改用卡订单页的开关验证"控件改动 → 内存配置变 + 标题加 *"。
+    window.order_hold_page.reserved_box_1.setChecked(True)
+    assert window._config.features.order_hold.reserved_switch_1 is True
     assert window.windowTitle() == f"{WINDOW_TITLE} *"
 
 

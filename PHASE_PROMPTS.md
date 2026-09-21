@@ -744,6 +744,26 @@ Start-Process .\dist\LuoLuoTool\LuoLuoTool.exe -ArgumentList '--smoke-gui' -Wait
 > 新增/改写 15 条用例，全量 **630 项测试通过**；四条验收命令全 0（索引自检 118 条 0 漂移）。
 > **遗留（已在 AGENTS 标注）**：`crop_view.py` 到 599 行（600 硬线仅余 1 行），下次改它前先拆绘制三件套。
 
+> **追加（2026-09-21，日常任务页按用户设计稿重建 · 第 1 批＝只做界面）**：
+> 用户用别的 AI 生成了一份 HTML 设计稿（`D:\AAAAA\workspaceCursor\杂项\日常任务设计稿.html`），
+> 要求「先只画页面，先不实现逻辑」。本轮把 `gui/pages/daily.py`（180 行）整页换成设计稿的界面（258 行）：
+> **总开关与循环时长**（启用日常任务 + 循环间隔 1–720 分钟、默认 30）、
+> **关键建筑位置以及图像识别所需图片**（鸡舍/土地/水产养殖各一组：岛屿编号下拉 1–10 + 「截取…位置」参考图选择行
+> + 岛屿编号参考图与示例图的占位框）、**产物制造**（自动识别产物最少的优先造）。
+> 约定：**控件名＝设计稿的 `id`**（`objectName`），HTML→Qt 的翻译规则写在新文件头（改设计稿照表翻译）；
+> 三个建筑分组用 `BUILDINGS` 一份定义生成，不抄三遍；要动游戏的按钮（「选择图片…」/「截取游戏画面」）
+> **已摆好但禁用**并写明原因；图片位置先放**虚线占位框**。
+> **本批不碰配置**：守卫测试 `test_daily_page_does_not_touch_config_in_the_ui_only_batch` 钉住 ——
+> 逐一点过所有控件后 `config.to_dict()` 一字不变、脏标记回调一次都没触发。
+> **整页替换的连带处理**：旧的 6 个控件移除后，`tests/test_gui_pages.py` 的 5 条旧用例删除，
+> 其中「步数上限被拒」的覆盖**搬到 config 层**（`test_step_text_enforces_step_limits`），
+> `test_gui_config.py` 的脏标记用例改指卡订单页开关 —— 覆盖只搬不丢。
+> 新增 `tests/test_gui_daily_page.py` 8 条；全量 **634 项测试通过**；`--validate-config` OK、`--smoke-gui` exit 0、
+> `--measure-layout`「不改变任何高度」（日常任务页内容高 1079px、可滚动）、索引自检 118 条 0 漂移。
+> **下一批（批 2）**：控件与配置双向绑定（`daily_enabled` 复用现有 `features.daily_tasks.enabled`，
+> 新增 `loop_interval_minutes`、三个 `*_island`/`*_ref_image`、`auto_produce_least`），
+> 带 `schema_version` 9→10 + 迁移 + 「老配置升级后内容不变」测试；批 3 再接执行逻辑。
+
 ---
 
 ## 后续阶段（先不执行，仅占位）
