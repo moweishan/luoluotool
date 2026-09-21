@@ -73,3 +73,32 @@ def get_templates_dir() -> Path:
     目录本身靠 `.gitkeep` 入库；"模板必须入库、截图与框选产物必须不入库"的守卫见 `tests/test_paths.py`。
     """
     return _ensure_dir(PROJECT_ROOT / "assets" / "templates")
+
+
+# ---------------------------------------------------------------- 配置里的图片路径
+# 存在配置里的图片路径用"**相对仓库根**的 POSIX 写法"（例：`assets/anchors/鸡舍_岛屿1.png`），
+# 这样配置在换盘符/换目录后仍然可读；确实在仓库外的文件才退化成绝对路径。读的时候两种都认。
+
+
+def to_config_path(path: str | Path) -> str:
+    """把绝对路径转成写进配置的字符串：仓库内 → 相对仓库根的 POSIX 路径；仓库外 → 原样绝对路径。"""
+    resolved = Path(path).resolve()
+    try:
+        return resolved.relative_to(PROJECT_ROOT).as_posix()
+    except ValueError:
+        return resolved.as_posix()
+
+
+def resolve_config_path(value: str | Path | None) -> Path | None:
+    """把配置里的路径字符串还原成路径；空串/None 返回 None（＝还没选）。
+
+    相对路径按**仓库根**解析（与 `to_config_path` 互为逆运算）；绝对路径原样返回。
+    不做存在性检查 —— "文件被删了"由调用方判断并给出提示（不要悄悄把配置改空）。
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    candidate = Path(text)
+    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate

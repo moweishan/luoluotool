@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -23,6 +24,8 @@ from luoluotool.utils.paths import (
     get_anchors_dir,
     get_screenshots_dir,
     get_templates_dir,
+    resolve_config_path,
+    to_config_path,
 )
 
 TEMPLATES_DIR = PROJECT_ROOT / "assets" / "templates"
@@ -120,3 +123,34 @@ def test_template_image_suffix_is_not_ignored() -> None:
     for suffix in IMAGE_SUFFIXES:
         pattern = f"assets/templates/*{suffix}"
         assert pattern not in text, f".gitignore 不应忽略模板目录的图片：{pattern}"
+
+
+# ---------------------------------------------------------------- 配置里的图片路径
+# 日常任务页把"选好的参考图"记进配置（用户 2026-09-22）：仓库内的用**相对仓库根**的 POSIX
+# 路径（换盘符/换目录仍可读），仓库外的退化成绝对路径；读的时候两种都认。
+
+
+def test_config_path_is_relative_inside_the_repo_and_absolute_outside(tmp_path) -> None:
+    inside = TEMPLATES_DIR / "鸡舍_岛屿1.png"
+    assert to_config_path(inside) == "assets/templates/鸡舍_岛屿1.png"
+
+    outside = tmp_path / "外面的图.png"
+    assert to_config_path(outside) == outside.resolve().as_posix()
+    assert Path(to_config_path(outside)).is_absolute()
+
+
+def test_resolve_config_path_accepts_both_forms_and_empty(tmp_path) -> None:
+    assert resolve_config_path("") is None
+    assert resolve_config_path(None) is None
+    assert resolve_config_path("   ") is None
+    assert resolve_config_path("assets/templates/鸡舍_岛屿1.png") == (
+        PROJECT_ROOT / "assets" / "templates" / "鸡舍_岛屿1.png"
+    )
+    absolute = tmp_path / "某处.png"
+    assert resolve_config_path(absolute.as_posix()) == absolute
+
+
+def test_config_path_round_trips() -> None:
+    """写进配置再读回来必须还是同一张图（两个函数互为逆运算）。"""
+    original = ANCHORS_DIR / "鸡舍_岛屿7_20260922_0100.png"
+    assert resolve_config_path(to_config_path(original)) == original.resolve()

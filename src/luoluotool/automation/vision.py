@@ -42,6 +42,7 @@ from luoluotool.automation.template_match import (      # 再导出（旧导入�
     load_template,
     locate_all,
     locate_best,
+    read_image_bgr,
 )
 
 logger = logging.getLogger(__name__)

@@ -158,11 +158,14 @@ def _quality_metrics(image_bgr: np.ndarray) -> tuple[float, float, bool]:
 # ---------------------------------------------------------------- 模板与匹配
 
 
-def load_template(path: str | Path) -> np.ndarray:
-    """读取模板图片（BGR 三通道）。
+def read_image_bgr(path: str | Path) -> np.ndarray:
+    """读一张图片（BGR 三通道），**不做**"能不能当模板"的判断。
 
     用 `np.fromfile` + `cv2.imdecode` 而不是 `cv2.imread`：后者在 Windows 上
     对中文/含空格路径会静默失败（返回 None）。
+
+    读不出/解析不了抛可读 `VisionError`；"纯色"那一条质量检查在 `load_template` 里做 ——
+    预览这类只想把图显示出来的地方用本函数（用户可能存了一张纯色图，界面不该因此报错）。
     """
     template_path = Path(path)
     if not template_path.is_file():
@@ -174,12 +177,18 @@ def load_template(path: str | Path) -> np.ndarray:
         raise VisionError(f"无法读取模板图片 {template_path}：{exc}") from exc
     if image is None or image.size == 0:
         raise VisionError(f"无法解析模板图片（不是有效图片？）：{template_path}")
+    return image
+
+
+def load_template(path: str | Path) -> np.ndarray:
+    """读取模板图片（BGR 三通道），并在读取阶段就拒绝纯色图。"""
+    image = read_image_bgr(path)
     if is_blank_frame(image):
         # 纯色模板会让任何平坦区域都拿到满分（实测：一张纯色 260x260 在真实游戏画面上
         # 刷出 20 处"匹配度 1.000"），必须在读取阶段就拒绝，而不是给用户一堆假坐标。
         raise VisionError(
             f"模板图片几乎是纯色（标准差 {float(image.std()):.2f}，没有可匹配的纹理）："
-            f"{template_path}；请框选包含细节的区域重新生成模板"
+            f"{path}；请框选包含细节的区域重新生成模板"
         )
     return image
 

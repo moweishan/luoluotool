@@ -36,6 +36,7 @@ from luoluotool.automation.hotkey import (
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
 from luoluotool.core.runner import Runner
+from luoluotool.gui.daily_media import DailyMediaController
 from luoluotool.gui.dialogs.crop_dialog import TemplateCropDialog
 from luoluotool.gui.layout_measure import (
     format_measure_report,
@@ -133,6 +134,13 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         self.debug_page = DebugPage(self._config, self._mark_dirty)
         self._debug_thread: _DebugTestThread | None = None
         self._capture_thread: _CaptureThread | None = None
+        # 日常任务页的「选择图片 / 截取游戏画面 / 放大预览」：页面只发信号，动作都在这里做
+        self._daily_media = DailyMediaController(
+            self.daily_page,
+            get_config=lambda: self._config,
+            on_changed=self._mark_dirty,
+            set_status=self.statusBar().showMessage,
+        )
         self._apply_developer_mode()          # 按配置决定是否挂载「开发者调试」页
         self.tabs.setCurrentIndex(0)  # 默认打开设置页
         self.settings_page.developer_box.toggled.connect(self._on_developer_toggled)
@@ -207,10 +215,13 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         super().closeEvent(event)
 
     def _long_job_running(self) -> bool:
-        """是否有长任务在跑（任务 / 调试测试 / 截图 / 诊断）。"""
+        """是否有长任务在跑（任务 / 调试测试 / 截图 / 诊断 / 日常页截图）。"""
         return any(
             thread is not None and thread.isRunning()
-            for thread in (self._thread, self._debug_thread, self._capture_thread, self._diagnose_thread)
+            for thread in (
+                self._thread, self._debug_thread, self._capture_thread,
+                self._daily_media.capture_thread(), self._diagnose_thread,
+            )
         )
 
     def _wait_for_threads(self) -> None:
@@ -223,6 +234,7 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
             ("运行", self._thread),
             ("调试测试", self._debug_thread),
             ("截图", self._capture_thread),
+            ("日常页截图", self._daily_media.capture_thread()),
             ("窗口诊断", self._diagnose_thread),
         ):
             if thread is not None and thread.isRunning():
@@ -311,6 +323,8 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
             self.debug_page,
         ):
             page.set_config(self._config)
+        # 日常任务页的参考图缩略图：页面不做文件 IO，这里按新配置重读一遍
+        self._daily_media.refresh_previews()
         self._apply_developer_mode()   # 配置里 developer_mode 变化时同步调试页签
         self._dirty = False
         self._refresh_title()

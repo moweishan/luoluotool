@@ -663,7 +663,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 
 ---
 
-## 附：快速定位索引（常用符号 → 文件:行，基线 a88e42e）
+## 附：快速定位索引（常用符号 → 文件:行，基线 63ca099）
 
 | 符号 | 位置 | 说明 |
 |---|---|---|
@@ -673,11 +673,11 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `locate_all_scaled` | `automation/multiscale.py:169` | 两档多尺度匹配主流程 |
 | `_scale_tiers` | `automation/multiscale.py:104` | 档位拆分（0.3–2.0 → 0.3–4.0） |
 | `_scan_coarse` / `_refine_scale` | `automation/multiscale.py:116` / `:149` | 粗搜（峰值回落才停）/ 精修 |
-| `load_template` | `automation/template_match.py:161` | 读图（中文路径 + 纯色拒绝） |
+| `load_template` | `automation/template_match.py:183` | 读图（中文路径 + 纯色拒绝） |
 | `is_blank_frame` | `automation/template_match.py:74` | 黑帧/纯色判定 |
-| `capture_client_bgr` | `automation/vision.py:58` | 取景入口（含回退链） |
-| `_render_client_bits_bitblt` | `automation/vision.py:211` | **BitBlt 路径（源点必须客户区偏移）** |
-| `_render_client_bits_printwindow` | `automation/vision.py:155` | PrintWindow（整窗渲染 + 裁剪） |
+| `capture_client_bgr` | `automation/vision.py:59` | 取景入口（含回退链） |
+| `_render_client_bits_bitblt` | `automation/vision.py:212` | **BitBlt 路径（源点必须客户区偏移）** |
+| `_render_client_bits_printwindow` | `automation/vision.py:156` | PrintWindow（整窗渲染 + 裁剪） |
 | `client_area_offset` | `automation/window.py:80` | 客户区在窗口内的偏移（唯一真源） |
 | `screenshot_client` | `automation/window.py:94` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
 | `build_channel` | `automation/input_sender.py:516` | 干跑/真实通道选择 |
@@ -700,7 +700,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `client_to_screen` | `automation/real_input.py:157` | 客户区→屏幕换算（点击路径） |
 | `build_drag_path` | `automation/drag_path.py:49` | 缓出曲线 + 末尾静止帧 |
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
-| `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_view.py:66` / `gui/dialogs/crop_dialog.py:51` | 框选几何与保存 |
+| `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_view.py:66` / `gui/dialogs/crop_dialog.py:105` | 框选几何与保存 |
 | `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:206` / `:218` / `:230` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
 | `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:396` / `:590` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
 | `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:445` / `:507` | 方向键微调 / Ctrl 调单边 |
@@ -708,40 +708,40 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:160` / `:177` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
 | `zoom_slider` / `zoom_reset_button` | `gui/dialogs/crop_dialog.py:147` / `:161` | 缩放滑条（相对整图适配 50%–800%）/ 「重置」按钮 |
 | `zoom_slider_to_zoom` / `zoom_to_slider` | `gui/dialogs/crop_dialog.py:81` / `:98` | 滑条刻度换算（对数：每 1/4 行程翻一倍，互为反函数）|
-| `reset_all` / `_sync_zoom_controls` | `gui/dialogs/crop_dialog.py:279` / `:266` | 重置（视图归位 + 清空选区）/ 缩放状态同步回滑条 |
+| `reset_all` / `_sync_zoom_controls` | `gui/dialogs/crop_dialog.py:282` / `:269` | 重置（视图归位 + 清空选区）/ 缩放状态同步回滑条 |
 | `clear_selection` | `gui/dialogs/crop_view.py:131` | 清空选区（双击 / Esc / 重置共用）|
 | `zoom_relative_percent` / `set_zoom_relative` | `gui/dialogs/crop_view_zoom.py:60` / `:68` | 相对整图适配的缩放百分比 / 按倍数设置（锚点＝选区中心）|
-| `selection_quality` / `selection_text` | `gui/dialogs/crop_dialog.py:221` / `:233` | 可辨识度评估（`RegionQuality`）/ 信息行文案（含辨识度） |
-| `view_status_text` | `gui/dialogs/crop_dialog.py:406` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
-| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:415` / `:442` | **只保存选区**；纯色（`flat`）时拒绝保存 |
+| `selection_quality` / `selection_text` | `gui/dialogs/crop_dialog.py:224` / `:236` | 可辨识度评估（`RegionQuality`）/ 信息行文案（含辨识度） |
+| `view_status_text` | `gui/dialogs/crop_dialog.py:409` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
+| `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:418` / `:445` | **只保存选区**；纯色（`flat`）时拒绝保存 |
 | `assess_region_quality` / `RegionQuality` | `automation/template_match.py:101` / `:85` | 模板区域可辨识度（对比度 + 边缘占比；`flat` 拒存，`low` 只提示） |
 | `probe_region_on_image` / `TemplateProbeResult` | `core/vision.py:288` / `:253` | **「在本图试识别」（D1）**：选区当模板在同图 1:1 试匹配；`duplicates`＝除自己以外的命中数 |
-| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:306` / `:293` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
+| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:309` / `:296` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
 | `TemplateProbeThread` | `gui/workers.py:140` | 试识别后台线程（匹配是 CPU 密集的，不许放 GUI 线程） |
 | `set_probe_rects` / `_paint_probe_rects` | `gui/dialogs/crop_view.py:564` / `:576` | 把试识别命中的**其它**位置画成橙框 + 序号（图像像素坐标） |
 | `DebugPage` | `gui/pages/debug.py:68` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `AboutPage` | `gui/pages/about.py:79` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
 | `diagnostics_text` | `gui/pages/about.py:222` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
-| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:429` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
-| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:473` / `:509` | 框选回填 / 框选入口（门禁 + 后台截图） |
-| `_debug_actions_allowed` | `gui/main_window.py:424` | 开发者调试门禁 |
-| `_register_hotkey_or_hint` | `gui/main_window.py:259` | 热键注册 + 失败显著提示（评审 P3-9） |
-| `_wait_for_threads` | `gui/main_window.py:216` | 关窗等齐 4 个后台线程（评审 P2-6） |
+| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:446` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
+| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:487` / `:523` | 框选回填 / 框选入口（门禁 + 后台截图） |
+| `_debug_actions_allowed` | `gui/main_window.py:438` | 开发者调试门禁 |
+| `_register_hotkey_or_hint` | `gui/main_window.py:271` | 热键注册 + 失败显著提示（评审 P3-9） |
+| `_wait_for_threads` | `gui/main_window.py:227` | 关窗等齐 4 个后台线程（评审 P2-6） |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:170` / `:238` | 布局测量与报告 |
 | `Runner.start` | `core/runner.py:68` | 任务顺序执行/循环/失败计数 |
 | `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁，评审 P3-1） |
 | `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样，评审 P1-2） |
 | `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
-| `migrate` / `validate` | `config/validation.py:307` / `:337` | 迁移链（每步独立 try，绝不崩）与校验 |
+| `migrate` / `validate` | `config/validation.py:344` / `:374` | 迁移链（每步独立 try，绝不崩）与校验 |
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
 | `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:64` / `:54` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
-| `prepare_for_match` | `automation/template_match.py:187` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
+| `prepare_for_match` | `automation/template_match.py:196` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
 | `_on_vision_add_clicked` | `gui/pages/debug.py:429` | 「添加图片…」对话框默认打开 `assets/templates` |
 | `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
 | `ease_out_quad` / `interpolate_points` | `automation/drag_path.py:22` / `:27` | 滑动缓出曲线 / 分帧插值（纯函数） |
 | `scale_candidates` | `automation/multiscale.py:45` | 粗搜档位生成（按步长枚举比例） |
 | `locate_best_scaled` | `automation/multiscale.py:225` | 多尺度取最佳命中（无命中返回 None） |
-| `annotate` / `save_image` | `automation/vision.py:298` / `:312` | 带框截图 / 存图（中文路径用 imencode+tofile） |
+| `annotate` / `save_image` | `automation/vision.py:299` / `:313` | 带框截图 / 存图（中文路径用 imencode+tofile） |
 | `run_debug_action` | `gui/workers.py:69` | 调试动作分发（线程体调用，含 `hold_ms`） |
 | `_RunnerThread` / `_DebugTestThread` | `gui/workers.py:30` / `:41` | 任务线程 / 调试测试线程（可被停止请求中断） |
 | `_CaptureThread` / `_DiagnoseThread` | `gui/workers.py:100` / `:122` | 框选前截图线程 / 窗口诊断线程 |

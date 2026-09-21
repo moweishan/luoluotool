@@ -112,11 +112,14 @@ class TemplateCropDialog(QDialog):
         save_dir: Path | None,
         parent: QWidget | None = None,
         threshold: float = DEFAULT_THRESHOLD,
+        file_stem: str = "anchor",
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("框选截图生成模板")
         self._image = image_bgr
         self._save_dir = Path(save_dir) if save_dir is not None else None
+        # 文件名前缀：调试页用默认的 `anchor`（框选产物）；日常任务页传「鸡舍_岛屿1」这种好认的名字
+        self._file_stem = file_stem or "anchor"
         # 试识别用的阈值 = 调试页当前设定（评审 P2-2），保证与正式识别同口径
         self._threshold = float(threshold)
         self.saved_path: Path | None = None
@@ -458,7 +461,7 @@ class TemplateCropDialog(QDialog):
             return None
         x, y, width, height = selection
         crop = self._image[y : y + height, x : x + width]
-        path = self._save_dir / f"anchor_{datetime.now():%Y%m%d_%H%M%S}.png"
+        path = self._save_dir / f"{self._file_stem}_{datetime.now():%Y%m%d_%H%M%S}.png"
         try:
             # 评审 P2-8：mkdir 必须在 try 内 —— 目录不可写时旧实现直接冒 OSError 进 Qt 槽，
             # 调用方那句"保存失败：请检查模板目录是否可写"永远走不到。

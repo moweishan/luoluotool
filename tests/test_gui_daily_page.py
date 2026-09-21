@@ -1,8 +1,10 @@
-"""日常任务页（界面版，第 1 批）测试：控件齐全、类型/默认值/范围与设计稿一致、**不碰配置**。
+"""日常任务页测试（第 2 批）：控件齐全、与设计稿一致，并且**真的双向绑定配置**。
 
 设计稿：`D:/AAAAA/workspaceCursor/杂项/日常任务设计稿.html`（用户 2026-09-21 提供）。
-本批只做界面：控件改动**不写配置、不置脏标记**，动作按钮（选择图片 / 截取游戏画面）先禁用。
-第 2 批接配置时会把这些测试升级成"双向绑定"测试（见 `CHECKLIST.md` 的分批记录）。
+第 1 批曾是"只做界面、不碰配置"（有守卫测试钉住）；第 2 批（2026-09-22）用户确认后
+改成双向绑定：控件改动写进 `AppConfig` 并置脏，`set_config()` 只负责显示。
+选图 / 截取游戏画面 / 放大预览这些**碰文件与线程的动作**在 `tests/test_gui_daily_media.py`
+（页面只发信号，见 `gui/pages/daily.py` 的模块说明）。
 """
 
 import os
@@ -21,12 +23,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from luoluotool.config.models import AppConfig
+from luoluotool.config.models import (
+    LOOP_INTERVAL_MINUTES_DEFAULT,
+    LOOP_INTERVAL_MINUTES_RANGE,
+    AppConfig,
+)
 from luoluotool.gui.pages.daily import (
     BUILDINGS,
     DESIGN_CONTROL_IDS,
-    LOOP_INTERVAL_DEFAULT,
-    LOOP_INTERVAL_RANGE,
     DailyPage,
 )
 from luoluotool.gui.widgets import PAGE_SIZE_HINT, ScrollablePage
@@ -120,13 +124,17 @@ def test_daily_page_control_names_match_the_design_ids() -> None:
     page.close()
 
 
-def test_daily_page_defaults_match_the_design() -> None:
-    """默认值/范围照设计稿：循环间隔 1–720 分钟、默认 30；三个复选框默认不勾。"""
+def test_daily_page_loop_interval_range_matches_the_design() -> None:
+    """循环间隔范围照设计稿 1–720 分钟；**值来自配置**（配置里存秒，默认 3600 秒 = 60 分钟）。"""
     page = _page()
 
     assert isinstance(page.loop_interval_minutes, QSpinBox)
-    assert (page.loop_interval_minutes.minimum(), page.loop_interval_minutes.maximum()) == LOOP_INTERVAL_RANGE
-    assert page.loop_interval_minutes.value() == LOOP_INTERVAL_DEFAULT == 30
+    assert LOOP_INTERVAL_MINUTES_RANGE == (1, 720)
+    assert LOOP_INTERVAL_MINUTES_DEFAULT == 30
+    assert (
+        page.loop_interval_minutes.minimum(), page.loop_interval_minutes.maximum()
+    ) == LOOP_INTERVAL_MINUTES_RANGE
+    assert page.loop_interval_minutes.value() == 60          # AppConfig.default() 的 3600 秒
     assert page.daily_enabled.isChecked() is False
     assert page.auto_produce_least.isChecked() is False
     page.close()
@@ -217,56 +225,144 @@ def test_produce_check_is_read_only_today_but_is_a_saveable_switch() -> None:
     page.close()
 
 
-def test_daily_page_action_buttons_are_present_but_disabled_in_this_batch() -> None:
-    """本批只做界面：要动游戏的按钮（选择图片 / 截取游戏画面）摆好但**禁用**，并说明原因。"""
+def test_daily_page_action_buttons_are_enabled_and_wired() -> None:
+    """第 2 批起按钮真的能用（不再禁用），提示里说清它做什么。"""
     page = _page()
 
-    buttons = [page.findChild(QPushButton, f"{prefix}_pick_image")
-               for _t, prefix, _w, _r, _c in BUILDINGS]
-    buttons += [page.findChild(QPushButton, capture_id)
-                for _t, _p, _w, _r, capture_id in BUILDINGS]
-    assert len(buttons) == 6
-    for button in buttons:
-        assert button.isEnabled() is False, button.objectName()
-        assert "第 1 批" in button.toolTip()
+    for _title, prefix, _word, _ref_id, capture_id in BUILDINGS:
+        pick = page.findChild(QPushButton, f"{prefix}_pick_image")
+        capture = page.findChild(QPushButton, capture_id)
+        assert pick.isEnabled() is True, prefix
+        assert capture.isEnabled() is True, capture_id
+        assert "图片" in pick.toolTip()
+        assert "框选" in capture.toolTip()
     page.close()
 
 
-def test_daily_page_does_not_touch_config_in_the_ui_only_batch() -> None:
-    """守卫（本批的核心约定）：界面版**不写配置、不置脏标记**。
+def test_daily_page_emits_media_requests_with_the_building_prefix() -> None:
+    """页面本身不碰文件（分层），只发信号；主窗口接信号去选图/截图。"""
+    page = _page()
+    picked: list[str] = []
+    captured: list[str] = []
+    page.pick_image_requested.connect(picked.append)
+    page.capture_requested.connect(captured.append)
 
-    第 2 批接配置时这条会被替换成"双向绑定"测试 —— 在那之前，任何"顺手写回配置"的改动
-    都会让这条红，避免半成品悄悄改了用户的配置。
-    """
+    page.findChild(QPushButton, "land_pick_image").click()
+    page.findChild(QPushButton, "aqua_capture_screen").click()
+
+    assert picked == ["land"]
+    assert captured == ["aqua"]
+    page.close()
+
+
+def test_daily_page_writes_widget_changes_into_config_and_marks_dirty() -> None:
+    """双向绑定（第 2 批）：控件改动立刻写进配置并置脏 —— 取代旧的"界面不许碰配置"守卫。"""
     config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+
+    page.daily_enabled.setChecked(True)
+    assert config.features.daily_tasks.enabled is True
+    assert changes == ["dirty"]
+
+    page.findChild(QComboBox, "coop_island").setCurrentIndex(6)      # 索引 6 → 7 号岛
+    assert config.features.daily_tasks.coop_island == 7
+    page.findChild(QComboBox, "aqua_island").setCurrentIndex(9)
+    assert config.features.daily_tasks.aqua_island == 10
+
+    page.loop_interval_minutes.setValue(45)
+    assert config.features.daily_tasks.loop.interval_seconds == 45 * 60
+
+    page.auto_produce_least.setChecked(True)       # 界面点不动，但程序里写进去必须落到配置
+    assert config.features.daily_tasks.auto_produce_least is True
+    page.close()
+
+
+def test_daily_page_loads_config_without_rewriting_it() -> None:
+    """装载配置：控件跟着配置走，但**不置脏、不回写**（秒↔分钟的取整绝不改用户的值）。"""
+    config = AppConfig.default()
+    daily = config.features.daily_tasks
+    daily.enabled = True
+    daily.loop.interval_seconds = 3600
+    daily.coop_island = 9
+    daily.land_island = 3
+    daily.aqua_island = 5
+    daily.coop_island_ref_image = "assets/templates/鸡舍_岛屿9.png"
+    daily.auto_produce_least = True
     changes: list[str] = []
     page = _page(config, changes)
     before = config.to_dict()
 
-    page.daily_enabled.setChecked(True)
-    page.loop_interval_minutes.setValue(600)
-    page.auto_produce_least.setChecked(True)
-    for _title, prefix, _word, ref_id, _capture in BUILDINGS:
-        page.findChild(QComboBox, f"{prefix}_island").setCurrentIndex(4)
-        page.findChild(QLineEdit, ref_id).setText("D:/somewhere/shot.png")
-
-    assert config.to_dict() == before          # 配置一个字段都没变
-    assert changes == []                       # 也没有请求保存
+    assert page.daily_enabled.isChecked() is True
+    assert page.loop_interval_minutes.value() == 60                  # 3600 秒 → 60 分钟
+    assert page.findChild(QComboBox, "coop_island").currentText() == "9"
+    assert page.findChild(QComboBox, "aqua_island").currentText() == "5"
+    assert page.findChild(QLineEdit, "coop_island_ref_image").text() == "assets/templates/鸡舍_岛屿9.png"
+    assert page.auto_produce_least.isChecked() is True
+    assert changes == []                                             # 装载不算用户改动
+    assert config.to_dict() == before
     page.close()
 
 
-def test_daily_page_set_config_does_not_raise_and_resets_controls() -> None:
-    """主窗口加载/重载/恢复默认都会调 `set_config()`：本批只把控件刷回设计稿默认值。"""
-    page = _page()
+def test_daily_page_shows_odd_second_values_at_the_nearest_minute_without_writing_back() -> None:
+    """配置里的秒数不是整分钟时：界面按四舍五入显示，**只有用户动那个框才写回**。"""
+    config = AppConfig.default()
+    config.features.daily_tasks.loop.interval_seconds = 90           # 1.5 分钟
+    page = _page(config, [])
+    assert page.loop_interval_minutes.value() == 2
+    assert config.features.daily_tasks.loop.interval_seconds == 90   # 没被改掉
+    page.loop_interval_minutes.setValue(3)                           # 用户真的动了它
+    assert config.features.daily_tasks.loop.interval_seconds == 180
+    page.close()
+
+
+def test_daily_page_set_config_repopulates_widgets_without_marking_dirty() -> None:
+    """主窗口加载/重载/恢复默认都会调 `set_config()`：控件跟着走，且不把自己当"用户改动"。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
     page.daily_enabled.setChecked(True)
-    page.loop_interval_minutes.setValue(600)
-    page.findChild(QLineEdit, "coop_island_ref_image").setText("D:/x.png")
+    changes.clear()
 
-    config2 = AppConfig.default()
-    config2.features.daily_tasks.enabled = True
-    page.set_config(config2)
+    other = AppConfig.default()
+    other.features.daily_tasks.loop.interval_seconds = 120
+    other.features.daily_tasks.aqua_island = 4
+    page.set_config(other)
 
-    assert page.daily_enabled.isChecked() is False          # 第 2 批才会读配置
-    assert page.loop_interval_minutes.value() == LOOP_INTERVAL_DEFAULT
+    assert page.daily_enabled.isChecked() is False
+    assert page.loop_interval_minutes.value() == 2
+    assert page.findChild(QComboBox, "aqua_island").currentText() == "4"
+    assert changes == []
+    page.close()
+
+
+def test_selected_image_area_previews_the_picture_and_asks_for_an_enlarged_view() -> None:
+    """「选择的图片」显示区：设置图片＝显示缩略图，双击＝请求放大（具体弹窗由主窗口做）。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
+
+    from luoluotool.gui.widgets import ImagePreview
+
+    page = _page()
+    preview = page.findChild(ImagePreview, "coop_selected_image")
+    assert preview is not None and preview.image() is None
+    assert preview.empty_text() == "尚未选择图片"
+
+    image = QImage(6, 4, QImage.Format.Format_RGB32)
+    image.fill(0x336699)
+    page.set_reference_image("coop", "assets/anchors/鸡舍_岛屿1.png", image)
+    assert page.findChild(QLineEdit, "coop_island_ref_image").text() == "assets/anchors/鸡舍_岛屿1.png"
+    assert preview.image() is not None and preview.image().size() == image.size()
+
+    requested: list[str] = []
+    page.preview_requested.connect(requested.append)
+    page.show()
+    _APP.processEvents()
+    QTest.mouseDClick(preview, Qt.MouseButton.LeftButton, pos=preview.rect().center())
+    assert requested == ["coop"]
+
+    page.set_reference_image("coop", "", None)                        # 清空（例如配置被换掉）
     assert page.findChild(QLineEdit, "coop_island_ref_image").text() == ""
+    assert preview.image() is None
     page.close()
