@@ -137,16 +137,19 @@ class Runner:
         """任务编排（Phase 6）：**日常任务组 → 单功能组**，统一顺序执行、统一失败计数。
 
         规则：
-        1. 日常任务组：`features.daily_tasks.tasks[id].enabled == true` 的任务入队，
+        1. 日常任务组：`features.daily_tasks.enabled`（**总开关**）为真、且
+           `features.daily_tasks.tasks[id].enabled == true` 的任务入队，
            按 `order` 升序、同 `order` 按任务 ID 字典序（保证每次运行顺序完全一致）；
-        2. 单功能组：功能主开关开启即入队，固定顺序 **卡订单 → 功能三 → 功能四**；
-        3. `features.daily_tasks.enabled`（启用日常任务）与卡订单两个预留开关
-           **不参与编排**（保持「存/读/显示」的既有语义）。
+        2. 单功能组：功能主开关开启即入队，固定顺序 **卡订单 → 功能三 → 功能四**
+           （**不受日常任务总开关影响**，各有自己的开关）；
+        3. 总开关从"只存不读"改成"真的当总开关"是 **2026-09-22 用户确认**的（A1）：
+           关闭时日常任务组一个任务都不入队 —— 否则"总开关"这个名字名不副实。
         """
+        daily_enabled = bool(self._config.features.daily_tasks.enabled)
         selected: list[tuple[str, TaskConfig]] = [
             (task_id, cfg)
             for task_id, cfg in self._config.features.daily_tasks.tasks.items()
-            if cfg.enabled
+            if cfg.enabled and daily_enabled
         ]
         selected.sort(key=lambda item: (item[1].order, item[0]))
         scheduled = {task_id for task_id, _ in selected}

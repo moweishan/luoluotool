@@ -54,6 +54,9 @@ class _FakeCrashTask(BaseTask):
 def _config(tasks: list[tuple[str, bool, int]], loop_enabled: bool = False,
             interval: int = 5, max_failures: int = 3) -> AppConfig:
     config = AppConfig.default()
+    # 总开关默认**开着**（A1 之后它真的会挡住日常任务组）：这样下面的用例测的是"队列本身"，
+    # 专门测总开关语义的用例自己把它关掉（见 test_daily_group_switch_gates_the_daily_queue）。
+    config.features.daily_tasks.enabled = True
     config.features.daily_tasks.tasks = {
         task_id: TaskConfig(enabled=enabled, order=order)
         for task_id, enabled, order in tasks
@@ -266,13 +269,17 @@ def test_reserved_switches_never_affect_queue() -> None:
             assert queue == expected == ["test_fake_one", "order_hold"]
 
 
-def test_daily_group_switch_does_not_affect_queue() -> None:
-    """`daily_tasks.enabled`（启用日常任务）保持「存/读/显示」：不参与编排（既有语义）。"""
-    config = _config([("test_fake_one", True, 1)])
-    assert config.features.daily_tasks.enabled is False
-    assert Runner(config).queued_tasks() == ["test_fake_one"]
+def test_daily_group_switch_gates_the_daily_queue() -> None:
+    """`daily_tasks.enabled`（启用日常任务）**真的当总开关**（2026-09-22 用户确认 A1）。
+
+    旧语义是"存/读/显示、不参与编排"；用户选定后改为：总开关关闭时日常任务组
+    **一个任务都不入队**，但**不影响**单功能组（卡订单/功能三/功能四各有自己的开关）。
+    """
+    config = _with_features(_config([("test_fake_one", True, 1)]), order_hold=True)
+    config.features.daily_tasks.enabled = False                    # 总开关关掉
+    assert Runner(config).queued_tasks() == ["order_hold"]          # 日常组被总开关挡住
     config.features.daily_tasks.enabled = True
-    assert Runner(config).queued_tasks() == ["test_fake_one"]
+    assert Runner(config).queued_tasks() == ["test_fake_one", "order_hold"]
 
 
 def test_placeholder_feature_tasks_run_in_queue_order_with_planned_logs(caplog) -> None:

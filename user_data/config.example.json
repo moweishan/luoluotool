@@ -1,5 +1,5 @@
 {
-  "schema_version": 9,
+  "schema_version": 10,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -18,7 +18,14 @@
       "loop": {
         "enabled": false,
         "interval_seconds": 3600
-      }
+      },
+      "coop_island": 1,
+      "land_island": 1,
+      "aqua_island": 1,
+      "coop_island_ref_image": "",
+      "land_ref_image": "",
+      "aqua_ref_image": "",
+      "auto_produce_least": false
     },
     "order_hold": {
       "enabled": false,

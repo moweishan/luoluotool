@@ -14,6 +14,14 @@ def test_defaults_are_safe() -> None:
     assert config.automation.dry_run is False
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.loop.enabled is False
+    # 日常任务页那批字段（schema v10）：默认＝"一个建筑都没配"
+    assert config.features.daily_tasks.coop_island == 1
+    assert config.features.daily_tasks.land_island == 1
+    assert config.features.daily_tasks.aqua_island == 1
+    assert config.features.daily_tasks.coop_island_ref_image == ""
+    assert config.features.daily_tasks.land_ref_image == ""
+    assert config.features.daily_tasks.aqua_ref_image == ""
+    assert config.features.daily_tasks.auto_produce_least is False
     assert config.features.order_hold.enabled is False
     assert config.features.order_hold.reserved_switch_1 is False
     assert config.features.order_hold.reserved_switch_2 is False
@@ -88,7 +96,18 @@ def test_to_dict_keys_match_schema_v1() -> None:
     data = models.AppConfig.default().to_dict()
     assert set(data) == {"schema_version", "features", "automation", "logging"}
     assert set(data["features"]) == {"daily_tasks", "order_hold", "feature_3", "feature_4"}
-    assert set(data["features"]["daily_tasks"]) == {"enabled", "tasks", "loop"}
+    assert set(data["features"]["daily_tasks"]) == {
+        "enabled",
+        "tasks",
+        "loop",
+        "coop_island",
+        "land_island",
+        "aqua_island",
+        "coop_island_ref_image",
+        "land_ref_image",
+        "aqua_ref_image",
+        "auto_produce_least",
+    }
     assert set(data["features"]["daily_tasks"]["loop"]) == {"enabled", "interval_seconds"}
     assert set(data["features"]["order_hold"]) == {"enabled", "reserved_switch_1", "reserved_switch_2"}
     assert set(data["features"]["feature_3"]) == {"enabled"}
@@ -108,6 +127,25 @@ def test_to_dict_keys_match_schema_v1() -> None:
     assert set(data["logging"]) == {"level", "max_file_mb", "backup_count"}
     task = data["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]
     assert set(task) == {"enabled", "order", "params"}
+
+
+def test_loop_interval_minutes_and_seconds_convert_both_ways() -> None:
+    """循环间隔在界面用**分钟**、配置里存**秒**：两个方向都要一致（A2 用户选的口径）。"""
+    assert models.loop_minutes_to_seconds(30) == 1800
+    assert models.loop_minutes_to_seconds(1) == 60
+    assert models.loop_seconds_to_minutes(1800) == 30
+    for minutes in (1, 2, 30, 719, 720):
+        assert models.loop_seconds_to_minutes(models.loop_minutes_to_seconds(minutes)) == minutes
+
+
+def test_loop_seconds_to_minutes_rounds_and_clamps_for_display() -> None:
+    """读配置时的口径：四舍五入到分钟，并夹在界面范围 1–720 内（**只影响显示**）。"""
+    assert models.loop_seconds_to_minutes(90) == 2        # 1.5 分钟 → 2
+    assert models.loop_seconds_to_minutes(89) == 1
+    assert models.loop_seconds_to_minutes(30) == 1        # 不足 1 分钟 → 显示 1（不许显示 0）
+    assert models.loop_seconds_to_minutes(1) == 1
+    assert models.loop_seconds_to_minutes(86400) == 720   # 24 小时 → 顶到界面上限
+    assert models.loop_seconds_to_minutes(60 * 720) == 720
 
 
 def test_key_step_text_roundtrip() -> None:

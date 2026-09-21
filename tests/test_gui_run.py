@@ -112,6 +112,7 @@ def test_real_mode_confirmed_uses_sender_and_red_status(window_factory, tmp_path
     monkeypatch.setattr(mw.MainWindow, "_confirm_real_mode", lambda self: True)
     config = AppConfig.default()
     config.automation.dry_run = False
+    config.features.daily_tasks.enabled = True     # A1 起总开关真的会挡队列，跑任务必须打开它
     config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
     config.features.daily_tasks.tasks["placeholder_task_a"].params = {
         "click_points": [[5, 6]],
@@ -324,6 +325,7 @@ def test_stop_button_logs_when_no_task_running(window_factory, tmp_path) -> None
 def test_stop_button_logs_when_runner_active(window_factory, tmp_path) -> None:
     """停止（运行中）：日志出现「已请求停止」，且任务确实停止。"""
     config = AppConfig.default()
+    config.features.daily_tasks.enabled = True     # A1 起总开关真的会挡队列，跑任务必须打开它
     config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
     config.features.daily_tasks.loop.enabled = True
     window = window_factory(tmp_path / "config.json", config)

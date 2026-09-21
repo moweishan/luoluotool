@@ -1,4 +1,4 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v9（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v10（dataclass 实现）。"""
 
 from __future__ import annotations
 
@@ -6,12 +6,40 @@ from dataclasses import dataclass, field
 
 from luoluotool.utils.keys import parse_combo
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # 写入路径与校验路径共用的上限（评审 P1-2/P3-5：GUI 不得存下"自己读不回来"的配置）
 MAX_KEY_STEPS = 20      # 一个任务的按键步骤上限（validation 也用它）
 MAX_SWIPE_STEPS = 20    # 一个任务的滑动步骤上限
 MAX_CLICK_POINTS = 20   # 一个任务的点击点上限
+
+# 日常任务页的岛屿编号范围（GUI 下拉与 validation **共用同一份**，禁止各写一遍数字）
+ISLAND_RANGE = (1, 10)
+# 参考图路径的最大长度（validation 用它）
+MAX_IMAGE_PATH_LENGTH = 260
+
+# 循环间隔：界面按**分钟**（每天感觉的量级），配置里存**秒**（`loop.interval_seconds`，既有字段）
+SECONDS_PER_MINUTE = 60
+LOOP_INTERVAL_MINUTES_RANGE = (1, 720)
+LOOP_INTERVAL_MINUTES_DEFAULT = 30
+
+
+def loop_minutes_to_seconds(minutes: int) -> int:
+    """分钟 → 秒（写盘方向；用户只会在界面上按分钟改）。"""
+    return int(minutes) * SECONDS_PER_MINUTE
+
+
+def loop_seconds_to_minutes(seconds: int) -> int:
+    """秒 → 分钟（显示方向）：四舍五入，并夹在 `LOOP_INTERVAL_MINUTES_RANGE` 内。
+
+    **只用于显示**：调用方（GUI）读配置时用它，只有在用户真的动了那个数字框时才写回，
+    所以"配置里是 90 秒"这种非整数分钟的值不会被打开页面这个动作悄悄改掉。
+    不足 1 分钟（如 30 秒）显示 1 而不是 0；超过 720 分钟显示 720 而不是溢出。
+    """
+    low, high = LOOP_INTERVAL_MINUTES_RANGE
+    raw = int(seconds) / SECONDS_PER_MINUTE
+    return max(low, min(high, int(raw + 0.5)))       # +0.5 再取整 = 四舍五入（round 对 .5 会取偶）
+
 
 
 @dataclass
@@ -232,17 +260,40 @@ class PlaceholderTaskParams:
 
 @dataclass
 class DailyTasksConfig:
-    """功能一：日常任务。"""
+    """功能一：日常任务。
+
+    `enabled` 同时是**日常任务页的总开关**（2026-09-22 用户确认 A1）：为 false 时任务编排
+    不给日常任务组入队（见 `core/runner.py`）。
+
+    schema v10 起的字段＝日常任务页（用户设计稿）里那些"前置条件"：三个生产建筑各一组
+    「所在岛屿编号 + 参考图路径」，外加产物制造的一个开关。**字段名直接等于设计稿的
+    `data-key`**，这样"设计稿 ↔ 控件 ↔ 配置"三者能逐条对号。参考图路径为空串＝还没选，
+    非空时优先是**相对仓库根**的路径（由 `utils.paths.to_config_path` 生成）。
+    """
 
     enabled: bool = False
     tasks: dict[str, TaskConfig] = field(default_factory=dict)
     loop: LoopConfig = field(default_factory=LoopConfig)
+    coop_island: int = 1
+    land_island: int = 1
+    aqua_island: int = 1
+    coop_island_ref_image: str = ""
+    land_ref_image: str = ""
+    aqua_ref_image: str = ""
+    auto_produce_least: bool = False
 
     def to_dict(self) -> dict:
         return {
             "enabled": self.enabled,
             "tasks": {task_id: task.to_dict() for task_id, task in self.tasks.items()},
             "loop": self.loop.to_dict(),
+            "coop_island": self.coop_island,
+            "land_island": self.land_island,
+            "aqua_island": self.aqua_island,
+            "coop_island_ref_image": self.coop_island_ref_image,
+            "land_ref_image": self.land_ref_image,
+            "aqua_ref_image": self.aqua_ref_image,
+            "auto_produce_least": self.auto_produce_least,
         }
 
     @classmethod
@@ -251,6 +302,13 @@ class DailyTasksConfig:
             data.get("enabled", False),
             {task_id: TaskConfig.from_dict(item) for task_id, item in data.get("tasks", {}).items()},
             LoopConfig.from_dict(data.get("loop", {})),
+            data.get("coop_island", 1),
+            data.get("land_island", 1),
+            data.get("aqua_island", 1),
+            data.get("coop_island_ref_image", ""),
+            data.get("land_ref_image", ""),
+            data.get("aqua_ref_image", ""),
+            data.get("auto_produce_least", False),
         )
 
 

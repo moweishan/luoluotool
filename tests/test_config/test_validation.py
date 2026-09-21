@@ -50,6 +50,7 @@ def test_missing_sections_reported() -> None:
 _BOOL_PATHS = (
     "features.daily_tasks.enabled",
     "features.daily_tasks.loop.enabled",
+    "features.daily_tasks.auto_produce_least",
     "features.order_hold.enabled",
     "features.order_hold.reserved_switch_1",
     "features.order_hold.reserved_switch_2",
@@ -74,6 +75,9 @@ _INT_BOUNDS = (
     ("automation.post_click_wait_ms", 0, 60000),
     ("automation.max_consecutive_failures", 1, 100),
     ("features.daily_tasks.loop.interval_seconds", 1, 86400),
+    ("features.daily_tasks.coop_island", models.ISLAND_RANGE[0], models.ISLAND_RANGE[1]),
+    ("features.daily_tasks.land_island", models.ISLAND_RANGE[0], models.ISLAND_RANGE[1]),
+    ("features.daily_tasks.aqua_island", models.ISLAND_RANGE[0], models.ISLAND_RANGE[1]),
     ("logging.max_file_mb", 1, 100),
     ("logging.backup_count", 0, 50),
 )
@@ -99,6 +103,19 @@ def test_string_fields_reject_empty_and_overlong() -> None:
     assert any("window_title_keyword" in e for e in validate(raw))
     _set_path(raw, "automation.failsafe_hotkey", "")
     assert any("failsafe_hotkey" in e for e in validate(raw))
+
+
+def test_reference_image_paths_are_optional_but_must_be_strings() -> None:
+    """参考图路径：**可以是空串**（＝还没选），但类型必须是字符串且不许超长（防止塞垃圾）。"""
+    raw = _default_raw()
+    assert validate(raw) == []                      # 默认就是空串
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image", 123)
+    assert any("coop_island_ref_image" in e for e in validate(raw))
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image", "")
+    _set_path(raw, "features.daily_tasks.land_ref_image", "x" * 261)
+    assert any("land_ref_image" in e for e in validate(raw))
+    _set_path(raw, "features.daily_tasks.land_ref_image", "assets/templates/土地.png")
+    assert validate(raw) == []
 
 
 def test_log_level_enum() -> None:

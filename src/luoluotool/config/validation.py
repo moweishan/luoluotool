@@ -3,7 +3,9 @@
 import logging
 
 from luoluotool.config.models import (
+    ISLAND_RANGE,
     MAX_CLICK_POINTS,
+    MAX_IMAGE_PATH_LENGTH,
     MAX_KEY_STEPS,
     MAX_SWIPE_STEPS,
     SCHEMA_VERSION,
@@ -25,6 +27,7 @@ _SECTIONS = (
 _BOOL_PATHS = (
     "features.daily_tasks.enabled",
     "features.daily_tasks.loop.enabled",
+    "features.daily_tasks.auto_produce_least",
     "features.order_hold.enabled",
     "features.order_hold.reserved_switch_1",
     "features.order_hold.reserved_switch_2",
@@ -41,12 +44,21 @@ _INT_BOUNDS = (
     ("automation.post_click_wait_ms", 0, 60000),
     ("automation.max_consecutive_failures", 1, 100),
     ("features.daily_tasks.loop.interval_seconds", 1, 86400),
+    ("features.daily_tasks.coop_island", ISLAND_RANGE[0], ISLAND_RANGE[1]),
+    ("features.daily_tasks.land_island", ISLAND_RANGE[0], ISLAND_RANGE[1]),
+    ("features.daily_tasks.aqua_island", ISLAND_RANGE[0], ISLAND_RANGE[1]),
     ("logging.max_file_mb", 1, 100),
     ("logging.backup_count", 0, 50),
 )
 _STR_LIMITS = (
     ("automation.window_title_keyword", 100),
     ("automation.failsafe_hotkey", 20),
+)
+# 可以为**空串**的字符串字段（＝还没选）：参考图路径。空是合法的，类型与长度仍要管住。
+_OPTIONAL_STR_LIMITS = (
+    ("features.daily_tasks.coop_island_ref_image", MAX_IMAGE_PATH_LENGTH),
+    ("features.daily_tasks.land_ref_image", MAX_IMAGE_PATH_LENGTH),
+    ("features.daily_tasks.aqua_ref_image", MAX_IMAGE_PATH_LENGTH),
 )
 
 
@@ -292,6 +304,30 @@ def _migrate_v8_to_v9(raw: dict) -> dict:
     return migrated
 
 
+def _migrate_v9_to_v10(raw: dict) -> dict:
+    """v9 → v10：日常任务页接配置 —— 补上三个生产建筑的岛屿编号/参考图路径与产物制造开关。
+
+    全部用 `setdefault`：**已经填过的值一个都不动**（含"从新版本降级回来"的配置）。
+    默认值＝"一个建筑都没配"（岛屿 1、路径空串、开关 false），不会凭空让程序去点游戏。
+    """
+    migrated = dict(raw)
+    features = dict(migrated.get("features") or {})
+    daily = dict(features.get("daily_tasks") or {})
+    for key, default in (
+        ("coop_island", 1),
+        ("land_island", 1),
+        ("aqua_island", 1),
+        ("coop_island_ref_image", ""),
+        ("land_ref_image", ""),
+        ("aqua_ref_image", ""),
+        ("auto_produce_least", False),
+    ):
+        daily.setdefault(key, default)
+    features["daily_tasks"] = daily
+    migrated["features"] = features
+    return migrated
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -301,6 +337,7 @@ _MIGRATIONS = {
     6: _migrate_v6_to_v7,
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
+    9: _migrate_v9_to_v10,
 }
 
 
@@ -360,6 +397,12 @@ def validate(raw: object) -> list[str]:
         value = _get(raw, path)
         if not isinstance(value, str) or not value or len(value) > max_len:
             errors.append(f"{path} 必须是非空字符串（最长 {max_len}）")
+    for path, max_len in _OPTIONAL_STR_LIMITS:
+        if _skipped(path, missing):
+            continue
+        value = _get(raw, path)
+        if not isinstance(value, str) or len(value) > max_len:
+            errors.append(f"{path} 必须是字符串（最长 {max_len}；空串表示还没选）")
     if "logging" not in missing:
         level = _get(raw, "logging.level")
         if not isinstance(level, str) or level not in _LOG_LEVELS:

@@ -234,3 +234,60 @@ def test_migrate_v8_to_v9_keeps_existing_value() -> None:
     raw["schema_version"] = 8
     raw["automation"]["save_vision_annotations"] = False
     assert migrate(raw)["automation"]["save_vision_annotations"] is False
+
+
+def _v9_daily_raw() -> dict:
+    """一份 schema v9 配置（还没有日常任务页那批新字段）。"""
+    raw = v4_raw()
+    raw["schema_version"] = 9
+    raw["automation"]["restore_cursor_after_click"] = True
+    raw["automation"]["developer_mode"] = False
+    raw["automation"]["save_vision_annotations"] = True
+    return raw
+
+
+def test_migrate_v9_to_v10_adds_daily_page_defaults() -> None:
+    """v9 → v10：补上日常任务页那批字段，默认值＝"一个建筑都没配"（岛屿 1、路径空、开关关）。"""
+    migrated = migrate(_v9_daily_raw())
+    assert migrated["schema_version"] == SCHEMA_VERSION
+    daily = migrated["features"]["daily_tasks"]
+    assert daily["coop_island"] == 1
+    assert daily["land_island"] == 1
+    assert daily["aqua_island"] == 1
+    assert daily["coop_island_ref_image"] == ""
+    assert daily["land_ref_image"] == ""
+    assert daily["aqua_ref_image"] == ""
+    assert daily["auto_produce_least"] is False
+
+
+def test_migrate_v9_to_v10_keeps_every_existing_value() -> None:
+    """老配置升级后**原有字段一个都不许变**（含队列、循环秒数、自动化节）。"""
+    raw = _v9_daily_raw()
+    raw["features"]["daily_tasks"]["enabled"] = True
+    raw["features"]["daily_tasks"]["loop"] = {"enabled": True, "interval_seconds": 1234}
+    raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["enabled"] = True
+    raw["features"]["daily_tasks"]["tasks"]["placeholder_task_a"]["order"] = 7
+    raw["automation"]["click_interval_ms"] = 1500
+    migrated = migrate(raw)
+
+    daily = migrated["features"]["daily_tasks"]
+    assert daily["enabled"] is True
+    assert daily["loop"] == {"enabled": True, "interval_seconds": 1234}
+    task = daily["tasks"]["placeholder_task_a"]
+    assert task["enabled"] is True and task["order"] == 7
+    assert migrated["automation"]["click_interval_ms"] == 1500
+
+
+def test_migrate_v9_to_v10_keeps_already_filled_daily_page_values() -> None:
+    """已经手工填过（或从新版本降级回来）的值不得被默认值覆盖。"""
+    raw = _v9_daily_raw()
+    daily = raw["features"]["daily_tasks"]
+    daily["coop_island"] = 7
+    daily["aqua_island"] = 5
+    daily["land_ref_image"] = "assets/templates/土地.png"
+    daily["auto_produce_least"] = True
+    migrated = migrate(raw)["features"]["daily_tasks"]
+    assert migrated["coop_island"] == 7
+    assert migrated["aqua_island"] == 5
+    assert migrated["land_ref_image"] == "assets/templates/土地.png"
+    assert migrated["auto_produce_least"] is True
