@@ -71,7 +71,39 @@ def test_daily_page_has_every_control_from_the_design() -> None:
         assert island.currentText() == "1"
         assert ref_edit.isReadOnly() is True              # 只能通过「选择图片…」填
         assert page.findChild(QFrame, f"{prefix}_island_map") is not None
+        assert page.findChild(QFrame, f"{prefix}_selected_image") is not None
         assert page.findChild(QFrame, f"{prefix}_sample_image") is not None
+    page.close()
+
+
+def test_selected_image_area_sits_in_one_row_between_capture_and_sample() -> None:
+    """三个建筑各有一块「选择的图片」显示区，位置：截取按钮右边、示例图片左边、**同一行**。
+
+    用户 2026-09-21 要求：加一块显示所选图片的区域，并让「截取位置 / 选择的图片 / 示例图片」
+    三块排在一行上。这里用**真实几何**校验（offscreen 下 Qt 照常算布局）而不是只看控件存在——
+    "同行"这件事只有几何能证明。
+    """
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtWidgets import QLabel
+
+    def rect_of(widget) -> QRect:
+        return QRect(widget.mapTo(page, QPoint(0, 0)), widget.size())
+
+    page = _page()
+    page.show()
+    _APP.processEvents()
+
+    assert any("选择的图片" in label.text() for label in page.findChildren(QLabel))
+
+    for _title, prefix, _word, _ref_id, capture_id in BUILDINGS:
+        capture = rect_of(page.findChild(QPushButton, capture_id))
+        selected = rect_of(page.findChild(QFrame, f"{prefix}_selected_image"))
+        sample = rect_of(page.findChild(QFrame, f"{prefix}_sample_image"))
+
+        assert selected.left() > capture.right(), prefix          # 在「截取游戏画面」右边
+        assert selected.right() <= sample.left(), prefix          # 在「示例图片」左边
+        assert abs(selected.top() - sample.top()) <= 4, prefix    # 与示例图片同一行
+        assert abs(selected.top() - capture.top()) <= 12, prefix  # 与截取按钮同一行（按钮在行内居中）
     page.close()
 
 
@@ -125,6 +157,7 @@ def test_daily_page_keeps_the_designed_labels_verbatim() -> None:
     assert "岛屿编号见下图" in text
     assert "截取鸡舍位置" in text and "截取土地位置" in text and "截取水产养殖位置" in text
     assert "示例图片：" in text
+    assert "选择的图片：" in text          # 用户 2026-09-21 新增的图片显示区（与「示例图片：」同一格式）
     assert "功能说明：" in text
     assert page.auto_produce_least.text() == "自动识别那个产物少造那个（只读）"
     page.close()

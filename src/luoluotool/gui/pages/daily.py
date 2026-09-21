@@ -17,10 +17,15 @@
 | `<small>` | 灰色小字 `QLabel` |
 | `<img>` | 占位框（`QLabel` + 边框），真实图片后续放进 `assets/` |
 | `title="…"` | `setToolTip(…)` |
-| `.two-col` | `QHBoxLayout` 两列 |
+| `.two-col` | `QHBoxLayout` 两列（本页建筑分组那一行是**三列**，见下） |
 
 控件名直接用设计稿的 `id`（`objectName`），所以"设计稿里的 id ↔ 页面里的控件"可以逐条对号；
 配置字段名（设计稿 `data-key`）留到第 2 批绑定，见文件末尾的对照注释。
+
+**与设计稿已有的差异（用户 2026-09-21 要求）**：每个建筑分组的最后一行是**三列同行**——
+「截取…位置」/ **「选择的图片」显示区**（`{prefix}_selected_image`，设计稿 HTML 里还没有这一列，
+给用户看**自己选的那张**长什么样）/「示例图片」。改设计稿时把这一行补成三列，别把「选择的图片」
+删掉：三块必须**顶边对齐、左右相邻**，有几何测试钉住。
 """
 
 from __future__ import annotations
@@ -165,9 +170,12 @@ class DailyPage(ScrollablePage):
             tip="岛屿编号参考图，后续替换为真实截图",
         ))
 
-        # 两列：左＝选择/截取参考图，右＝示例图片
-        left = QVBoxLayout()
-        left.addWidget(QLabel(f"截取{label_word}位置"))
+        # 三列**同一行**（用户 2026-09-21 要求）：截取位置 / 选择的图片 / 示例图片
+        #   左列＝「截取…位置」+ 参考图输入框 + 选择图片… + 截取游戏画面
+        #   中列＝「选择的图片」显示区（用户新加：给用户看**自己选的那张**长什么样）
+        #   右列＝设计稿原有的「示例图片」
+        capture_col = QVBoxLayout()
+        capture_col.addWidget(QLabel(f"截取{label_word}位置"))
 
         ref_edit = QLineEdit()
         ref_edit.setObjectName(ref_id)                 # 照抄设计稿的 id（鸡舍那个带 island 字样）
@@ -191,20 +199,29 @@ class DailyPage(ScrollablePage):
         ref_row.addWidget(pick_button)
         ref_row.addWidget(capture_button)
         ref_row.addStretch(1)
-        left.addLayout(ref_row)
-        left.addStretch(1)
+        capture_col.addLayout(ref_row)
+        capture_col.addStretch(1)
 
-        right = QVBoxLayout()
-        right.addWidget(QLabel("示例图片："))
-        right.addWidget(_image_placeholder(
+        selected_col = QVBoxLayout()
+        selected_col.addWidget(QLabel("选择的图片："))
+        selected_col.addWidget(_image_placeholder(
+            f"{prefix}_selected_image", "选择的图片「临时占位」",
+            tip="选好图片后在这里显示所选图片（第 2 批接入）",
+        ))
+        selected_col.addStretch(1)
+
+        sample_col = QVBoxLayout()
+        sample_col.addWidget(QLabel("示例图片："))
+        sample_col.addWidget(_image_placeholder(
             f"{prefix}_sample_image", "示例图片「临时占位」",
             tip="示例图片，后续替换为真实示例",
         ))
-        right.addStretch(1)
+        sample_col.addStretch(1)
 
         columns = QHBoxLayout()
-        columns.addLayout(left, 1)
-        columns.addLayout(right, 1)
+        columns.addLayout(capture_col, 0)              # 按内容宽度（输入框 + 两个按钮）
+        columns.addLayout(selected_col, 1)             # 多出来的宽度给两块图片区
+        columns.addLayout(sample_col, 1)
         layout.addLayout(columns)
         return box
 
