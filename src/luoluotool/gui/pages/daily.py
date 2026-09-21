@@ -17,15 +17,21 @@
 | `<small>` | 灰色小字 `QLabel` |
 | `<img>` | 占位框（`QLabel` + 边框），真实图片后续放进 `assets/` |
 | `title="…"` | `setToolTip(…)` |
-| `.two-col` | `QHBoxLayout` 两列（本页建筑分组那一行是**三列**，见下） |
+| `.three-col` | `QHBoxLayout` 三列（建筑分组那一行；左列按内容宽度，两块图片区各分余量） |
 
 控件名直接用设计稿的 `id`（`objectName`），所以"设计稿里的 id ↔ 页面里的控件"可以逐条对号；
 配置字段名（设计稿 `data-key`）留到第 2 批绑定，见文件末尾的对照注释。
 
-**与设计稿已有的差异（用户 2026-09-21 要求）**：每个建筑分组的最后一行是**三列同行**——
-「截取…位置」/ **「选择的图片」显示区**（`{prefix}_selected_image`，设计稿 HTML 里还没有这一列，
-给用户看**自己选的那张**长什么样）/「示例图片」。改设计稿时把这一行补成三列，别把「选择的图片」
-删掉：三块必须**顶边对齐、左右相邻**，有几何测试钉住。
+**与设计稿的同步记录（用户 2026-09-21）**：
+
+① 每个建筑分组的最后一行是**三列同行** —— 「截取…位置」/ **「选择的图片」显示区**
+（`{prefix}_selected_image`，给用户看**自己选的那张**长什么样）/「示例图片」；
+设计稿 HTML 已同步补上这一列（`.two-col` → `.three-col`）。三块必须**顶边对齐、左右相邻**，
+有几何测试钉住 —— 改设计稿时别把「选择的图片」删掉。
+② 设计稿原稿的两处错别字已按用户口径改掉，**设计稿 HTML 同步改**：
+「位于那个岛屿上」→「**所在岛屿编号**」、「自动识别那个产物少造那个」→
+「**自动识别存量最少的产物并优先制造**」（旧文案由
+`test_the_two_design_typos_are_not_reintroduced` 钉住不许回来）。
 """
 
 from __future__ import annotations
@@ -70,8 +76,10 @@ BUILDINGS: tuple[tuple[str, str, str, str, str], ...] = (
 IMAGE_PENDING_NOTE = "（图片待放入）"
 BUTTON_PENDING_TIP = "第 1 批只做界面：这个按钮的功能还没接入（计划第 2/3 批实现）"
 READONLY_MARK = "（只读）"                       # 只读项统一在文案后加这个标记
-AUTO_PRODUCE_LEAST_TEXT = "自动识别那个产物少造那个"
-# 「自动识别那个产物少造那个」**暂定只读**（用户 2026-09-21 要求）：它仍然是一个**要入库的开关**
+# 设计稿原文是「自动识别那个产物少造那个」（句子不通），用户 2026-09-21 确认改成下面这句，
+# **设计稿 HTML 已同步改**（`test_the_two_design_typos_are_not_reintroduced` 钉住旧文案不许回来）
+AUTO_PRODUCE_LEAST_TEXT = "自动识别存量最少的产物并优先制造"
+# 「自动识别存量最少的产物并优先制造」**暂定只读**（用户 2026-09-21 要求）：它仍然是一个**要入库的开关**
 # （设计稿 data-key＝`auto_produce_least`，第 2 批按它绑配置、默认 False），只是暂时不给用户改。
 # **以后开放给用户＝把这里改成 False**（文案上的「（只读）」标记与点击拦截一起生效）；
 # 别直接删只读逻辑，留着开关才能一行放开。
@@ -159,7 +167,7 @@ class DailyPage(ScrollablePage):
         island.setFixedWidth(80)                      # 设计稿把下拉收窄到只放得下数字
         island.setToolTip(f"选择{title}所在的岛屿编号")
         island_row = QHBoxLayout()
-        island_row.addWidget(QLabel("位于那个岛屿上"))
+        island_row.addWidget(QLabel("所在岛屿编号"))
         island_row.addWidget(island)
         island_row.addStretch(1)
         layout.addLayout(island_row)

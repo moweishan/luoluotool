@@ -153,18 +153,36 @@ def test_daily_page_keeps_the_designed_labels_verbatim() -> None:
     page = _page()
     text = "\n".join(label.text() for label in page.content.findChildren(QLabel))
 
-    assert "位于那个岛屿上" in text
+    assert "所在岛屿编号" in text
     assert "岛屿编号见下图" in text
     assert "截取鸡舍位置" in text and "截取土地位置" in text and "截取水产养殖位置" in text
     assert "示例图片：" in text
     assert "选择的图片：" in text          # 用户 2026-09-21 新增的图片显示区（与「示例图片：」同一格式）
     assert "功能说明：" in text
-    assert page.auto_produce_least.text() == "自动识别那个产物少造那个（只读）"
+    assert page.auto_produce_least.text() == "自动识别存量最少的产物并优先制造（只读）"
+    page.close()
+
+
+def test_the_two_design_typos_are_not_reintroduced() -> None:
+    """设计稿里那两处错别字（用户 2026-09-21 已确认改掉）不许再出现。
+
+    原稿：「位于那个岛屿上」（应为"哪个"）、「自动识别那个产物少造那个」（句子不通）。
+    改后口径是用户选的：**「所在岛屿编号」** 与 **「自动识别存量最少的产物并优先制造」**，
+    设计稿 HTML 与代码同步改；这条守卫让"谁把旧文案抄回来"当场变红。
+    """
+    from PySide6.QtWidgets import QLabel
+
+    page = _page()
+    text = "\n".join(label.text() for label in page.content.findChildren(QLabel))
+    text += page.auto_produce_least.text() + "\n" + page.auto_produce_least.toolTip()
+
+    assert "位于那个岛屿上" not in text
+    assert "自动识别那个产物少造那个" not in text
     page.close()
 
 
 def test_produce_check_is_read_only_today_but_is_a_saveable_switch() -> None:
-    """「自动识别那个产物少造那个」**当前只读**，但它是一个**要入库的开关**（用户 2026-09-21 明确）。
+    """「自动识别存量最少的产物并优先制造」**当前只读**，但它是一个**要入库的开关**（用户 2026-09-21 明确）。
 
     - 只读 ≠ 禁用：看得见、点不动、tooltip 照常，但控件没被灰掉；
     - **程序里仍可 `setChecked()`** —— 第 2 批要按配置（`data-key=auto_produce_least`，默认 False）把值写进去；
