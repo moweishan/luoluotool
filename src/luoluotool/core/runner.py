@@ -25,6 +25,20 @@ logger = logging.getLogger(__name__)
 SLEEP_CHUNK_SECONDS = 0.1
 
 
+def blocked_daily_task_ids(config: AppConfig) -> list[str]:
+    """总开关关着、但任务自己勾选了的日常任务 id（第五轮评审 P2-1）。
+
+    为什么需要它：schema v9 时代 `features.daily_tasks.enabled` 出厂默认 `false` 且"只存不读"；
+    v10 起它**真的挡队列**，于是老用户升级后"勾好的日常任务静默不再执行"。迁移故意不动老字段
+    （保持"老字段一字不变"的承诺），所以只能把这件事**说出来**：`Runner` 记 WARNING，
+    主窗口在启动时把同一句话写进日志面板与状态栏提示。
+    """
+    daily = config.features.daily_tasks
+    if daily.enabled:
+        return []
+    return sorted(task_id for task_id, cfg in daily.tasks.items() if cfg.enabled)
+
+
 class Runner:
     """按配置顺序执行勾选任务；阻塞主循环由 GUI 层放入工作线程调用。"""
 
@@ -146,6 +160,12 @@ class Runner:
            关闭时日常任务组一个任务都不入队 —— 否则"总开关"这个名字名不副实。
         """
         daily_enabled = bool(self._config.features.daily_tasks.enabled)
+        blocked = blocked_daily_task_ids(self._config)
+        if blocked:
+            logger.warning(
+                "日常任务总开关（features.daily_tasks.enabled）关闭：已勾选的 %d 个任务不会执行：%s",
+                len(blocked), "、".join(blocked),
+            )
         selected: list[tuple[str, TaskConfig]] = [
             (task_id, cfg)
             for task_id, cfg in self._config.features.daily_tasks.tasks.items()

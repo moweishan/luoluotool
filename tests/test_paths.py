@@ -6,7 +6,7 @@
 |---|---|---|
 | `assets/templates/` | 用户自己整理/命名的识别图片（调试页「添加图片…」默认打开它） | **入库**（人工整理的小素材） |
 | `assets/screenshots/` | **识别底图** —— 用工具自带的截图功能截的画面（"先截一张图 → 再用这张图去识别"） | **不入库**（原始素材） |
-| `assets/anchors/` | **框选产物** —— 开发者调试页「框选截图生成模板」落盘的 `anchor_<时间戳>.png` | **不入库**（原始素材） |
+| `assets/anchors/` | **框选产物** —— 调试页 `anchor_<时间戳>.png`、日常任务页 `{建筑}_岛屿{N}_<时间戳>.png` | **不入库**（原始素材） |
 
 目录本身一律靠 `.gitkeep` 占位，保证克隆下来就有这三个文件夹。
 """
@@ -147,7 +147,21 @@ def test_resolve_config_path_accepts_both_forms_and_empty(tmp_path) -> None:
         PROJECT_ROOT / "assets" / "templates" / "鸡舍_岛屿1.png"
     )
     absolute = tmp_path / "某处.png"
-    assert resolve_config_path(absolute.as_posix()) == absolute
+    assert resolve_config_path(absolute.as_posix()) == absolute.resolve()
+
+
+def test_resolve_config_path_normalizes_dots() -> None:
+    """第五轮评审 P3-2：含 `.` / `..` 的路径先归一化再返回（同一个文件得到同一个路径）。
+
+    **这不是安全边界**：仓库外的绝对路径本来就允许（设计如此，`to_config_path` 保留绝对路径）；
+    这里只统一"表示形式"，方便比较与当缓存键。
+    """
+    expected = PROJECT_ROOT / "assets" / "templates" / "x.png"
+    assert resolve_config_path("assets/../assets/templates/x.png") == expected
+    assert resolve_config_path("./assets/templates/x.png") == expected
+
+    escaped = resolve_config_path("../../外面.png")
+    assert escaped is not None and not escaped.is_relative_to(PROJECT_ROOT)
 
 
 def test_config_path_round_trips() -> None:

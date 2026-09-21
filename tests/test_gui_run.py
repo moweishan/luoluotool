@@ -6,6 +6,7 @@ import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QApplication
 
 from gui_helpers import _StubThread, _wait_finished, window_factory
@@ -220,17 +221,24 @@ def test_start_rejected_while_debug_test_is_running(window_factory, tmp_path) ->
     window._debug_thread = None
 
 
-def test_close_event_waits_for_all_background_threads(window_factory, tmp_path, caplog) -> None:
-    """回归（评审 P2-6）：关闭窗口时等待**全部**后台线程退出，超时要记 ERROR。"""
+def test_close_event_waits_for_all_background_threads(window_factory, tmp_path, monkeypatch) -> None:
+    """回归（评审 P2-6 + 第五轮 P3-4）：关闭窗口时等待**全部**后台线程退出，超时要记 ERROR。
+
+    第五轮评审指出这条用例的替身列表漏了**日常任务页的线程**（截图 1 个 + 参考图解码若干批）——
+    它们从 `window._daily_media.worker_threads()` 拿，这里一并替身化并断言"确实被等过"。
+    """
     window = window_factory(tmp_path / "config.json", AppConfig.default())
     running = {name: _StubThread(running=True) for name in ("_thread", "_debug_thread", "_capture_thread", "_diagnose_thread")}
     for name, stub in running.items():
         setattr(window, name, stub)
+    daily_stub = _StubThread(running=True)
+    monkeypatch.setattr(window._daily_media, "worker_threads", lambda: (daily_stub,))
 
     window.close()
 
     for name, stub in running.items():
         assert any(event.startswith("wait:") for event in stub.events), f"{name} 未被等待"
+    assert any(event.startswith("wait:") for event in daily_stub.events), "日常任务页线程未被等待"
 
 
 def test_close_event_logs_error_when_thread_does_not_exit(window_factory, tmp_path, caplog) -> None:
@@ -337,6 +345,61 @@ def test_stop_button_logs_when_runner_active(window_factory, tmp_path) -> None:
     window.stop_button.click()
     _APP.processEvents()
     assert "已请求停止" in window.log_panel.toPlainText()
+    assert _wait_finished(window)
+
+
+def test_stop_button_requests_stop_on_daily_page_threads(window_factory, tmp_path, monkeypatch) -> None:
+    """回归（第五轮评审 P2-3）：按「停止」/F8 必须叫停日常页的截图线程。
+
+    否则状态栏说"已请求停止…"，0.4 秒后框选窗口照样弹出来 —— 用户会以为停止没生效。
+    """
+    from luoluotool.gui import daily_media
+
+    config = AppConfig.default()
+    window = window_factory(tmp_path / "config.json", config)
+
+    class _IdleDailyCaptureThread(QThread):
+        captured = Signal(object, object)
+        failed_message = Signal(str)
+
+        def __init__(self, cfg=None, log=None, settle=0.0):
+            super().__init__()
+            self.stop_requests = 0
+
+        def start(self) -> None:              # 不真起线程，保持"在飞"状态
+            return None
+
+        def isRunning(self) -> bool:          # noqa: N802 (QThread 接口)
+            return True
+
+        def request_stop(self) -> None:
+            self.stop_requests += 1
+
+    monkeypatch.setattr(daily_media, "DailyCaptureThread", _IdleDailyCaptureThread)
+    window.daily_page.capture_requested.emit("coop")     # 走页面信号，真的建出线程
+
+    assert window._long_job_running() is True            # 长任务判定也要认它
+    window._stop()
+
+    assert window._daily_media.capture_thread().stop_requests == 1
+
+
+def test_start_warns_when_the_daily_master_switch_is_off(window_factory, tmp_path) -> None:
+    """回归（第五轮评审 P2-1）：总开关关着、任务却勾着时，启动要**说出来**。
+
+    schema v9 的老配置里 `enabled` 默认 false 且"只存不读"，v10 起它真的挡队列 ——
+    迁移不动老字段（保持承诺），所以必须给提示，否则用户只看到"什么都没跑"。
+    """
+    config = AppConfig.default()
+    config.features.daily_tasks.enabled = False
+    config.features.daily_tasks.tasks["placeholder_task_a"].enabled = True
+    window = window_factory(tmp_path / "config.json", config)
+
+    window._start()
+    _APP.processEvents()
+
+    assert "总开关" in window.log_panel.toPlainText()
+    assert "placeholder_task_a" in window.log_panel.toPlainText()
     assert _wait_finished(window)
 
 

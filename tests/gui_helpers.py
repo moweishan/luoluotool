@@ -107,3 +107,45 @@ class _StubThread:
     def wait(self, timeout=None) -> bool:   # noqa: N802
         self.events.append(f"wait:{timeout}")
         return self.wait_result
+
+
+# ---------------------------------------------------------------- 日常任务页（参考图流程）
+# 这些助手被 `test_gui_daily_media.py` 与 `test_gui_daily_capture.py` 共用（2026-09-22 拆文件时
+# 下沉到这里，避免两个文件各抄一份 —— 与 `crop_image` / `window_factory` 同样的收敛规则）。
+
+
+def daily_media_page(config: AppConfig, changes: list[str]):
+    """日常任务页：控件改动只往 `changes` 里追加 `"dirty"`（不写盘）。"""
+    from luoluotool.gui.pages.daily import DailyPage
+
+    return DailyPage(config, lambda: changes.append("dirty"))
+
+
+def daily_media_controller(page, config: AppConfig, changes: list[str]):
+    """日常任务页的参考图控制器；状态栏消息收进返回值的 `.statuses` 便于断言。"""
+    from luoluotool.gui.daily_media import DailyMediaController
+
+    statuses: list[str] = []
+    controller = DailyMediaController(
+        page,
+        get_config=lambda: config,
+        on_changed=lambda: changes.append("dirty"),
+        set_status=statuses.append,
+    )
+    controller.statuses = statuses
+    return controller
+
+
+def wait_for_daily_decoding(controller, timeout_ms: int = 5000) -> None:
+    """等控制器的参考图解码线程跑完并把结果投递到主线程（测试的事件循环是手动的）。"""
+    import time
+
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        for thread in controller.loader_threads():
+            thread.wait(50)
+        _APP.processEvents()
+        if not controller.loader_threads():
+            _APP.processEvents()
+            return
+    raise AssertionError("参考图解码线程未在超时内结束")

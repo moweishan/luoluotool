@@ -45,7 +45,8 @@ def get_debug_dir() -> Path:
 def get_anchors_dir() -> Path:
     """返回**框选产物**目录 assets/anchors（不存在则创建）。
 
-    开发者调试页「框选截图生成模板」保存的文件（`anchor_<时间戳>.png`）落在这里。
+    开发者调试页「框选截图生成模板」保存的文件（`anchor_<时间戳>.png`）、日常任务页
+    「截取游戏画面」框选出来的参考图（`{建筑}_岛屿{N}_<时间戳>.png`）都落在这里。
     原始素材，已在 .gitignore 中排除（目录本身靠 `.gitkeep` 入库）。
     """
     return _ensure_dir(PROJECT_ROOT / "assets" / "anchors")
@@ -92,8 +93,13 @@ def to_config_path(path: str | Path) -> str:
 def resolve_config_path(value: str | Path | None) -> Path | None:
     """把配置里的路径字符串还原成路径；空串/None 返回 None（＝还没选）。
 
-    相对路径按**仓库根**解析（与 `to_config_path` 互为逆运算）；绝对路径原样返回。
-    不做存在性检查 —— "文件被删了"由调用方判断并给出提示（不要悄悄把配置改空）。
+    相对路径按**仓库根**解析（与 `to_config_path` 互为逆运算）；绝对路径原样接受。
+    两侧都做 `resolve()` 归一化（第五轮评审 P3-2）：`assets/../assets/x.png`、含 `.`/`..`
+    的写法都会先规整再返回，调用方不必自己再处理（同一个文件一定得到同一个路径）。
+
+    **这不是安全边界**：绝对路径与 `../..` 本来就允许（用户可以把图放在仓库外，设计如此）；
+    是否落在仓库内由 `to_config_path` 反过来决定。不做存在性检查 —— "文件被删了"由调用方
+    判断并给出提示（不要悄悄把配置改空）。
     """
     if value is None:
         return None
@@ -101,4 +107,4 @@ def resolve_config_path(value: str | Path | None) -> Path | None:
     if not text:
         return None
     candidate = Path(text)
-    return candidate if candidate.is_absolute() else PROJECT_ROOT / candidate
+    return candidate.resolve() if candidate.is_absolute() else (PROJECT_ROOT / candidate).resolve()

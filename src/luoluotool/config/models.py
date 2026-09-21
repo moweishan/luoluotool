@@ -19,9 +19,11 @@ ISLAND_RANGE = (1, 10)
 MAX_IMAGE_PATH_LENGTH = 260
 
 # 循环间隔：界面按**分钟**（每天感觉的量级），配置里存**秒**（`loop.interval_seconds`，既有字段）
+# 注意：**没有"默认 30 分钟"这回事** —— 真实的出厂默认是 `LoopConfig().interval_seconds = 3600`
+# （＝60 分钟，2026-09-22 第五轮评审 P3-3 指出旧常量 `LOOP_INTERVAL_MINUTES_DEFAULT = 30` 会误导，
+# 已删除；30 只是设计稿里的占位数值）。界面显示的值一律来自配置。
 SECONDS_PER_MINUTE = 60
 LOOP_INTERVAL_MINUTES_RANGE = (1, 720)
-LOOP_INTERVAL_MINUTES_DEFAULT = 30
 
 
 def loop_minutes_to_seconds(minutes: int) -> int:

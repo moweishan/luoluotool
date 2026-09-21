@@ -1,11 +1,12 @@
-"""日常任务页的「参考图」流程测试：选择图片 / 截取游戏画面（框选）/ 放大预览。
+"""日常任务页的「参考图」流程测试：选择图片 / 解码 / 放大预览 / 重新加载。
 
-被测对象：`gui/daily_media.DailyMediaController` + `gui/daily_media.DailyCaptureThread`。
+被测对象：`gui/daily_media.DailyMediaController` + `ReferenceImageLoader` + `decode_reference_image`。
 页面本身只发信号（`tests/test_gui_daily_page.py` 测信号）；这里测"信号之后发生了什么"：
-校验图片、写配置并置脏、显示缩略图、截图前的切前台、框选产物入库、预览弹窗。
+后台解码/校验、写配置并置脏、显示缩略图、预览弹窗、刷新缩略图。
 
-**绝不真的截图、绝不真的弹窗**：`find_window` / `bring_to_front` / `capture_window` /
-`TemplateCropDialog` / `QFileDialog` 全部被替换成假对象。
+「截取游戏画面（框选）」那一段在 `tests/test_gui_daily_capture.py`（2026-09-22 拆出：
+本文件到过 600 行硬线）。**绝不真的弹窗**：`QFileDialog` 与弹窗的 `exec()` 都被替换成假对象。
+参考图解码是**后台线程**（第五轮评审 P2-4），所以用 `wait_for_daily_decoding()` 驱动。
 """
 
 import os
@@ -13,87 +14,130 @@ import os
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
-import pytest
 from PySide6.QtWidgets import QApplication, QDialog
 
+from gui_helpers import (
+    daily_media_controller,
+    daily_media_page,
+    wait_for_daily_decoding,
+)
 from luoluotool.automation.vision import save_image
-from luoluotool.config.models import AppConfig
+from luoluotool.config.models import MAX_IMAGE_PATH_LENGTH, AppConfig
 from luoluotool.gui import daily_media
-from luoluotool.gui.daily_media import DailyCaptureThread, DailyMediaController
-from luoluotool.gui.pages.daily import BUILDINGS, DailyPage, ref_image_field
+from luoluotool.gui.daily_media import decode_reference_image
+from luoluotool.gui.pages.daily import BUILDINGS, ref_image_field
 from luoluotool.utils.paths import to_config_path
 
 _APP = QApplication.instance() or QApplication([])
 
 
-def _page(config: AppConfig, changes: list[str]) -> DailyPage:
-    return DailyPage(config, lambda: changes.append("dirty"))
+def _page(config: AppConfig, changes: list[str]):
+    return daily_media_page(config, changes)
 
 
-def _controller(page: DailyPage, config: AppConfig, changes: list[str]) -> DailyMediaController:
-    statuses: list[str] = []
-    controller = DailyMediaController(
-        page,
-        get_config=lambda: config,
-        on_changed=lambda: changes.append("dirty"),
-        set_status=statuses.append,
-    )
-    controller.statuses = statuses        # 测试读它，省得再包一层
-    return controller
+def _controller(page, config: AppConfig, changes: list[str]):
+    return daily_media_controller(page, config, changes)
 
 
-@pytest.fixture()
-def textured_png(tmp_path):
-    """一张有纹理的 PNG（能被当作模板；纯色会被 `load_template` 拒掉）。"""
+def _wait_for_decoding(controller, timeout_ms: int = 5000) -> None:
+    wait_for_daily_decoding(controller, timeout_ms)
 
-    def _make(name: str = "鸡舍_岛屿1.png"):
-        rng = np.random.default_rng(7)
-        image = rng.integers(0, 255, size=(40, 60, 3), dtype=np.uint8)
-        return save_image(tmp_path / name, image)
 
-    return _make
+# ---------------------------------------------------------------- 解码（纯函数）
+
+
+def test_decode_reference_image_reports_missing_file(tmp_path) -> None:
+    """文件不在：返回可读原因，不抛异常（线程里不允许崩）。"""
+    result = decode_reference_image(tmp_path / "没有.png", validate=False)
+    assert result.ok is False and "找不到文件" in result.message and result.image is None
+
+
+def test_decode_reference_image_refuses_a_flat_image_only_when_validating(tmp_path) -> None:
+    """纯色图：`validate=True` 拒收（拿去识别会满地"匹配度 1.000"）；只刷新预览时不拦。"""
+    flat = save_image(tmp_path / "纯色.png", np.full((30, 30, 3), 128, dtype=np.uint8))
+
+    rejected = decode_reference_image(flat, validate=True)
+    assert rejected.ok is False and "纯色" in rejected.message
+
+    preview_only = decode_reference_image(flat, validate=False)
+    assert preview_only.ok is True and preview_only.image is not None
+    assert (preview_only.width, preview_only.height) == (30, 30)
+
+
+def test_decode_reference_image_reports_quality(tmp_path, textured_png) -> None:
+    """校验模式下顺带给出可辨识度结论（低辨识度只提示不拦）。"""
+    result = decode_reference_image(textured_png(), validate=True)
+    assert result.ok is True
+    assert result.quality is not None and result.quality.level == "ok"
 
 
 # ---------------------------------------------------------------- 选择图片…
 
 
-def test_pick_image_writes_config_and_shows_thumbnail(tmp_path, textured_png) -> None:
-    """选中一张能用的图：路径写进配置（相对仓库根）、置脏、缩略图出现在「选择的图片」区。"""
+def test_pick_image_validates_off_thread_then_writes_config(tmp_path, textured_png) -> None:
+    """选中一张能用的图：**后台线程**校验/解码 → 路径写进配置、置脏、缩略图出现。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     path = textured_png()
 
-    assert controller.adopt_image_file("coop", path) is True
+    assert controller.start_pick("coop", path) is True
+    assert controller.loader_threads(), "解码必须放到后台线程（评审 P2-4）"
+    _wait_for_decoding(controller)
+
     assert config.features.daily_tasks.coop_island_ref_image == to_config_path(path)
     assert changes == ["dirty"]
     assert page.reference_image("coop") == to_config_path(path)
     preview = page.preview_widget("coop")
     assert preview is not None and preview.image() is not None
     assert "已选择" in controller.statuses[-1]
+    assert controller.worker_threads() == ()          # 跑完要摘掉（关窗等待列表不留死引用）
     page.close()
 
 
 def test_pick_image_refuses_a_flat_image_and_keeps_old_value(tmp_path, textured_png) -> None:
-    """纯色图**必须拒收**（拿去识别会满地"匹配度 1.000"），且不许动原来的参考图。"""
+    """纯色图**必须拒收**，且不许动原来的参考图。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     good = textured_png("好的.png")
-    assert controller.adopt_image_file("land", good) is True
+    controller.start_pick("land", good)
+    _wait_for_decoding(controller)
     before = config.features.daily_tasks.land_ref_image
 
     flat = save_image(tmp_path / "纯色.png", np.full((30, 30, 3), 128, dtype=np.uint8))
-    assert controller.adopt_image_file("land", flat) is False
+    controller.start_pick("land", flat)
+    _wait_for_decoding(controller)
+
     assert config.features.daily_tasks.land_ref_image == before
     assert "不能用" in controller.statuses[-1]
     assert page.reference_image("land") == before
     page.close()
 
 
-def test_pick_image_dialog_starts_in_templates_dir_and_handles_cancel(monkeypatch, tmp_path) -> None:
+def test_pick_image_rejects_an_overlong_path_before_decoding(tmp_path) -> None:
+    """路径超过配置上限（260）当场拒绝（第五轮评审 P3-1）。
+
+    超长路径一旦写进配置，`store.save` 会抛 `ConfigSaveError`，**本次所有改动都不落盘** ——
+    所以要在选中那一刻就拦住，并且别说成"图片有问题"。
+    """
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    long_path = tmp_path / ("很长" * 150 + ".png")
+
+    assert controller.start_pick("aqua", long_path) is False
+    assert controller.loader_threads() == ()          # 没解码、没起线程
+    assert config.features.daily_tasks.aqua_ref_image == ""
+    assert "路径太长" in controller.statuses[-1]
+    assert str(MAX_IMAGE_PATH_LENGTH) in controller.statuses[-1]
+    page.close()
+
+
+def test_pick_image_dialog_starts_in_templates_dir_and_handles_cancel(monkeypatch) -> None:
     """对话框默认打开 `assets/templates/`；取消则不改配置、只提示。"""
     from luoluotool.utils.paths import get_templates_dir
 
@@ -118,228 +162,106 @@ def test_pick_image_dialog_starts_in_templates_dir_and_handles_cancel(monkeypatc
     page.close()
 
 
-def test_pick_image_dialog_starts_in_the_folder_of_the_current_image(
-    monkeypatch, tmp_path, textured_png
-) -> None:
+def test_pick_image_dialog_starts_in_the_folder_of_the_current_image(monkeypatch, textured_png) -> None:
     """已经选过图时，对话框从那张图所在目录打开（换图时少点几步）。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     first = textured_png("第一张.png")
-    assert controller.adopt_image_file("coop", first) is True
+    controller.start_pick("coop", first)
+    _wait_for_decoding(controller)
 
     calls: list[str] = []
-    monkeypatch.setattr(
-        daily_media.QFileDialog, "getOpenFileName",
-        staticmethod(lambda parent, caption, directory, filters: calls.append(directory) or ("", "")),
-    )
+
+    def fake_dialog(parent, caption, directory, filters):
+        calls.append(directory)
+        return "", ""
+
+    monkeypatch.setattr(daily_media.QFileDialog, "getOpenFileName", staticmethod(fake_dialog))
     page.pick_image_requested.emit("coop")
     assert calls and calls[0] == str(first.parent)
+    page.close()
+
+
+def test_stale_pick_result_is_dropped(tmp_path, textured_png) -> None:
+    """同一建筑连着选两张：旧一批的迟到结果必须丢弃（否则缩略图会闪回旧图）。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    first = textured_png("第一张.png")
+    second = textured_png("第二张.png")
+
+    controller.start_pick("coop", first)
+    controller.start_pick("coop", second)          # 立刻改主意再选一张
+    _wait_for_decoding(controller)
+
+    assert config.features.daily_tasks.coop_island_ref_image == to_config_path(second)
+    assert page.reference_image("coop") == to_config_path(second)
     page.close()
 
 
 # ---------------------------------------------------------------- 截取游戏画面
 
 
-def test_capture_thread_brings_the_window_to_front_before_capturing(monkeypatch) -> None:
-    """截图前**必须先把游戏窗口切到前台**（否则截到的是盖在上面的本工具窗口）。"""
-    config = AppConfig.default()
-    order: list[str] = []
-
-    monkeypatch.setattr(daily_media, "find_window", lambda keyword: order.append("find") or 4242)
-    monkeypatch.setattr(daily_media, "bring_to_front", lambda hwnd: order.append("front") or True)
-    monkeypatch.setattr(
-        daily_media.vision_actions, "capture_window",
-        lambda cfg: order.append("capture") or (np.zeros((10, 20, 3), dtype=np.uint8), ""),
-    )
-    captured: list[tuple] = []
-    failures: list[str] = []
-    thread = DailyCaptureThread(config, daily_media.logger, settle=0.0)
-    thread.captured.connect(lambda image, size: captured.append((image.shape, size)))
-    thread.failed_message.connect(failures.append)
-
-    thread.run()                                   # 同步执行，不真的起线程
-
-    assert order == ["find", "front", "capture"]
-    assert captured and captured[0][1] == (20, 10)
-    assert failures == []
-
-
-def test_capture_thread_reports_missing_window(monkeypatch) -> None:
-    """找不到游戏窗口：给可读提示，**不截图**。"""
-    config = AppConfig.default()
-    monkeypatch.setattr(daily_media, "find_window", lambda keyword: None)
-    called: list[str] = []
-    monkeypatch.setattr(
-        daily_media.vision_actions, "capture_window",
-        lambda cfg: called.append("capture") or (None, ""),
-    )
-    failures: list[str] = []
-    thread = DailyCaptureThread(config, daily_media.logger, settle=0.0)
-    thread.failed_message.connect(failures.append)
-
-    thread.run()
-
-    assert called == []
-    assert failures and "未找到" in failures[0]
-
-
-def test_capture_thread_stops_before_screenshot_when_requested(monkeypatch) -> None:
-    """等待切前台期间收到停止请求 → 不再截图（关窗/急停时不用白等）。"""
-    config = AppConfig.default()
-    monkeypatch.setattr(daily_media, "find_window", lambda keyword: 1)
-    monkeypatch.setattr(daily_media, "bring_to_front", lambda hwnd: True)
-    called: list[str] = []
-    monkeypatch.setattr(
-        daily_media.vision_actions, "capture_window",
-        lambda cfg: called.append("capture") or (None, ""),
-    )
-    thread = DailyCaptureThread(config, daily_media.logger, settle=0.3)
-    thread.request_stop()
-
-    thread.run()
-
-    assert called == []
-
-
-def test_capture_ready_opens_crop_dialog_and_records_the_saved_anchor(
-    tmp_path, monkeypatch, textured_png
-) -> None:
-    """截图完成 → 弹框选窗（拿到本次截图与文件名前缀）→ 保存后写配置 + 显示缩略图。"""
-    config = AppConfig.default()
-    config.features.daily_tasks.coop_island = 7
-    changes: list[str] = []
-    page = _page(config, changes)
-    controller = _controller(page, config, changes)
-    anchors = tmp_path / "anchors"
-    monkeypatch.setattr(daily_media, "get_anchors_dir", lambda: anchors)
-    saved = textured_png("coop_island_7.png")     # 假装是框选产物
-
-    opened: list[tuple] = []
-
-    class _FakeDialog:
-        def __init__(self, image, window_size, save_dir, parent=None, threshold=None, file_stem=""):
-            opened.append((image.shape, window_size, save_dir, threshold, file_stem))
-            self.saved_path = saved
-
-        def selection(self):
-            return 12, 34, 50, 40
-
-        def exec(self):
-            return QDialog.DialogCode.Accepted
-
-        def deleteLater(self):                     # noqa: N802 (QObject 接口)
-            return None
-
-    monkeypatch.setattr(daily_media, "TemplateCropDialog", _FakeDialog)
-    controller._pending_prefix = "coop"            # 正常由 capture_image() 设置
-    controller.on_capture_ready(np.zeros((50, 100, 3), dtype=np.uint8), (100, 50))
-
-    assert opened and opened[0][1] == (100, 50) and opened[0][2] == anchors
-    assert opened[0][4] == "鸡舍_岛屿7"            # 文件名带建筑名 + 岛屿编号，方便回看
-    assert config.features.daily_tasks.coop_island_ref_image == to_config_path(saved)
-    assert page.preview_widget("coop").image() is not None
-    assert "参考图已保存" in controller.statuses[-1] and "选区 50x40" in controller.statuses[-1]
-    page.close()
-
-
-def test_capture_ready_keeps_the_old_image_when_the_user_cancels(tmp_path, monkeypatch,
-                                                                 textured_png) -> None:
-    """用户取消框选 → 只提示，配置与显示都保持原样。"""
-    config = AppConfig.default()
-    changes: list[str] = []
-    page = _page(config, changes)
-    controller = _controller(page, config, changes)
-    old = textured_png("旧的.png")
-    assert controller.adopt_image_file("aqua", old) is True
-    before = config.features.daily_tasks.aqua_ref_image
-    changes.clear()
-
-    class _CancelDialog:
-        def __init__(self, *args, **kwargs):
-            self.saved_path = None
-
-        def exec(self):
-            return QDialog.DialogCode.Rejected
-
-        def deleteLater(self):                     # noqa: N802 (QObject 接口)
-            return None
-
-    monkeypatch.setattr(daily_media, "TemplateCropDialog", _CancelDialog)
-    controller._pending_prefix = "aqua"
-    controller.on_capture_ready(np.zeros((20, 20, 3), dtype=np.uint8), (20, 20))
-
-    assert config.features.daily_tasks.aqua_ref_image == before
-    assert changes == []
-    assert page.reference_image("aqua") == before
-    assert "已取消" in controller.statuses[-1]
-    page.close()
-
-
-def test_capture_failure_points_at_the_log_file(monkeypatch) -> None:
-    """截图失败：状态栏给原因 + **说清日志在哪**（用户 B9 的要求），不弹窗。"""
-    config = AppConfig.default()
-    changes: list[str] = []
-    page = _page(config, changes)
-    controller = _controller(page, config, changes)
-
-    controller.on_capture_failed("游戏窗口已最小化或不可见，请恢复窗口后重试")
-
-    message = controller.statuses[-1]
-    assert "截取游戏画面失败" in message and "最小化" in message
-    assert "luoluotool.log" in message
-    page.close()
-
-
-def test_capture_image_refuses_to_start_a_second_time() -> None:
-    """上一次截图还在飞时不重复发起（避免两路截图/两个框选窗口）。"""
-    config = AppConfig.default()
-    changes: list[str] = []
-    page = _page(config, changes)
-    controller = _controller(page, config, changes)
-
-    class _Busy(DailyCaptureThread):
-        def isRunning(self):                       # noqa: N802 (QThread 接口)
-            return True
-
-    controller._thread = _Busy(config, daily_media.logger)
-    controller.capture_image("coop")
-
-    assert "还没结束" in controller.statuses[-1]
-    page.close()
-
-
 # ---------------------------------------------------------------- 放大预览
 
 
-def test_preview_dialog_shows_the_image(tmp_path, textured_png) -> None:
-    """双击后的放大预览：工具内弹窗，标题带建筑名与像素尺寸。"""
+def test_show_preview_decodes_off_thread_then_opens_the_dialog(tmp_path, textured_png
+                                                              , monkeypatch) -> None:
+    """双击缩略图：解码在后台线程，图到了才开弹窗（弹窗只做界面）。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     path = textured_png("预览.png")
     config.features.daily_tasks.land_ref_image = to_config_path(path)
+    opened: list[str] = []
 
-    dialog = controller.build_preview_dialog("land")
+    def fake_exec(self):
+        opened.append(self.windowTitle())
+        return QDialog.DialogCode.Rejected
 
-    assert dialog is not None
-    assert "土地" in dialog.windowTitle()
-    dialog.deleteLater()
+    monkeypatch.setattr(QDialog, "exec", fake_exec)
+
+    controller.show_preview("land")
+    _wait_for_decoding(controller)
+
+    assert opened and "土地" in opened[0]
     page.close()
 
 
-def test_preview_reports_missing_file_without_clearing_config(tmp_path) -> None:
-    """文件不见了：提示 + 记日志，但**不动配置里的路径**（用户可能只是换机器）。"""
+def test_build_preview_dialog_uses_the_decoded_image(textured_png) -> None:
+    """弹窗构造只吃**已解码**的 QImage（不 exec，便于测试）。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    path = textured_png("弹窗.png")
+    config.features.daily_tasks.land_ref_image = to_config_path(path)
+    result = decode_reference_image(path, validate=False)
+
+    dialog = controller.build_preview_dialog("land", result.image)
+
+    assert dialog is not None and "土地" in dialog.windowTitle()
+    dialog.deleteLater()
+    assert controller.build_preview_dialog("land", None) is None   # 没图就不开窗
+    page.close()
+
+
+def test_preview_reports_missing_file_without_clearing_config() -> None:
+    """文件不见了：提示 + 记日志，但**不动配置里的路径**（用户可能只是换机器），也不起线程。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     config.features.daily_tasks.land_ref_image = "assets/anchors/不存在.png"
 
-    assert controller.build_preview_dialog("land") is None
+    controller.show_preview("land")
+
     assert "找不到" in controller.statuses[-1]
+    assert controller.loader_threads() == ()
     assert config.features.daily_tasks.land_ref_image == "assets/anchors/不存在.png"
     page.close()
 
@@ -351,16 +273,18 @@ def test_preview_without_any_image_says_so() -> None:
     page = _page(config, changes)
     controller = _controller(page, config, changes)
 
-    assert controller.build_preview_dialog("coop") is None
+    controller.show_preview("coop")
+
     assert "还没选参考图" in controller.statuses[-1]
+    assert controller.loader_threads() == ()
     page.close()
 
 
 # ---------------------------------------------------------------- 重新加载配置
 
 
-def test_refresh_previews_reads_every_building_from_config(tmp_path, textured_png) -> None:
-    """加载/重载/恢复默认后：三张参考图的缩略图按配置重读（页面自己不做文件 IO）。"""
+def test_refresh_previews_decodes_every_building_off_thread(tmp_path, textured_png) -> None:
+    """加载/重载/恢复默认后：缩略图在**后台**解码（三张 4K 最坏 ~1.1 s，不能占 GUI 线程）。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
@@ -372,6 +296,8 @@ def test_refresh_previews_reads_every_building_from_config(tmp_path, textured_pn
     config.features.daily_tasks.land_ref_image = ""
 
     controller.refresh_previews()
+    assert len(controller.loader_threads()) == 1      # 一批线程处理两张（第三张是空路径）
+    _wait_for_decoding(controller)
 
     assert page.preview_widget("coop").image() is not None
     assert page.preview_widget("aqua").image() is not None
@@ -380,7 +306,7 @@ def test_refresh_previews_reads_every_building_from_config(tmp_path, textured_pn
     page.close()
 
 
-def test_refresh_previews_keeps_the_path_when_the_file_is_gone(tmp_path) -> None:
+def test_refresh_previews_keeps_the_path_when_the_file_is_gone() -> None:
     """配置里的文件被删掉：缩略图清空、路径保留（不许悄悄把用户的配置抹掉）。"""
     config = AppConfig.default()
     changes: list[str] = []
@@ -389,6 +315,7 @@ def test_refresh_previews_keeps_the_path_when_the_file_is_gone(tmp_path) -> None
     config.features.daily_tasks.coop_island_ref_image = "assets/anchors/没了.png"
 
     controller.refresh_previews()
+    _wait_for_decoding(controller)
 
     assert page.reference_image("coop") == "assets/anchors/没了.png"
     assert page.preview_widget("coop").image() is None

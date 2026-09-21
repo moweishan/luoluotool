@@ -58,3 +58,24 @@ def _tests_never_query_real_desktop(monkeypatch):
     except ImportError:                   # 环境缺 numpy/opencv 时跳过（不影响其它测试）
         return
     monkeypatch.setattr(core_vision, "find_window", lambda keyword: None)
+
+
+@pytest.fixture()
+def textured_png(tmp_path):
+    """一张**有纹理**的 PNG（能被 `load_template` 接受：纯色图会被它按规则拒掉）。
+
+    日常任务页的参考图测试要用它（选图/解码/预览都走同一条读图路径）；
+    放在 conftest 是因为 `test_gui_daily_media.py` 与 `test_gui_daily_capture.py` 都要用。
+    返回一个"再造一张"的小工厂：`path = textured_png()` 或 `textured_png("另一张.png")`。
+    """
+
+    def _make(name: str = "鸡舍_岛屿1.png"):
+        import numpy as np
+
+        from luoluotool.automation.vision import save_image
+
+        rng = np.random.default_rng(7)
+        image = rng.integers(0, 255, size=(40, 60, 3), dtype=np.uint8)
+        return save_image(tmp_path / name, image)
+
+    return _make

@@ -24,7 +24,6 @@ from PySide6.QtWidgets import (
 )
 
 from luoluotool.config.models import (
-    LOOP_INTERVAL_MINUTES_DEFAULT,
     LOOP_INTERVAL_MINUTES_RANGE,
     AppConfig,
 )
@@ -130,13 +129,49 @@ def test_daily_page_loop_interval_range_matches_the_design() -> None:
 
     assert isinstance(page.loop_interval_minutes, QSpinBox)
     assert LOOP_INTERVAL_MINUTES_RANGE == (1, 720)
-    assert LOOP_INTERVAL_MINUTES_DEFAULT == 30
     assert (
         page.loop_interval_minutes.minimum(), page.loop_interval_minutes.maximum()
     ) == LOOP_INTERVAL_MINUTES_RANGE
     assert page.loop_interval_minutes.value() == 60          # AppConfig.default() 的 3600 秒
     assert page.daily_enabled.isChecked() is False
+    assert page.loop_enabled.isChecked() is False            # 循环默认关（runner 只看这个标志）
     assert page.auto_produce_least.isChecked() is False
+    page.close()
+
+
+def test_daily_page_loop_switch_writes_loop_enabled() -> None:
+    """「按固定间隔循环」开关真的绑 `loop.enabled`（第五轮评审 P2-2）。
+
+    没有这个开关时，"循环间隔"是个**失效控件**：runner 不循环的条件正是 `not loop.enabled`，
+    而全仓没有任何界面代码写它 —— 用户把间隔改成 30 分钟，什么都不发生。
+    """
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+
+    page.loop_enabled.setChecked(True)
+    assert config.features.daily_tasks.loop.enabled is True
+    assert changes == ["dirty"]
+
+    page.loop_enabled.setChecked(False)
+    assert config.features.daily_tasks.loop.enabled is False
+    assert page.loop_interval_minutes.toolTip().startswith("仅在勾选上面的「按固定间隔循环」时生效")
+    page.close()
+
+
+def test_daily_page_loads_and_repopulates_the_loop_switch() -> None:
+    """装载配置：循环开关跟着走，且不置脏（`_loading` 保护）。"""
+    config = AppConfig.default()
+    config.features.daily_tasks.loop.enabled = True
+    changes: list[str] = []
+    page = _page(config, changes)
+    assert page.loop_enabled.isChecked() is True
+    assert changes == []
+
+    other = AppConfig.default()
+    page.set_config(other)
+    assert page.loop_enabled.isChecked() is False
+    assert changes == []
     page.close()
 
 

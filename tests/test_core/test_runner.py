@@ -282,6 +282,26 @@ def test_daily_group_switch_gates_the_daily_queue() -> None:
     assert Runner(config).queued_tasks() == ["test_fake_one", "order_hold"]
 
 
+def test_blocked_daily_tasks_are_listed_and_warned(caplog) -> None:
+    """总开关关着、任务却勾着：必须列出来并记 WARNING（第五轮评审 P2-1）。
+
+    老配置（schema v9）里 `enabled` 默认 false 且"只存不读"，v10 起它真的挡队列；
+    迁移不动老字段，所以只能在运行时刻把"勾了但不会跑"这件事说清楚。
+    """
+    from luoluotool.core.runner import blocked_daily_task_ids
+
+    config = _config([("test_fake_one", True, 1), ("test_fake_two", False, 2)])
+    config.features.daily_tasks.enabled = False
+    assert blocked_daily_task_ids(config) == ["test_fake_one"]
+
+    caplog.set_level(logging.WARNING)
+    assert Runner(config).queued_tasks() == []
+    assert "总开关" in caplog.text and "test_fake_one" in caplog.text
+
+    config.features.daily_tasks.enabled = True
+    assert blocked_daily_task_ids(config) == []
+
+
 def test_placeholder_feature_tasks_run_in_queue_order_with_planned_logs(caplog) -> None:
     """端到端：主开关开启的功能任务按队列顺序执行，日志中出现"规划中"记录。"""
     caplog.set_level(logging.INFO)

@@ -77,9 +77,6 @@ from luoluotool.gui.widgets import ImagePreview, ScrollablePage
 
 logger = logging.getLogger(__name__)
 
-# 岛屿编号下拉：1–10（**范围与校验器共用** `config.models.ISLAND_RANGE`，禁止各写一遍）
-ISLAND_COUNT = ISLAND_RANGE[1] - ISLAND_RANGE[0] + 1
-
 # 三个生产建筑分组（设计稿里是三段重复结构，这里用一份定义避免抄三遍）
 # (标题, 控件名前缀, "截取…位置" 的中间词, 参考图输入框 id, 截取按钮 id)
 # **id 一律照抄设计稿**：鸡舍那个文件框在设计稿里叫 `coop_island_ref_image`（不是 coop_ref_image）
@@ -89,7 +86,6 @@ BUILDINGS: tuple[tuple[str, str, str, str, str], ...] = (
     ("水产养殖", "aqua", "水产养殖", "aqua_ref_image", "aqua_capture_screen"),
 )
 
-IMAGE_PENDING_NOTE = "（图片待放入）"
 PREVIEW_EMPTY_TEXT = "尚未选择图片"
 PICK_FILTER = "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)"
 READONLY_MARK = "（只读）"                       # 只读项统一在文案后加这个标记
@@ -105,6 +101,7 @@ AUTO_PRODUCE_LEAST_READONLY = True
 # 设计稿里所有可交互控件的 id（控件名必须逐一对应，有测试钉住）—— 改设计稿时同步这张表
 DESIGN_CONTROL_IDS: tuple[str, ...] = (
     "daily_enabled",
+    "loop_enabled",
     "loop_interval_minutes",
     *(name for _t, prefix, _w, ref_id, cap_id in BUILDINGS
       for name in (f"{prefix}_island", ref_id, f"{prefix}_pick_image", cap_id)),
@@ -181,12 +178,26 @@ class DailyPage(ScrollablePage):
         row.addStretch(1)
         layout.addLayout(row)
 
+        self.loop_enabled = QCheckBox("按固定间隔循环")
+        self.loop_enabled.setObjectName("loop_enabled")
+        self.loop_enabled.setToolTip(
+            "勾选后：整队列跑完一轮会等「循环间隔」再跑下一轮；不勾＝只跑一轮就结束"
+        )
+        self.loop_enabled.toggled.connect(self._on_loop_enabled_toggled)
+        row_loop = QHBoxLayout()
+        row_loop.addWidget(self.loop_enabled)
+        row_loop.addStretch(1)
+        layout.addLayout(row_loop)
+
         self.loop_interval_minutes = QSpinBox()
         self.loop_interval_minutes.setObjectName("loop_interval_minutes")
         self.loop_interval_minutes.setRange(*LOOP_INTERVAL_MINUTES_RANGE)
         self.loop_interval_minutes.setSingleStep(1)
         self.loop_interval_minutes.setMaximumWidth(120)     # 设计稿里数字框是窄的（90px）
-        self.loop_interval_minutes.setToolTip("仅在执行方式为「按固定间隔循环」时生效")
+        # 评审 P2-2：这里原来写「仅在执行方式为「按固定间隔循环」时生效」，而页面上并没有
+        # 那个"执行方式"控件（重建时把旧页面的「循环执行」开关弄丢了）—— 现在开关补回来了，
+        # tooltip 直接指向它，控件不再指向不存在的东西。
+        self.loop_interval_minutes.setToolTip("仅在勾选上面的「按固定间隔循环」时生效")
         self.loop_interval_minutes.valueChanged.connect(self._on_loop_interval_changed)
         row2 = QHBoxLayout()
         row2.addWidget(QLabel("循环间隔（分钟）"))           # 单位跟设计稿一样写在标签里
@@ -353,6 +364,12 @@ class DailyPage(ScrollablePage):
         self._config.features.daily_tasks.enabled = bool(checked)
         self._on_changed()
 
+    def _on_loop_enabled_toggled(self, checked: bool) -> None:
+        if self._loading:
+            return
+        self._config.features.daily_tasks.loop.enabled = bool(checked)
+        self._on_changed()
+
     def _on_loop_interval_changed(self, minutes: int) -> None:
         if self._loading:
             return
@@ -385,6 +402,7 @@ class DailyPage(ScrollablePage):
         self._loading = True
         try:
             self.daily_enabled.setChecked(bool(daily.enabled))
+            self.loop_enabled.setChecked(bool(daily.loop.enabled))
             self.loop_interval_minutes.setValue(loop_seconds_to_minutes(daily.loop.interval_seconds))
             self.auto_produce_least.setChecked(bool(daily.auto_produce_least))
             for _title, prefix, _word, ref_id, _capture_id in BUILDINGS:

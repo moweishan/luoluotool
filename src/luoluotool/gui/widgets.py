@@ -3,7 +3,7 @@
 import logging
 
 from PySide6.QtCore import QObject, QRect, QSize, Qt, Signal
-from PySide6.QtGui import QImage, QPainter
+from PySide6.QtGui import QColor, QImage, QPainter
 from PySide6.QtWidgets import QFrame, QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget
 
 # 所有页签统一上报的建议尺寸：`QTabWidget` 的建议高度取「最高页签的 sizeHint」，
@@ -107,7 +107,7 @@ class ImagePreview(QFrame):
         super().paintEvent(event)
         painter = QPainter(self)
         if self._image is None:
-            painter.setPen(Qt.GlobalColor.gray)
+            painter.setPen(QColor(PREVIEW_TEXT_COLOR))   # 与虚线占位框里的灰字同一色号
             painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._empty_text)
             return
         target = self._fitted_rect(self._image.size())

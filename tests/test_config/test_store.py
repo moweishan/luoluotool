@@ -220,3 +220,26 @@ def test_save_backs_up_newer_version_file_before_overwriting(tmp_path) -> None:
     backups = list(tmp_path.glob("config.json.bak-v*-*"))
     assert len(backups) == 1
     assert json.loads(backups[0].read_text(encoding="utf-8"))["schema_version"] == models.SCHEMA_VERSION + 1
+
+
+def test_load_normalizes_the_file_and_drops_unknown_fields(tmp_path) -> None:
+    """既有行为（第五轮评审 P3-6）：迁移写回会把文件**规范化** —— 未知键会消失。
+
+    `migrate()` 本身特意保留未知键（见 `test_migrate_*`），但 `store.load` 在迁移后
+    用 `AppConfig.from_dict(...).to_dict()` 重写文件，于是"程序不认识的字段"不会留在盘上。
+    这不是缺陷（配置文件由本程序独占），但得有用例把行为记下来，免得日后误以为"未知键会被保留"。
+    """
+    path = tmp_path / "config.json"
+    raw = models.AppConfig.default().to_dict()
+    raw["schema_version"] = models.SCHEMA_VERSION - 1        # 老版本 → 会触发迁移写回
+    raw["future_field"] = {"kept_by_migrate": True}          # 程序不认识的顶层键
+    path.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+
+    store.load(path)
+
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["schema_version"] == models.SCHEMA_VERSION
+    assert "future_field" not in on_disk
+    # 认识的字段一个都不能丢
+    assert on_disk["features"]["daily_tasks"]["loop"]["interval_seconds"] == 3600
+    assert on_disk["automation"]["window_title_keyword"] == "桃源深处有人家"

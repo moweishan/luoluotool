@@ -35,7 +35,7 @@ from luoluotool.automation.hotkey import (
 )
 from luoluotool.config import store
 from luoluotool.config.models import AppConfig
-from luoluotool.core.runner import Runner
+from luoluotool.core.runner import Runner, blocked_daily_task_ids
 from luoluotool.gui.daily_media import DailyMediaController
 from luoluotool.gui.dialogs.crop_dialog import TemplateCropDialog
 from luoluotool.gui.layout_measure import (
@@ -215,12 +215,12 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         super().closeEvent(event)
 
     def _long_job_running(self) -> bool:
-        """是否有长任务在跑（任务 / 调试测试 / 截图 / 诊断 / 日常页截图）。"""
+        """是否有长任务在跑（任务 / 调试测试 / 截图 / 诊断 / 日常页截图与解码）。"""
         return any(
             thread is not None and thread.isRunning()
             for thread in (
                 self._thread, self._debug_thread, self._capture_thread,
-                self._daily_media.capture_thread(), self._diagnose_thread,
+                self._diagnose_thread, *self._daily_media.worker_threads(),
             )
         )
 
@@ -230,13 +230,18 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         不等待会触发 Qt 的 `QThread: Destroyed while thread is still running`（致命），
         而且进程退出会跳过 finally 里的左键/按键释放。等待超时必须记日志 —— 不能装作没事。
         """
-        for name, thread in (
+        threads: list[tuple[str, object]] = [
             ("运行", self._thread),
             ("调试测试", self._debug_thread),
             ("截图", self._capture_thread),
-            ("日常页截图", self._daily_media.capture_thread()),
             ("窗口诊断", self._diagnose_thread),
-        ):
+        ]
+        # 日常页的线程可能有多个（截图 1 个 + 参考图解码若干批），逐个等（评审 P2-4/P3-4）
+        threads.extend(
+            (f"日常页线程#{index + 1}", thread)
+            for index, thread in enumerate(self._daily_media.worker_threads())
+        )
+        for name, thread in threads:
             if thread is not None and thread.isRunning():
                 if thread.wait(THREAD_WAIT_TIMEOUT_MS):
                     logger.info("%s线程已退出", name)
@@ -354,6 +359,17 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         else:
             self.statusBar().setStyleSheet(STATUS_REAL_STYLE)
             self.statusBar().showMessage(STATUS_RUNNING_REAL)
+        # 评审 P2-1：老配置升级上来时，总开关（v10 起真的会挡队列）可能还关着，
+        # 而任务已经勾好了 —— 不提示的话用户只会看到"什么都没跑"
+        blocked = blocked_daily_task_ids(self._config)
+        if blocked:
+            hint = (
+                f"提醒：日常任务总开关关闭，已勾选的 {len(blocked)} 个日常任务不会执行"
+                f"（{ '、'.join(blocked) }）—— 需要跑就勾上「启用日常任务」"
+            )
+            logger.warning("%s", hint)
+            self.statusBar().setToolTip(hint)
+            self.log_panel.appendPlainText(hint)
         self._thread.start()
 
     def _real_mode_warning_text(self) -> str:
@@ -383,6 +399,9 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         if self._debug_thread is not None and self._debug_thread.isRunning():
             self._debug_thread.request_stop()
             self.debug_page.set_status("已请求停止调试测试…")
+        # 评审 P2-3：日常页的截图/解码线程也要停 —— 否则按了 F8 之后 0.4 秒
+        # 框选窗口照样弹出来，用户会以为"停止没生效"
+        self._daily_media.request_stop()
         if self._runner is not None:
             self._runner.request_stop()
         if self._thread is not None and self._thread.isRunning():

@@ -639,7 +639,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | 日志 | `user_data/logs/luoluotool.log` |
 | 识别带框截图 | `user_data/debug/vision_<时间戳>.png`（整屏 + 画框，每处命中一个编号） |
 | 窗口诊断截图 | `user_data/debug/window_<时间戳>.png` |
-| 框选产物 | `assets/anchors/anchor_<时间戳>.png`（开发者调试页框选生成，**不入库**） |
+| 框选产物 | `assets/anchors/`：调试页 `anchor_<时间戳>.png`、日常任务页 `{建筑}_岛屿{N}_<时间戳>.png`（**不入库**） |
 | 识别图片 | `assets/templates/*.png`（用户自己整理，**入库**；调试页「添加图片…」默认打开它） |
 | 识别底图 | `assets/screenshots/*.png`（用工具自带截图功能截的画面，**不入库**；"用底图识别"功能待实现） |
 | 配置 | `user_data/config.json`（schema v9；损坏会自动恢复并在日志说明） |
@@ -722,19 +722,19 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `DebugPage` | `gui/pages/debug.py:68` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `AboutPage` | `gui/pages/about.py:79` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
 | `diagnostics_text` | `gui/pages/about.py:222` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
-| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:446` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
-| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:487` / `:523` | 框选回填 / 框选入口（门禁 + 后台截图） |
-| `_debug_actions_allowed` | `gui/main_window.py:438` | 开发者调试门禁 |
-| `_register_hotkey_or_hint` | `gui/main_window.py:271` | 热键注册 + 失败显著提示（评审 P3-9） |
+| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:465` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
+| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:506` / `:542` | 框选回填 / 框选入口（门禁 + 后台截图） |
+| `_debug_actions_allowed` | `gui/main_window.py:457` | 开发者调试门禁 |
+| `_register_hotkey_or_hint` | `gui/main_window.py:276` | 热键注册 + 失败显著提示（评审 P3-9） |
 | `_wait_for_threads` | `gui/main_window.py:227` | 关窗等齐 4 个后台线程（评审 P2-6） |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:170` / `:238` | 布局测量与报告 |
-| `Runner.start` | `core/runner.py:68` | 任务顺序执行/循环/失败计数 |
+| `Runner.start` | `core/runner.py:82` | 任务顺序执行/循环/失败计数 |
 | `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁，评审 P3-1） |
 | `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样，评审 P1-2） |
 | `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
 | `migrate` / `validate` | `config/validation.py:344` / `:374` | 迁移链（每步独立 try，绝不崩）与校验 |
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
-| `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:64` / `:54` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
+| `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:65` / `:55` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
 | `prepare_for_match` | `automation/template_match.py:196` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
 | `_on_vision_add_clicked` | `gui/pages/debug.py:429` | 「添加图片…」对话框默认打开 `assets/templates` |
 | `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
