@@ -732,7 +732,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁，评审 P3-1） |
 | `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样，评审 P1-2） |
 | `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
-| `migrate` / `validate` | `config/validation.py:344` / `:374` | 迁移链（每步独立 try，绝不崩）与校验 |
+| `migrate` / `validate` | `config/validation.py:386` / `:416` | 迁移链（每步独立 try，绝不崩）与校验 |
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
 | `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:65` / `:55` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
 | `prepare_for_match` | `automation/template_match.py:196` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
