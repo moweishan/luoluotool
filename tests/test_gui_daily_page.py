@@ -322,7 +322,7 @@ def test_daily_page_loads_config_without_rewriting_it() -> None:
     daily.coop_island = 9
     daily.land_island = 3
     daily.aqua_island = 5
-    daily.coop_island_ref_image = "assets/templates/鸡舍_岛屿9.png"
+    daily.coop_island_ref_image = ["assets/templates/鸡舍_岛屿9.png"]
     daily.auto_produce_least = True
     changes: list[str] = []
     page = _page(config, changes)
@@ -372,7 +372,7 @@ def test_daily_page_set_config_repopulates_widgets_without_marking_dirty() -> No
 
 
 def test_selected_image_area_previews_the_picture_and_asks_for_an_enlarged_view() -> None:
-    """「选择的图片」显示区：设置图片＝显示缩略图，双击＝请求放大（具体弹窗由主窗口做）。"""
+    """「选择的图片」显示区：设置图片＝显示，双击＝请求放大（具体弹窗由主窗口做）。"""
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QImage
     from PySide6.QtTest import QTest
@@ -386,18 +386,89 @@ def test_selected_image_area_previews_the_picture_and_asks_for_an_enlarged_view(
 
     image = QImage(6, 4, QImage.Format.Format_RGB32)
     image.fill(0x336699)
-    page.set_reference_image("coop", "assets/anchors/鸡舍_岛屿1.png", image)
-    assert page.findChild(QLineEdit, "coop_island_ref_image").text() == "assets/anchors/鸡舍_岛屿1.png"
+    path = "assets/anchors/鸡舍_岛屿1.png"
+    page.set_reference_images("coop", [path], [image])
+    assert page.findChild(QLineEdit, "coop_island_ref_image").text() == path   # 单张＝显示完整路径
     assert preview.image() is not None and preview.image().size() == image.size()
 
-    requested: list[str] = []
-    page.preview_requested.connect(requested.append)
+    requested: list[tuple[str, int]] = []
+    page.preview_requested.connect(lambda prefix, index: requested.append((prefix, index)))
     page.show()
     _APP.processEvents()
     QTest.mouseDClick(preview, Qt.MouseButton.LeftButton, pos=preview.rect().center())
-    assert requested == ["coop"]
+    assert requested == [("coop", 0)]                                 # 大图＝放大当前选中那张
 
-    page.set_reference_image("coop", "", None)                        # 清空（例如配置被换掉）
+    page.set_reference_images("coop", [], [])                         # 清空（例如配置被换掉）
     assert page.findChild(QLineEdit, "coop_island_ref_image").text() == ""
     assert preview.image() is None
+    page.close()
+
+
+def test_daily_page_shows_a_summary_and_thumbnails_for_multiple_images() -> None:
+    """多选（用户 2026-09-22 要求）：输入框显示"共 N 张：文件名"、缩略图条每张一格、大图显示选中的那张。"""
+    from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
+    from PySide6.QtCore import Qt
+
+    page = _page()
+    paths = ["assets/templates/鸡舍_1.png", "assets/templates/鸡舍_2.png",
+             "assets/anchors/鸡舍_岛屿1_x.png"]
+    images = []
+    for index in range(3):
+        image = QImage(6, 4, QImage.Format.Format_RGB32)
+        image.fill(0x100000 * index)
+        images.append(image)
+
+    page.set_reference_images("coop", paths, images)
+
+    edit = page.findChild(QLineEdit, "coop_island_ref_image")
+    assert edit.text() == "共 3 张：鸡舍_1.png、鸡舍_2.png、鸡舍_岛屿1_x.png"
+    assert "鸡舍_1.png" in edit.toolTip() and "3 张" in edit.toolTip()   # 悬停里给完整路径
+    strip = page.thumbnail_strip("coop")
+    assert strip is not None and strip.count() == 3
+    assert page.reference_images("coop") == paths
+    assert page.selected_index("coop") == 0
+    assert page.preview_widget("coop").image() is images[0]             # 大图＝第 1 张
+
+    page.show()
+    _APP.processEvents()
+    QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=strip._item_rect(2).center())
+    assert page.selected_index("coop") == 2
+    assert page.preview_widget("coop").image() is images[2]             # 点缩略图＝换大图
+
+    activated: list[tuple[str, int]] = []
+    page.preview_requested.connect(lambda prefix, index: activated.append((prefix, index)))
+    QTest.mouseDClick(strip, Qt.MouseButton.LeftButton, pos=strip._item_rect(1).center())
+    assert activated == [("coop", 1)]                                   # 双击＝放大那一张
+    page.close()
+
+
+def test_daily_page_emits_remove_and_clear_requests() -> None:
+    """右键菜单的两条动作由页面发信号（写配置交给控制器）。"""
+    from PySide6.QtGui import QImage
+
+    page = _page()
+    image = QImage(4, 4, QImage.Format.Format_RGB32)
+    page.set_reference_images("aqua", ["a.png", "b.png"], [image, image])
+    removed: list[tuple[str, int]] = []
+    cleared: list[str] = []
+    page.remove_image_requested.connect(lambda prefix, index: removed.append((prefix, index)))
+    page.clear_images_requested.connect(cleared.append)
+
+    page.thumbnail_strip("aqua").remove_requested.emit(1)
+    page.thumbnail_strip("aqua").clear_requested.emit()
+
+    assert removed == [("aqua", 1)]
+    assert cleared == ["aqua"]
+    page.close()
+
+
+def test_daily_page_thumbnail_strip_explains_itself_when_empty() -> None:
+    """还没选图时缩略图条显示一句提示（可多选、怎么操作），不是一块空白。"""
+    page = _page()
+    strip = page.thumbnail_strip("land")
+
+    assert strip is not None and strip.count() == 0
+    assert "可一次选多张" in strip.empty_text()
+    assert "右键" in strip.toolTip()
     page.close()

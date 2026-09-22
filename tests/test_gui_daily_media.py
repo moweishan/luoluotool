@@ -22,7 +22,11 @@ from gui_helpers import (
     wait_for_daily_decoding,
 )
 from luoluotool.automation.vision import save_image
-from luoluotool.config.models import MAX_IMAGE_PATH_LENGTH, AppConfig
+from luoluotool.config.models import (
+    MAX_IMAGE_PATH_LENGTH,
+    MAX_REFERENCE_IMAGES,
+    AppConfig,
+)
 from luoluotool.gui import daily_media
 from luoluotool.gui.daily_media import decode_reference_image
 from luoluotool.gui.pages.daily import BUILDINGS, ref_image_field
@@ -82,13 +86,14 @@ def test_pick_image_validates_off_thread_then_writes_config(tmp_path, textured_p
     controller = _controller(page, config, changes)
     path = textured_png()
 
-    assert controller.start_pick("coop", path) is True
+    assert controller.start_pick("coop", [path]) is True
     assert controller.loader_threads(), "解码必须放到后台线程（评审 P2-4）"
     _wait_for_decoding(controller)
 
-    assert config.features.daily_tasks.coop_island_ref_image == to_config_path(path)
+    assert config.features.daily_tasks.coop_island_ref_image == [to_config_path(path)]
     assert changes == ["dirty"]
-    assert page.reference_image("coop") == to_config_path(path)
+    assert page.reference_images("coop") == [to_config_path(path)]
+    assert page.thumbnail_strip("coop").count() == 1
     preview = page.preview_widget("coop")
     assert preview is not None and preview.image() is not None
     assert "已选择" in controller.statuses[-1]
@@ -103,17 +108,17 @@ def test_pick_image_refuses_a_flat_image_and_keeps_old_value(tmp_path, textured_
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     good = textured_png("好的.png")
-    controller.start_pick("land", good)
+    controller.start_pick("land", [good])
     _wait_for_decoding(controller)
     before = config.features.daily_tasks.land_ref_image
 
     flat = save_image(tmp_path / "纯色.png", np.full((30, 30, 3), 128, dtype=np.uint8))
-    controller.start_pick("land", flat)
+    controller.start_pick("land", [flat])
     _wait_for_decoding(controller)
 
     assert config.features.daily_tasks.land_ref_image == before
-    assert "不能用" in controller.statuses[-1]
-    assert page.reference_image("land") == before
+    assert "都不能用" in controller.statuses[-1]
+    assert page.reference_images("land") == before
     page.close()
 
 
@@ -129,9 +134,9 @@ def test_pick_image_rejects_an_overlong_path_before_decoding(tmp_path) -> None:
     controller = _controller(page, config, changes)
     long_path = tmp_path / ("很长" * 150 + ".png")
 
-    assert controller.start_pick("aqua", long_path) is False
+    assert controller.start_pick("aqua", [long_path]) is False
     assert controller.loader_threads() == ()          # 没解码、没起线程
-    assert config.features.daily_tasks.aqua_ref_image == ""
+    assert config.features.daily_tasks.aqua_ref_image == []
     assert "路径太长" in controller.statuses[-1]
     assert str(MAX_IMAGE_PATH_LENGTH) in controller.statuses[-1]
     page.close()
@@ -151,12 +156,12 @@ def test_pick_image_dialog_starts_in_templates_dir_and_handles_cancel(monkeypatc
         calls.append((caption, directory, filters))
         return "", ""
 
-    monkeypatch.setattr(daily_media.QFileDialog, "getOpenFileName", staticmethod(fake_dialog))
+    monkeypatch.setattr(daily_media.QFileDialog, "getOpenFileNames", staticmethod(fake_dialog))
     page.pick_image_requested.emit("aqua")
 
     assert calls and calls[0][1] == str(get_templates_dir())
     assert "png" in calls[0][2] and "jpg" in calls[0][2]
-    assert config.features.daily_tasks.aqua_ref_image == ""
+    assert config.features.daily_tasks.aqua_ref_image == []
     assert changes == []
     assert "已取消" in controller.statuses[-1]
     page.close()
@@ -169,16 +174,16 @@ def test_pick_image_dialog_starts_in_the_folder_of_the_current_image(monkeypatch
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     first = textured_png("第一张.png")
-    controller.start_pick("coop", first)
+    controller.start_pick("coop", [first])
     _wait_for_decoding(controller)
 
     calls: list[str] = []
 
     def fake_dialog(parent, caption, directory, filters):
         calls.append(directory)
-        return "", ""
+        return [], ""
 
-    monkeypatch.setattr(daily_media.QFileDialog, "getOpenFileName", staticmethod(fake_dialog))
+    monkeypatch.setattr(daily_media.QFileDialog, "getOpenFileNames", staticmethod(fake_dialog))
     page.pick_image_requested.emit("coop")
     assert calls and calls[0] == str(first.parent)
     page.close()
@@ -193,12 +198,94 @@ def test_stale_pick_result_is_dropped(tmp_path, textured_png) -> None:
     first = textured_png("第一张.png")
     second = textured_png("第二张.png")
 
-    controller.start_pick("coop", first)
-    controller.start_pick("coop", second)          # 立刻改主意再选一张
+    controller.start_pick("coop", [first])
+    controller.start_pick("coop", [second])        # 立刻改主意再选一张
     _wait_for_decoding(controller)
 
-    assert config.features.daily_tasks.coop_island_ref_image == to_config_path(second)
-    assert page.reference_image("coop") == to_config_path(second)
+    assert config.features.daily_tasks.coop_island_ref_image == [to_config_path(second)]
+    assert page.reference_images("coop") == [to_config_path(second)]
+    page.close()
+
+
+def test_pick_image_accepts_multiple_files_at_once(tmp_path, textured_png) -> None:
+    """多选（用户 2026-09-22 要求）：一次选 3 张 → 配置里 3 条、缩略图 3 格、顺序＝选择顺序。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    paths = [textured_png(f"鸡舍_{index}.png") for index in range(3)]
+
+    assert controller.start_pick("coop", paths) is True
+    assert len(controller.loader_threads()) == 1        # 一批线程处理 3 张
+    _wait_for_decoding(controller)
+
+    expected = [to_config_path(path) for path in paths]
+    assert config.features.daily_tasks.coop_island_ref_image == expected
+    assert page.reference_images("coop") == expected
+    assert page.thumbnail_strip("coop").count() == 3
+    assert "3 张参考图" in controller.statuses[-1]
+    page.close()
+
+
+def test_pick_image_dedupes_and_caps_the_selection(tmp_path, textured_png) -> None:
+    """同一张选两次＝去重；超过上限（10 张）只取前 10 张并在提示里说明。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    first = textured_png("第一张.png")
+    others = [textured_png(f"图_{index}.png") for index in range(11)]
+
+    controller.start_pick("land", [first, first] + others)   # 13 张里重复 1 张
+    _wait_for_decoding(controller)
+
+    values = config.features.daily_tasks.land_ref_image
+    assert len(values) == MAX_REFERENCE_IMAGES
+    assert len(set(values)) == MAX_REFERENCE_IMAGES         # 没有重复
+    assert "只取前" in controller.statuses[-1]
+    page.close()
+
+
+def test_pick_image_keeps_the_good_ones_when_some_are_rejected(tmp_path, textured_png) -> None:
+    """混选（一张能用 + 一张纯色）：合格的照样采纳，被拒的那张在提示里说明原因。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    good = textured_png("好的.png")
+    flat = save_image(tmp_path / "纯色.png", np.full((30, 30, 3), 128, dtype=np.uint8))
+
+    controller.start_pick("aqua", [good, flat])
+    _wait_for_decoding(controller)
+
+    assert config.features.daily_tasks.aqua_ref_image == [to_config_path(good)]
+    assert "1 张被拒" in controller.statuses[-1]
+    assert page.thumbnail_strip("aqua").count() == 1
+    page.close()
+
+
+def test_remove_and_clear_images_write_config_and_refresh_the_page(tmp_path, textured_png) -> None:
+    """右键「移除这张」/「清空全部」：写配置 + 置脏 + 缩略图条同步（用户 2026-09-22 要的撤回路径）。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    paths = [textured_png(f"图_{index}.png") for index in range(3)]
+    controller.start_pick("coop", paths)
+    _wait_for_decoding(controller)
+    changes.clear()
+
+    page.remove_image_requested.emit("coop", 1)
+    assert config.features.daily_tasks.coop_island_ref_image == [
+        to_config_path(paths[0]), to_config_path(paths[2])
+    ]
+    assert page.thumbnail_strip("coop").count() == 2
+    assert changes == ["dirty"] and "已移除" in controller.statuses[-1]
+
+    page.clear_images_requested.emit("coop")
+    assert config.features.daily_tasks.coop_island_ref_image == []
+    assert page.thumbnail_strip("coop").count() == 0
+    assert "已清空" in controller.statuses[-1]
     page.close()
 
 
@@ -208,15 +295,16 @@ def test_stale_pick_result_is_dropped(tmp_path, textured_png) -> None:
 # ---------------------------------------------------------------- 放大预览
 
 
-def test_show_preview_decodes_off_thread_then_opens_the_dialog(tmp_path, textured_png
-                                                              , monkeypatch) -> None:
+def test_show_preview_decodes_off_thread_then_opens_the_dialog(
+    tmp_path, textured_png, monkeypatch
+) -> None:
     """双击缩略图：解码在后台线程，图到了才开弹窗（弹窗只做界面）。"""
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     path = textured_png("预览.png")
-    config.features.daily_tasks.land_ref_image = to_config_path(path)
+    config.features.daily_tasks.land_ref_image = [to_config_path(path)]
     opened: list[str] = []
 
     def fake_exec(self):
@@ -225,7 +313,7 @@ def test_show_preview_decodes_off_thread_then_opens_the_dialog(tmp_path, texture
 
     monkeypatch.setattr(QDialog, "exec", fake_exec)
 
-    controller.show_preview("land")
+    controller.show_preview("land", 0)
     _wait_for_decoding(controller)
 
     assert opened and "土地" in opened[0]
@@ -239,10 +327,10 @@ def test_build_preview_dialog_uses_the_decoded_image(textured_png) -> None:
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     path = textured_png("弹窗.png")
-    config.features.daily_tasks.land_ref_image = to_config_path(path)
+    config.features.daily_tasks.land_ref_image = [to_config_path(path)]
     result = decode_reference_image(path, validate=False)
 
-    dialog = controller.build_preview_dialog("land", result.image)
+    dialog = controller.build_preview_dialog("land", result.image, path=to_config_path(path))
 
     assert dialog is not None and "土地" in dialog.windowTitle()
     dialog.deleteLater()
@@ -256,13 +344,13 @@ def test_preview_reports_missing_file_without_clearing_config() -> None:
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
-    config.features.daily_tasks.land_ref_image = "assets/anchors/不存在.png"
+    config.features.daily_tasks.land_ref_image = ["assets/anchors/不存在.png"]
 
-    controller.show_preview("land")
+    controller.show_preview("land", 0)
 
     assert "找不到" in controller.statuses[-1]
     assert controller.loader_threads() == ()
-    assert config.features.daily_tasks.land_ref_image == "assets/anchors/不存在.png"
+    assert config.features.daily_tasks.land_ref_image == ["assets/anchors/不存在.png"]
     page.close()
 
 
@@ -273,7 +361,7 @@ def test_preview_without_any_image_says_so() -> None:
     page = _page(config, changes)
     controller = _controller(page, config, changes)
 
-    controller.show_preview("coop")
+    controller.show_preview("coop", 0)
 
     assert "还没选参考图" in controller.statuses[-1]
     assert controller.loader_threads() == ()
@@ -291,18 +379,40 @@ def test_refresh_previews_decodes_every_building_off_thread(tmp_path, textured_p
     controller = _controller(page, config, changes)
     coop = textured_png("鸡舍.png")
     aqua = textured_png("水产.png")
-    config.features.daily_tasks.coop_island_ref_image = to_config_path(coop)
-    config.features.daily_tasks.aqua_ref_image = to_config_path(aqua)
-    config.features.daily_tasks.land_ref_image = ""
+    config.features.daily_tasks.coop_island_ref_image = [to_config_path(coop)]
+    config.features.daily_tasks.aqua_ref_image = [to_config_path(aqua)]
+    config.features.daily_tasks.land_ref_image = []
 
     controller.refresh_previews()
-    assert len(controller.loader_threads()) == 1      # 一批线程处理两张（第三张是空路径）
+    assert len(controller.loader_threads()) == 1      # 一批线程处理两张（第三个是空列表）
     _wait_for_decoding(controller)
 
+    assert page.thumbnail_strip("coop").count() == 1
     assert page.preview_widget("coop").image() is not None
     assert page.preview_widget("aqua").image() is not None
-    assert page.preview_widget("land").image() is None
+    assert page.thumbnail_strip("land").count() == 0
     assert changes == []                                   # 只是显示，不算用户改动
+    page.close()
+
+
+def test_refresh_previews_shows_multiple_thumbnails_and_keeps_the_order(tmp_path,
+                                                                       textured_png) -> None:
+    """配置里存着 3 张：装载后缩略图条应有 3 格、顺序与配置一致、大图显示第 1 张。"""
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    paths = [textured_png(f"土地_{index}.png") for index in range(3)]
+    config.features.daily_tasks.land_ref_image = [to_config_path(path) for path in paths]
+
+    controller.refresh_previews()
+    _wait_for_decoding(controller)
+
+    strip = page.thumbnail_strip("land")
+    assert strip.count() == 3 and strip.selected_index() == 0
+    assert all(strip.image_at(index) is not None for index in range(3))
+    assert page.reference_images("land") == [to_config_path(path) for path in paths]
+    assert page.preview_widget("land").image() is not None
     page.close()
 
 
@@ -312,13 +422,14 @@ def test_refresh_previews_keeps_the_path_when_the_file_is_gone() -> None:
     changes: list[str] = []
     page = _page(config, changes)
     controller = _controller(page, config, changes)
-    config.features.daily_tasks.coop_island_ref_image = "assets/anchors/没了.png"
+    config.features.daily_tasks.coop_island_ref_image = ["assets/anchors/没了.png"]
 
     controller.refresh_previews()
     _wait_for_decoding(controller)
 
-    assert page.reference_image("coop") == "assets/anchors/没了.png"
-    assert page.preview_widget("coop").image() is None
+    assert page.reference_images("coop") == ["assets/anchors/没了.png"]   # 路径保留
+    assert page.thumbnail_strip("coop").count() == 1
+    assert page.preview_widget("coop").image() is None                   # 只是缩略图空着
     page.close()
 
 

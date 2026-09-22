@@ -51,7 +51,6 @@ import logging
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, Qt, Signal
-from PySide6.QtGui import QImage
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -69,23 +68,24 @@ from PySide6.QtWidgets import (
 from luoluotool.config.models import (
     ISLAND_RANGE,
     LOOP_INTERVAL_MINUTES_RANGE,
+    MAX_REFERENCE_IMAGES,
     AppConfig,
     loop_minutes_to_seconds,
     loop_seconds_to_minutes,
 )
-from luoluotool.gui.widgets import ImagePreview, ScrollablePage
+from luoluotool.gui.pages.daily_fields import (      # 再导出：旧导入路径不变
+    BUILDINGS,
+    building_title,
+    island_field,
+    ref_image_field,
+)
+from luoluotool.gui.pages.daily_images import DailyImagesMixin
+from luoluotool.gui.widgets import ImagePreview, ScrollablePage, ThumbnailStrip
 
 logger = logging.getLogger(__name__)
 
-# 三个生产建筑分组（设计稿里是三段重复结构，这里用一份定义避免抄三遍）
-# (标题, 控件名前缀, "截取…位置" 的中间词, 参考图输入框 id, 截取按钮 id)
-# **id 一律照抄设计稿**：鸡舍那个文件框在设计稿里叫 `coop_island_ref_image`（不是 coop_ref_image）
-BUILDINGS: tuple[tuple[str, str, str, str, str], ...] = (
-    ("鸡舍", "coop", "鸡舍", "coop_island_ref_image", "capture_game_screen"),
-    ("土地", "land", "土地", "land_ref_image", "land_capture_screen"),
-    ("水产养殖", "aqua", "水产养殖", "aqua_ref_image", "aqua_capture_screen"),
-)
-
+# 三个生产建筑分组与"控件名/字段名"助手见 `daily_fields.py`（2026-09-22 拆出，本模块再导出）：
+#   BUILDINGS / building_title / island_field / ref_image_field
 PREVIEW_EMPTY_TEXT = "尚未选择图片"
 PICK_FILTER = "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp)"
 READONLY_MARK = "（只读）"                       # 只读项统一在文案后加这个标记
@@ -104,46 +104,34 @@ DESIGN_CONTROL_IDS: tuple[str, ...] = (
     "loop_enabled",
     "loop_interval_minutes",
     *(name for _t, prefix, _w, ref_id, cap_id in BUILDINGS
-      for name in (f"{prefix}_island", ref_id, f"{prefix}_pick_image", cap_id)),
+      for name in (f"{prefix}_island", ref_id, f"{prefix}_pick_image", cap_id,
+                   f"{prefix}_selected_image", f"{prefix}_selected_image_list")),
     "auto_produce_least",
 )
 
 
-def building_title(prefix: str) -> str:
-    """建筑前缀 → 中文名（做对话框标题、截图文件名时用）。"""
-    for title, item_prefix, _word, _ref_id, _capture_id in BUILDINGS:
-        if item_prefix == prefix:
-            return title
-    raise KeyError(f"未知的建筑前缀：{prefix}")
+class DailyPage(DailyImagesMixin, ScrollablePage):
+    """日常任务页：控件 ↔ 配置双向绑定 + 把"选图/截图/放大/移除"请求发给主窗口。
 
-
-def island_field(prefix: str) -> str:
-    """该建筑的岛屿编号在配置里的字段名（＝设计稿的 `data-key`）。"""
-    return f"{prefix}_island"
-
-
-def ref_image_field(prefix: str) -> str:
-    """该建筑的参考图路径在配置里的字段名（＝设计稿的 `data-key`）。"""
-    for _title, item_prefix, _word, ref_id, _capture_id in BUILDINGS:
-        if item_prefix == prefix:
-            return ref_id
-    raise KeyError(f"未知的建筑前缀：{prefix}")
-
-
-class DailyPage(ScrollablePage):
-    """日常任务页：控件 ↔ 配置双向绑定 + 把"选图/截图/放大"请求发给主窗口。
+    参考图的**显示与交互**（多选缩略图条 / 大图 / 移除清空）在 `daily_images.DailyImagesMixin`
+    （2026-09-22 为守住 600 行硬线拆出，纯搬运）。
 
     第 2 批的口径（用户 2026-09-22 填写确认）：
     - `daily_enabled` ↔ `features.daily_tasks.enabled`（**真的当总开关**，见 `core/runner.py`）；
-    - `loop_interval_minutes`（分钟）↔ `features.daily_tasks.loop.interval_seconds`（秒）；
+    - `loop_enabled` ↔ `features.daily_tasks.loop.enabled`、`loop_interval_minutes`（分钟）
+      ↔ `features.daily_tasks.loop.interval_seconds`（秒）；
     - 三个 `{prefix}_island` ↔ 配置里的同名 int（1–10）；
-    - 三个参考图输入框只显示路径，**写配置由控制器做**（页面不碰文件）；
+    - 三个参考图**可以多选**（用户 2026-09-22 追加，最多 `MAX_REFERENCE_IMAGES` 张）：
+      输入框显示"共 N 张：文件名…"、缩略图条显示每一张、大图显示当前选中的那张；
+      **页面不碰文件、也不写配置** —— 解码与写配置都在控制器里，页面只负责显示与发信号；
     - `auto_produce_least` 界面上暂时只读，但程序里可以设置、也会入库。
     """
 
-    pick_image_requested = Signal(str)      # 参数＝建筑前缀（coop / land / aqua）
+    pick_image_requested = Signal(str)          # 参数＝建筑前缀（coop / land / aqua）
     capture_requested = Signal(str)
-    preview_requested = Signal(str)
+    preview_requested = Signal(str, int)        # (前缀, 第几张) —— 双击缩略图/大图时发
+    remove_image_requested = Signal(str, int)   # 右键「移除这张」
+    clear_images_requested = Signal(str)        # 右键「清空全部」
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
@@ -154,6 +142,8 @@ class DailyPage(ScrollablePage):
         self._islands: dict[str, QComboBox] = {}
         self._ref_edits: dict[str, QLineEdit] = {}
         self._previews: dict[str, ImagePreview] = {}
+        self._strips: dict[str, ThumbnailStrip] = {}
+        self._reference_paths: dict[str, list[str]] = {}   # 每个建筑当前显示的参考图路径
 
         layout = QVBoxLayout(self.content)
         layout.setSpacing(10)
@@ -252,16 +242,16 @@ class DailyPage(ScrollablePage):
         ref_edit.setPlaceholderText("尚未选择图片")
         ref_edit.setMinimumWidth(180)
         ref_edit.setToolTip(
-            f"只能选择图片文件（{label_word}所在岛屿参考截图）；"
-            f"由「选择图片…」或「截取游戏画面」填写"
+            f"只能选择图片文件（{label_word}所在岛屿参考截图，可多选，最多 "
+            f"{MAX_REFERENCE_IMAGES} 张）；由「选择图片…」或「截取游戏画面」填写"
         )
         self._ref_edits[prefix] = ref_edit
 
         pick_button = QPushButton("选择图片…")
         pick_button.setObjectName(f"{prefix}_pick_image")
         pick_button.setToolTip(
-            f"选一张{title}的识别图片（默认打开 assets/templates/；只收 png/jpg/jpeg/bmp/webp；"
-            f"纯色图会被拒绝并提示换一张）"
+            f"选{title}的识别图片（**可多选**，最多 {MAX_REFERENCE_IMAGES} 张；默认打开 "
+            f"assets/templates/；只收 png/jpg/jpeg/bmp/webp；纯色图会被拒绝并提示换一张）"
         )
         pick_button.clicked.connect(lambda _checked=False, p=prefix: self.pick_image_requested.emit(p))
 
@@ -269,7 +259,7 @@ class DailyPage(ScrollablePage):
         capture_button.setObjectName(capture_id)
         capture_button.setToolTip(
             f"截取游戏画面并框选{title}：先把游戏窗口切到前台 → 截客户区 → 弹出框选窗口，"
-            f"只保存你框的那块（存到 assets/anchors/）"
+            f"只保存你框的那块并**追加**到已选图片里（存到 assets/anchors/）"
         )
         capture_button.clicked.connect(lambda _checked=False, p=prefix: self.capture_requested.emit(p))
 
@@ -285,8 +275,12 @@ class DailyPage(ScrollablePage):
         selected_col.addWidget(QLabel("选择的图片："))
         preview = ImagePreview(PREVIEW_EMPTY_TEXT)
         preview.setObjectName(f"{prefix}_selected_image")
-        preview.setToolTip("选好图片后在这里显示所选图片；双击可放大查看")
-        preview.double_clicked.connect(lambda p=prefix: self.preview_requested.emit(p))
+        preview.setToolTip("显示当前选中的那张（多选时点下面的缩略图切换）；双击可放大查看")
+        preview.double_clicked.connect(lambda p=prefix: self._emit_preview(p))
+        preview.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        preview.customContextMenuRequested.connect(
+            lambda _pos, p=prefix: self._on_preview_context_menu(p)
+        )
         self._previews[prefix] = preview
         selected_col.addWidget(preview)
         selected_col.addStretch(1)
@@ -304,6 +298,25 @@ class DailyPage(ScrollablePage):
         columns.addLayout(selected_col, 1)             # 多出来的宽度给两块图片区
         columns.addLayout(sample_col, 1)
         layout.addLayout(columns)
+
+        # 缩略图条（用户 2026-09-22 要求「选择图片可以多选」）：能看到选了哪几张、点一张看大图
+        strip = ThumbnailStrip(
+            f"还没选图片 —— 点「选择图片…」可一次选多张（最多 {MAX_REFERENCE_IMAGES} 张）；"
+            f"选好后点一张看大图、双击放大、右键可移除"
+        )
+        strip.setObjectName(f"{prefix}_selected_image_list")
+        strip.setToolTip(
+            f"{title}已选的参考图（最多 {MAX_REFERENCE_IMAGES} 张）：点一张＝看大图、"
+            f"双击＝放大、右键＝移除这张 / 清空全部；「截取游戏画面」会把框选结果追加到这里"
+        )
+        strip.image_selected.connect(lambda index, p=prefix: self._on_thumbnail_selected(p, index))
+        strip.image_activated.connect(lambda index, p=prefix: self._emit_preview(p, index))
+        strip.remove_requested.connect(
+            lambda index, p=prefix: self.remove_image_requested.emit(p, index)
+        )
+        strip.clear_requested.connect(lambda p=prefix: self.clear_images_requested.emit(p))
+        self._strips[prefix] = strip
+        layout.addWidget(strip)
         return box
 
     # ---------------------------------------------------------------- 产物制造
@@ -409,35 +422,14 @@ class DailyPage(ScrollablePage):
                 value = int(getattr(daily, island_field(prefix), ISLAND_RANGE[0]))
                 island = self._islands[prefix]
                 island.setCurrentIndex(max(0, min(island.count() - 1, value - ISLAND_RANGE[0])))
-                self._ref_edits[prefix].setText(str(getattr(daily, ref_id, "") or ""))
-                self._previews[prefix].set_image(None)
+                paths = list(getattr(daily, ref_id, []) or [])
+                # 缩略图暂时留空（页面不做文件 IO），控制器 refresh_previews() 会逐张填进来
+                self.set_reference_images(prefix, paths, [None] * len(paths))
         finally:
             self._loading = False
         logger.debug("日常任务页已按配置刷新（参考图缩略图由控制器加载）")
 
     # ---------------------------------------------------------------- 参考图显示
-    def set_reference_image(self, prefix: str, path: str, image: QImage | None = None) -> None:
-        """显示"已选的参考图"：路径写进只读输入框、图片进「选择的图片」区。
-
-        **不写配置**（那是控制器的活）：控制器负责"选/截 → 存盘 → 通知页面显示"。
-        """
-        edit = self._ref_edits.get(prefix)
-        if edit is not None:
-            edit.setText(path or "")
-        preview = self._previews.get(prefix)
-        if preview is not None:
-            preview.set_image(image)
-
-    def reference_image(self, prefix: str) -> str:
-        """当前显示的参考图路径（空串＝还没选）。"""
-        edit = self._ref_edits.get(prefix)
-        return edit.text() if edit is not None else ""
-
-    def preview_widget(self, prefix: str) -> ImagePreview | None:
-        """某个建筑的「选择的图片」显示区（测试与控制器用）。"""
-        return self._previews.get(prefix)
-
-
 # ------------------------------------------------------------------ 小工具
 
 

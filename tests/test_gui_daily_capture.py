@@ -6,6 +6,11 @@
 
 **绝不真的截图、绝不真的弹窗**：`find_window` / `bring_to_front` / `capture_window` /
 `TemplateCropDialog` / `DailyCaptureThread` 全部被替换成假对象。
+
+**补丁打在哪**（2026-09-22 拆模块）：`DailyCaptureThread` 住在 `gui/daily_workers.py`，
+它的 `run()` 查那边模块的全局名，所以 `find_window` / `bring_to_front` /
+`vision_actions.capture_window` 都打在 `daily_workers` 上（AGENTS §2④：打在没人调用的
+命名空间上不会报错、只会静默失效）；`daily_media` 仍用于 `logger` 与控制器。
 """
 
 import os
@@ -22,8 +27,8 @@ from gui_helpers import (
     wait_for_daily_decoding,
 )
 from luoluotool.config.models import AppConfig
-from luoluotool.gui import daily_media
-from luoluotool.gui.daily_media import DailyCaptureThread
+from luoluotool.gui import daily_media, daily_workers
+from luoluotool.gui.daily_workers import DailyCaptureThread
 from luoluotool.utils.paths import to_config_path
 
 _APP = QApplication.instance() or QApplication([])
@@ -46,10 +51,10 @@ def test_capture_thread_brings_the_window_to_front_before_capturing(monkeypatch)
     config = AppConfig.default()
     order: list[str] = []
 
-    monkeypatch.setattr(daily_media, "find_window", lambda keyword: order.append("find") or 4242)
-    monkeypatch.setattr(daily_media, "bring_to_front", lambda hwnd: order.append("front") or True)
+    monkeypatch.setattr(daily_workers, "find_window", lambda keyword: order.append("find") or 4242)
+    monkeypatch.setattr(daily_workers, "bring_to_front", lambda hwnd: order.append("front") or True)
     monkeypatch.setattr(
-        daily_media.vision_actions, "capture_window",
+        daily_workers.vision_actions, "capture_window",
         lambda cfg: order.append("capture") or (np.zeros((10, 20, 3), dtype=np.uint8), ""),
     )
     captured: list[tuple] = []
@@ -68,10 +73,10 @@ def test_capture_thread_brings_the_window_to_front_before_capturing(monkeypatch)
 def test_capture_thread_reports_missing_window(monkeypatch) -> None:
     """找不到游戏窗口：给可读提示，**不截图**。"""
     config = AppConfig.default()
-    monkeypatch.setattr(daily_media, "find_window", lambda keyword: None)
+    monkeypatch.setattr(daily_workers, "find_window", lambda keyword: None)
     called: list[str] = []
     monkeypatch.setattr(
-        daily_media.vision_actions, "capture_window",
+        daily_workers.vision_actions, "capture_window",
         lambda cfg: called.append("capture") or (None, ""),
     )
     failures: list[str] = []
@@ -87,11 +92,11 @@ def test_capture_thread_reports_missing_window(monkeypatch) -> None:
 def test_capture_thread_stops_before_screenshot_when_requested(monkeypatch) -> None:
     """等待切前台期间收到停止请求 → 不再截图（急停时不用白等）。"""
     config = AppConfig.default()
-    monkeypatch.setattr(daily_media, "find_window", lambda keyword: 1)
-    monkeypatch.setattr(daily_media, "bring_to_front", lambda hwnd: True)
+    monkeypatch.setattr(daily_workers, "find_window", lambda keyword: 1)
+    monkeypatch.setattr(daily_workers, "bring_to_front", lambda hwnd: True)
     called: list[str] = []
     monkeypatch.setattr(
-        daily_media.vision_actions, "capture_window",
+        daily_workers.vision_actions, "capture_window",
         lambda cfg: called.append("capture") or (None, ""),
     )
     thread = DailyCaptureThread(config, daily_media.logger, settle=0.3)
@@ -179,7 +184,9 @@ def test_request_stop_reaches_capture_and_decoding_threads(monkeypatch, textured
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     monkeypatch.setattr(daily_media, "DailyCaptureThread", _StubCaptureThread)
-    config.features.daily_tasks.coop_island_ref_image = to_config_path(textured_png("要解码.png"))
+    config.features.daily_tasks.coop_island_ref_image = [
+        to_config_path(textured_png("要解码.png"))
+    ]
 
     controller.capture_image("coop")
     controller.refresh_previews()
@@ -228,9 +235,53 @@ def test_capture_ready_opens_crop_dialog_and_records_the_saved_anchor(
 
     assert opened and opened[0][1] == (100, 50) and opened[0][2] == anchors
     assert opened[0][4] == "鸡舍_岛屿7"            # 文件名带建筑名 + 岛屿编号，方便回看
-    assert config.features.daily_tasks.coop_island_ref_image == to_config_path(saved)
+    assert config.features.daily_tasks.coop_island_ref_image == [to_config_path(saved)]
+    assert page.thumbnail_strip("coop").count() == 1
     assert page.preview_widget("coop").image() is not None
-    assert "参考图已保存" in controller.statuses[-1] and "选区 50x40" in controller.statuses[-1]
+    assert "已追加" in controller.statuses[-1] and "选区 50x40" in controller.statuses[-1]
+    page.close()
+
+
+def test_captured_image_is_appended_to_the_existing_list(tmp_path, monkeypatch,
+                                                         textured_png) -> None:
+    """用户 2026-09-22 选定：框选产物**追加**到列表末尾，不冲掉已有的那几张。"""
+    config = AppConfig.default()
+    config.features.daily_tasks.land_island = 3
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    existing = [textured_png("已有_1.png"), textured_png("已有_2.png")]
+    controller.start_pick("land", existing)
+    _wait_for_decoding(controller)
+    saved = textured_png("land_岛屿3_x.png")
+
+    assert controller.adopt_captured_image("land", saved, (1, 2, 30, 20)) is True
+
+    assert config.features.daily_tasks.land_ref_image == [
+        to_config_path(existing[0]), to_config_path(existing[1]), to_config_path(saved)
+    ]
+    assert page.thumbnail_strip("land").count() == 3
+    assert page.selected_index("land") == 2               # 新加的那张自动选中
+    page.close()
+
+
+def test_captured_image_is_refused_when_the_list_is_full(tmp_path, textured_png) -> None:
+    """已经有 10 张（上限）时再截：拒绝并提示先在缩略图上右键移除一张（配置不动）。"""
+    from luoluotool.config.models import MAX_REFERENCE_IMAGES
+
+    config = AppConfig.default()
+    changes: list[str] = []
+    page = _page(config, changes)
+    controller = _controller(page, config, changes)
+    full = [textured_png(f"图_{index}.png") for index in range(MAX_REFERENCE_IMAGES)]
+    controller.start_pick("coop", full)
+    _wait_for_decoding(controller)
+    before = list(config.features.daily_tasks.coop_island_ref_image)
+
+    assert controller.adopt_captured_image("coop", textured_png("第11张.png")) is False
+
+    assert config.features.daily_tasks.coop_island_ref_image == before
+    assert "上限" in controller.statuses[-1]
     page.close()
 
 
@@ -242,7 +293,7 @@ def test_capture_ready_keeps_the_old_image_when_the_user_cancels(tmp_path, monke
     page = _page(config, changes)
     controller = _controller(page, config, changes)
     old = textured_png("旧的.png")
-    controller.start_pick("aqua", old)
+    controller.start_pick("aqua", [old])
     _wait_for_decoding(controller)
     before = config.features.daily_tasks.aqua_ref_image
     changes.clear()
@@ -263,7 +314,7 @@ def test_capture_ready_keeps_the_old_image_when_the_user_cancels(tmp_path, monke
 
     assert config.features.daily_tasks.aqua_ref_image == before
     assert changes == []
-    assert page.reference_image("aqua") == before
+    assert page.reference_images("aqua") == before
     assert "已取消" in controller.statuses[-1]
     page.close()
 
