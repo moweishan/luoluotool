@@ -354,18 +354,19 @@ LuoLuoTool/
 | automation（真实键鼠，唯一实现方式） | 真实移动光标 + 模拟真实鼠标/键盘（点击、**滑动拖拽**、单键/组合键/长按）；**每次输入前**校验并确保游戏窗口在最顶层/前台，无法确保则不输入；点击支持**点击时长**（按下→按住 `hold_seconds`→抬起，默认 40 ms、0＝瞬时，按住期间可被急停打断且任何路径都会抬起左键） | `RealInputSender.click_at(x, y, hold_seconds=None)` / `drag(from_xy, to_xy, seconds)` / `key_tap(vk)` / `key_combo("ctrl+s")` / `key_hold("w", 0.8)`（真实模式下 `build_channel` 固定返回它）; `real_input.ensure_window_front(hwnd) -> FrontResult`, `real_input.move_cursor_absolute(x, y)`, `real_input.send_left_click(sleep, hold_seconds, stop_event)`, `real_input.send_key_tap(vk)`, `real_input.set_cursor_pos(x, y)`, `real_input.release_topmost(hwnd)`, `real_input.normalize_absolute(x, y, desktop)` |
 | automation（匹配/几何，2026-09-20 拆分） | 模板读写与匹配原语、多尺度两档搜索、滑动路径几何、**模板区域质量评估**；`vision.py` 只留取景/渲染并**再导出**匹配名字（旧导入路径不变） | `template_match.load_template(path)` / `locate_all(...)` / `is_blank_frame(img)` / `prepare_for_match(img, grayscale)`（跨模块共用的预处理，原 `_prepare`）/ `assess_region_quality(img) -> RegionQuality`（可辨识度：对比度 + 边缘占比，`level` ∈ ok/low/flat，`flat` 拒绝当模板；2026-09-21）, `multiscale.locate_all_scaled(...)` / `scale_candidates(...)`, `drag_path.build_drag_path(start, end, steps, tail_hold_steps=...)`, `vision.capture_client_bgr(hwnd)` |
 | gui（线程/提权/图标，2026-09-20 拆分） | 后台线程与调试动作分发、提权流程、窗口图标加载；`main_window` 只做展示与绑定 + 线程/状态编排 | `workers._RunnerThread` / `_DebugTestThread` / `_CaptureThread` / `_DiagnoseThread`, `workers.run_debug_action(config, kind, params, log, stop_event)`, `elevation_flow.ElevationFlowMixin`（`MainWindow` 继承）, `icons.load_window_icon() -> QIcon` |
+| gui（日常任务页的三块，2026-09-22 拆出） | `pages/daily_fields.py`＝叶子模块（`BUILDINGS` 与 `building_title` / `island_field` / `ref_image_field`，供页面/控制器/测试共用，避免循环 import）；`pages/daily_images.py`＝`DailyImagesMixin`（参考图的**显示与交互**：多选缩略图条 + 大图 + 移除/清空，**不碰文件、不写配置**）；`daily_workers.py`＝解码/截图线程与结果类型（见上一行） | `DailyImagesMixin.set_reference_images(prefix, paths, images)` / `.set_reference_thumbnail(prefix, index, image)` / `.append_reference_image(prefix, path, image)` / `.remove_reference_image(prefix, index)` / `.clear_reference_images(prefix)` / `.reference_images(prefix)` / `.selected_index(prefix)` / `.preview_widget(prefix)` / `.thumbnail_strip(prefix)`；`widgets.ThumbnailStrip(empty_text="")`（横排缩略图，`image_selected(int)` / `image_activated(int)` / `remove_requested(int)` / `clear_requested()`，`set_images` / `set_image_at` / `count` / `select` / `selected_index`） |
 | gui（框选弹窗，2026-09-21 拆分） | 框选截图生成模板：弹窗外壳 / 交互视图 / 显示变换三层，全部以**图像像素坐标**对外暴露选区（＝客户区坐标）；保存前做**可辨识度检查**（纯色区域拒绝保存）；可**当场试识别**看这块区域是否独一无二（D1，后台线程，阈值取调试页当前值）；缩放用**滑条**（相对整图适配 50%–800%，以 2 为底的对数刻度，双击＝1:1）＋「重置」一键回到初始状态 | `crop_dialog.TemplateCropDialog(image_bgr, window_size, save_dir, parent=None, threshold=DEFAULT_THRESHOLD)`；`.selection()` / `.selection_quality()`（`RegionQuality | None`）/ `.save_selection()`（**只存框选区域**，纯色区域返回 None）/ `.run_probe()`（试识别，走 `gui/workers.start_probe_thread`）/ `.probe_thread` / `.probe_in_flight()` / `.reset_all()`（视图归位 + 清空选区）/ `.zoom_slider` / `.zoom_value_label` / `.view_status_text()`; `crop_dialog.zoom_slider_to_zoom(v)` / `zoom_to_slider(zoom)`（互为精确反函数的对数刻度换算）；`crop_view.CropView(ZoomPanMixin, QWidget)`：`.selection_in_image()` / `.set_selection_in_image(...)` / `.clear_selection()` / `.hit_test(point)` / `.drag_bubble_text()` / `.set_probe_rects(rects)` / `.probe_rects()` / `.magnifier_rect()` / `.zoom_percent()` / `.zoom_relative()` / `.zoom_relative_percent()` / `.set_zoom_relative(zoom)` / `.cursor_position()` / `.zoom_to_fit()` / `.zoom_to_actual()`；信号 `selection_changed` / `view_changed` |
-| gui（日常任务页的参考图流程，2026-09-22 新增） | 把日常任务页的「选择图片… / 截取游戏画面 / 放大预览」落到文件、后台线程与框选弹窗上（**页面只发信号**，见 `pages/daily.py` 的模块说明）：选图默认打开 `assets/templates/`、**选中即校验**（纯色拒收、低辨识度只提示、路径超 260 当场拒绝）；截图＝**方案 2 框选**——先把游戏窗口切到前台 → 等 `FRONT_SETTLE_SECONDS`（0.4 s）→ 截客户区 → 弹同一个框选窗 → **只保存框住的那块**到 `assets/anchors/`；双击缩略图＝工具内放大预览；配置里存**相对仓库根**的路径；失败只记日志 + 状态栏提示（含日志路径），不改动原有参考图；**参考图解码在后台线程**（第五轮评审 P2-4），急停/关窗会 `request_stop()` 全部线程（P2-3） | `daily_media.DailyMediaController(page, *, get_config, on_changed, set_status)`：`.pick_image(prefix)` / `.start_pick(prefix, path) -> bool` / `.on_pick_ready(prefix, value, result)` / `.apply_reference_image(prefix, value, result) -> bool` / `.capture_image(prefix)` / `.on_capture_ready(image, window_size)` / `.adopt_captured_image(prefix, saved_path, selection=None) -> bool` / `.on_capture_failed(message)` / `.show_preview(prefix)` / `.on_preview_ready(prefix, value, result)` / `.build_preview_dialog(prefix, image) -> QDialog \| None` / `.refresh_previews()` / `.on_thumbnails_ready(prefix, value, result)` / `.request_stop()` / `.worker_threads()` / `.capture_thread()` / `.loader_threads()` / `.is_busy()`；`daily_media.DailyCaptureThread(config, log, settle=...)`（`.request_stop()`；信号 `captured` / `failed_message`）；`daily_media.ReferenceImageLoader(requests, log, *, validate=False)`（`.request_stop()` / `.stop_requested()`；信号 `item_ready(prefix, value, ReferenceImageResult)`）；`daily_media.decode_reference_image(path, *, validate) -> ReferenceImageResult`（纯函数，可在线程里调用） |
-| gui | 六页签（设置/日常任务/卡订单/功能三/功能四/**关于**）+ 可选「开发者调试」页 + 日志面板 + 状态栏；**所有页签继承 `widgets.ScrollablePage`**（内容进 `QScrollArea` + 建议尺寸 `PAGE_SIZE_HINT`），页签高度不随挂载/卸载变化；「关于」页承担规范要求的风险/隐私声明与第三方许可说明 → `pages/about.py` | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` / `layout_measure_requested()`; 日常任务页 `DailyPage.pick_image_requested/capture_requested/preview_requested`（信号）及 `.set_reference_image(prefix, path, image=None)` / `.reference_image(prefix)` / `.preview_widget(prefix)`; `widgets.ImagePreview(empty_text)`（等比缩放 + 双击信号；最小尺寸 160x84，与虚线占位框一致，换掉占位不改变页签高度）; `layout_measure.measure_layout(window)` / `format_measure_report(measure)`; 功能三/功能四公共基类 `pages.planned_feature.PlannedFeaturePage`; 急停热键不可用提示 `SettingsPage.show_hotkey_hint(text)` |
+| gui（日常任务页的参考图流程，2026-09-22 新增；**参考图自 2026-09-22 起可多选**） | 把日常任务页的「选择图片… / 截取游戏画面 / 放大预览 / 移除清空」落到文件、后台线程与框选弹窗上（**页面只发信号**，见 `pages/daily.py` 的模块说明）：每个建筑最多 `MAX_REFERENCE_IMAGES`＝10 张 —— **「选择图片…」＝多选并替换整批**（超限只取前 10 张、重复路径去重、超长路径当场丢弃）、**「截取游戏画面」＝把框选产物追加到末尾**（已在列表里不重复加、满 10 张拒绝并提示先移除一张）、缩略图/大图右键＝移除某张或清空；选图默认打开 `assets/templates/`、**选中即校验**（纯色拒收、低辨识度只提示、路径超 260 当场拒绝）；截图＝**方案 2 框选**——先把游戏窗口切到前台 → 等 `FRONT_SETTLE_SECONDS`（0.4 s）→ 截客户区 → 弹同一个框选窗 → **只保存框住的那块**到 `assets/anchors/`；双击缩略图＝工具内放大预览；配置里存**相对仓库根**的路径；失败只记日志 + 状态栏提示（含日志路径），不改动原有参考图；**参考图解码在后台线程**（第五轮评审 P2-4），急停/关窗会 `request_stop()` 全部线程（P2-3） | `daily_media.DailyMediaController(page, *, get_config, on_changed, set_status)`：`.pick_image(prefix)`（`QFileDialog.getOpenFileNames` **多选**）/ `.start_pick(prefix, paths: list[Path]) -> bool`（去重 / 截到 10 张 / 丢弃超长，解码走线程）/ `.on_pick_ready(prefix, value, result)`（**逐张回调**，全批到齐才写配置）/ `.apply_reference_images(prefix, values, images, *, note="") -> bool` / `.remove_image(prefix, index)` / `.clear_images(prefix)` / `.capture_image(prefix)` / `.on_capture_ready(image, window_size)` / `.adopt_captured_image(prefix, saved_path, selection=None) -> bool`（**追加**）/ `.on_capture_failed(message)` / `.show_preview(prefix, index=0)` / `.on_preview_ready(prefix, value, result)` / `.build_preview_dialog(prefix, image, path=None) -> QDialog \| None` / `.refresh_previews()` / `.on_thumbnails_ready(prefix, value, result)` / `.request_stop()` / `.worker_threads()` / `.capture_thread()` / `.loader_threads()` / `.is_busy()`；线程与结果类型在 `gui/daily_workers.py`：`DailyCaptureThread(config, log, settle=...)`（`.request_stop()`；信号 `captured` / `failed_message`）、`ReferenceImageLoader(requests, log, *, validate=False)`（`.request_stop()` / `.stop_requested()`；信号 `item_ready(prefix, value, ReferenceImageResult)`）、`decode_reference_image(path, *, validate) -> ReferenceImageResult`（纯函数，可在线程里调用）、`PickBatch`；`daily_media` 把上面这些名字**再导出**（旧导入路径不变） |
+| gui | 六页签（设置/日常任务/卡订单/功能三/功能四/**关于**）+ 可选「开发者调试」页 + 日志面板 + 状态栏；**所有页签继承 `widgets.ScrollablePage`**（内容进 `QScrollArea` + 建议尺寸 `PAGE_SIZE_HINT`），页签高度不随挂载/卸载变化；「关于」页承担规范要求的风险/隐私声明与第三方许可说明 → `pages/about.py` | `MainWindow(config, runner)`; 调试页 `DebugPage.test_requested(kind, params)` / `diagnose_requested()` / `layout_measure_requested()`; 日常任务页 `DailyPage.pick_image_requested/capture_requested/preview_requested(str, int)/remove_image_requested(str, int)/clear_images_requested(str)`（信号）及 `.set_reference_images(prefix, paths, images)` / `.reference_images(prefix)` / `.selected_index(prefix)` / `.preview_widget(prefix)` / `.thumbnail_strip(prefix)`; `widgets.ImagePreview(empty_text)`（等比缩放 + 双击信号；最小尺寸 160x84，与虚线占位框一致，换掉占位不改变页签高度）; `layout_measure.measure_layout(window)` / `format_measure_report(measure)`; 功能三/功能四公共基类 `pages.planned_feature.PlannedFeaturePage`; 急停热键不可用提示 `SettingsPage.show_hotkey_hint(text)` |
 | utils | 日志初始化、路径解析、**配置里的图片路径换算** | `setup_logging(level, max_file_mb, backup_count)`（幂等，可重配置，参数变化时重建 handler）, `get_user_data_dir()`, `to_config_path(path) -> str`（仓库内→相对仓库根的 POSIX 路径；仓库外→绝对路径）, `resolve_config_path(value) -> Path \| None`（空串/None → None；相对路径按仓库根解析）, `get_templates_dir()` / `get_screenshots_dir()` / `get_anchors_dir()` |
 
-## 9. 数据结构（配置文件 schema v10）
+## 9. 数据结构（配置文件 schema v11）
 
 路径：`user_data/config.json`（运行时生成；仓库内只保留 `config.example.json`）。
 
 ```json
 {
-  "schema_version": 10,
+  "schema_version": 11,
   "features": {
     "daily_tasks": {
       "enabled": false,
@@ -385,9 +386,9 @@ LuoLuoTool/
       "coop_island": 1,
       "land_island": 1,
       "aqua_island": 1,
-      "coop_island_ref_image": "",
-      "land_ref_image": "",
-      "aqua_ref_image": "",
+      "coop_island_ref_image": [],
+      "land_ref_image": [],
+      "aqua_ref_image": [],
       "auto_produce_least": false
     },
     "order_hold": {
@@ -414,8 +415,9 @@ LuoLuoTool/
 }
 ```
 
-**日常任务页那批字段（schema v10，用户 2026-09-22 确认）**：字段名**直接等于设计稿的 `data-key`**，
-所以「设计稿 ↔ 页面控件 ↔ 配置」三者逐条对号（控件名契约见 `AGENTS.md` 的日常任务页条款）。
+**日常任务页那批字段（schema v10 起，用户 2026-09-22 确认；参考图自 v11 起是列表）**：
+字段名**直接等于设计稿的 `data-key`**，所以「设计稿 ↔ 页面控件 ↔ 配置」三者逐条对号
+（控件名契约见 `AGENTS.md` 的日常任务页条款）。
 
 - `enabled`：**同时是日常任务页的总开关**。它为 `false` 时任务编排**不给日常任务组入队**，
   单功能组（卡订单/功能三/功能四）不受影响。旧语义是"只存不读"，2026-09-22 用户确认改成真开关。
@@ -424,9 +426,11 @@ LuoLuoTool/
   `config.models.loop_minutes_to_seconds` / `loop_seconds_to_minutes`，**只有用户改那个数字框时才写回**。
 - `coop_island` / `land_island` / `aqua_island`：三个生产建筑所在的**岛屿编号**（int，1–10，默认 1；
   单岛屿，用户已确认不会同时有多个岛屿）。
-- `coop_island_ref_image` / `land_ref_image` / `aqua_ref_image`：三个建筑的**参考图路径**（字符串，
-  默认 `""`＝还没选）。非空时优先是**相对仓库根**的 POSIX 路径（`utils.paths.to_config_path` 生成，
-  换盘符/换目录仍可读）；文件不存在时只提示、**不悄悄清空**。
+- `coop_island_ref_image` / `land_ref_image` / `aqua_ref_image`：三个建筑的**参考图路径列表**
+  （`list[str]`，v11 起；默认 `[]`＝还没选，**最多 `MAX_REFERENCE_IMAGES`＝10 张**，顺序＝用户选择
+  顺序）。元素优先是**相对仓库根**的 POSIX 路径（`utils.paths.to_config_path` 生成，换盘符/换目录
+  仍可读），单个元素上限 `MAX_IMAGE_PATH_LENGTH`＝260 字符；列表里**不许有空串**，去重由界面负责
+  （同一张选两次不会被存两遍）。文件不存在时只提示、**不悄悄清空**。
 - `auto_produce_least`：产物制造开关（bool，默认 `false`）。**界面上暂时只读**（用户要求），
   但值照常入库，`AUTO_PRODUCE_LEAST_READONLY` 改成 `False` 即可开放给用户改。
 
@@ -453,6 +457,7 @@ LuoLuoTool/
 | v6 → v7 | 任务参数新增**鼠标滑动序列** `params.swipes`（默认 `[]` = 不滑动）：元素为 `{from, to, duration_ms, wait_after_ms}`，按住左键分帧拖拽 | `validation.migrate()` → `_migrate_v6_to_v7` |
 | v7 → v8 | 新增 `automation.developer_mode`（默认 `false` = 不显示「开发者调试」标签页） | `validation.migrate()` → `_migrate_v7_to_v8` |
 | v8 → v9 | 新增 `automation.save_vision_annotations`（默认 `true` = 图像识别成功后仍存带框截图到 `user_data/debug/`；开发者调试页可关） | `validation.migrate()` → `_migrate_v8_to_v9` |
+| v10 → v11 | **参考图改成列表**：`coop_island_ref_image` / `land_ref_image` / `aqua_ref_image` 由字符串升级为 `list[str]`（用户 2026-09-22 要求「选择图片可以多选」，最多 10 张）。迁移把老值的 `""` → `[]`、非空字符串 → `[该路径]`（`config.models.normalize_reference_paths` 也兜住手工写的畸形值） | `validation.migrate()` → `_migrate_v10_to_v11` |
 | v9 → v10 | 日常任务页接配置：新增 `features.daily_tasks` 的 `coop_island` / `land_island` / `aqua_island`（1–10，默认 1）与 `coop_island_ref_image` / `land_ref_image` / `aqua_ref_image`（默认 `""`＝未选）、`auto_produce_least`（默认 `false`）；**同时把 `daily_tasks.enabled` 从"只存不读"改成真的当总开关**（关闭 → 日常任务组不入队） | `validation.migrate()` → `_migrate_v9_to_v10` |
 
 > 字段沿革：合成指针通道曾在 v3 引入 `automation.input_mode`（`window_message`/`synthetic_pointer`）与 `pointer_type`，**随该通道撤回**（见 §4.2.1）；v4 又把 `input_mode` 重新定义为三档实现方式选择，**2026-09-16 用户确定只保留真实鼠标键盘后随 v5 删除**。若某份旧配置仍残留这些字段，迁移链会把它们逐一移除（已有单测覆盖）。
