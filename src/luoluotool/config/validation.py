@@ -7,8 +7,10 @@ from luoluotool.config.models import (
     MAX_CLICK_POINTS,
     MAX_IMAGE_PATH_LENGTH,
     MAX_KEY_STEPS,
+    MAX_REFERENCE_IMAGES,
     MAX_SWIPE_STEPS,
     SCHEMA_VERSION,
+    normalize_reference_paths,
 )
 from luoluotool.utils.keys import parse_combo
 
@@ -54,8 +56,9 @@ _STR_LIMITS = (
     ("automation.window_title_keyword", 100),
     ("automation.failsafe_hotkey", 20),
 )
-# 可以为**空串**的字符串字段（＝还没选）：参考图路径。空是合法的，类型与长度仍要管住。
-_OPTIONAL_STR_LIMITS = (
+# 参考图**路径列表**（v11 起每组最多 MAX_REFERENCE_IMAGES 张，空列表＝还没选）：
+# 旧版本这里是"单个字符串，可为空串"，迁移 `_migrate_v10_to_v11` 负责换算。
+_PATH_LIST_LIMITS = (
     ("features.daily_tasks.coop_island_ref_image", MAX_IMAGE_PATH_LENGTH),
     ("features.daily_tasks.land_ref_image", MAX_IMAGE_PATH_LENGTH),
     ("features.daily_tasks.aqua_ref_image", MAX_IMAGE_PATH_LENGTH),
@@ -198,6 +201,28 @@ def _validate_tasks(raw: dict, errors: list[str]) -> None:
         _validate_task_params(task_id, task.get("params", {}), errors)
 
 
+def _validate_path_list(path: str, value: object, max_len: int) -> list[str]:
+    """校验一个"参考图路径列表"（v11 起）：数组、张数受限、每项非空字符串且不超长。
+
+    空数组是**合法**的（＝还没选）。`normalize_reference_paths` 在读配置时会把单个字符串
+    也认成单元素列表，但**校验阶段仍要求数组** —— 否则磁盘上手写一个字符串会被悄悄接受，
+    而下次 `save` 又写成数组，用户看到的文件形状反复变。
+    """
+    if not isinstance(value, list):
+        return [
+            f"{path} 必须是数组（每组参考图最多 {MAX_REFERENCE_IMAGES} 张；空数组表示还没选）"
+        ]
+    errors: list[str] = []
+    if len(value) > MAX_REFERENCE_IMAGES:
+        errors.append(f"{path} 最多 {MAX_REFERENCE_IMAGES} 张（实际 {len(value)} 张）")
+    for index, item in enumerate(value):
+        if not isinstance(item, str) or not item:
+            errors.append(f"{path}[{index}] 必须是非空字符串")
+        elif len(item) > max_len:
+            errors.append(f"{path}[{index}] 路径太长（最长 {max_len} 字符）")
+    return errors
+
+
 def _migrate_v1_to_v2(raw: dict) -> dict:
     """v1 → v2：新增 automation.ask_elevation_on_start（默认 true = 启动时询问提权）。"""
     automation = dict(raw.get("automation") or {})
@@ -328,6 +353,22 @@ def _migrate_v9_to_v10(raw: dict) -> dict:
     return migrated
 
 
+def _migrate_v10_to_v11(raw: dict) -> dict:
+    """v10 → v11：三个参考图字段从"单个路径字符串"改成**路径列表**（用户要求可多选）。
+
+    单张的旧值 → 单元素列表；空串 → 空数组；已经是列表的原样保留（只按统一规则去掉空项/非字符串）。
+    用的是与 `DailyTasksConfig.from_dict` 同一个 `normalize_reference_paths`，避免两处规则不一致。
+    """
+    migrated = dict(raw)
+    features = dict(migrated.get("features") or {})
+    daily = dict(features.get("daily_tasks") or {})
+    for key in ("coop_island_ref_image", "land_ref_image", "aqua_ref_image"):
+        daily[key] = normalize_reference_paths(daily.get(key))
+    features["daily_tasks"] = daily
+    migrated["features"] = features
+    return migrated
+
+
 _MIGRATIONS = {
     1: _migrate_v1_to_v2,
     2: _migrate_v2_to_v3,
@@ -338,6 +379,7 @@ _MIGRATIONS = {
     7: _migrate_v7_to_v8,
     8: _migrate_v8_to_v9,
     9: _migrate_v9_to_v10,
+    10: _migrate_v10_to_v11,
 }
 
 
@@ -397,12 +439,10 @@ def validate(raw: object) -> list[str]:
         value = _get(raw, path)
         if not isinstance(value, str) or not value or len(value) > max_len:
             errors.append(f"{path} 必须是非空字符串（最长 {max_len}）")
-    for path, max_len in _OPTIONAL_STR_LIMITS:
+    for path, max_len in _PATH_LIST_LIMITS:
         if _skipped(path, missing):
             continue
-        value = _get(raw, path)
-        if not isinstance(value, str) or len(value) > max_len:
-            errors.append(f"{path} 必须是字符串（最长 {max_len}；空串表示还没选）")
+        errors.extend(_validate_path_list(path, _get(raw, path), max_len))
     if "logging" not in missing:
         level = _get(raw, "logging.level")
         if not isinstance(level, str) or level not in _LOG_LEVELS:

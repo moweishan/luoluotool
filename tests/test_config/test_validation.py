@@ -105,16 +105,26 @@ def test_string_fields_reject_empty_and_overlong() -> None:
     assert any("failsafe_hotkey" in e for e in validate(raw))
 
 
-def test_reference_image_paths_are_optional_but_must_be_strings() -> None:
-    """参考图路径：**可以是空串**（＝还没选），但类型必须是字符串且不许超长（防止塞垃圾）。"""
+def test_reference_image_paths_are_lists_of_strings() -> None:
+    """参考图（schema v11 起）＝**路径列表**：空列表合法；类型/张数/单项长度都要管住。"""
     raw = _default_raw()
-    assert validate(raw) == []                      # 默认就是空串
-    _set_path(raw, "features.daily_tasks.coop_island_ref_image", 123)
-    assert any("coop_island_ref_image" in e for e in validate(raw))
-    _set_path(raw, "features.daily_tasks.coop_island_ref_image", "")
-    _set_path(raw, "features.daily_tasks.land_ref_image", "x" * 261)
-    assert any("land_ref_image" in e for e in validate(raw))
-    _set_path(raw, "features.daily_tasks.land_ref_image", "assets/templates/土地.png")
+    assert validate(raw) == []                       # 默认就是空列表
+
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image", "assets/templates/鸡舍.png")
+    assert any("必须是数组" in e for e in validate(raw))     # 单个字符串不再接受（迁移负责换算）
+
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image", ["x" * 261])
+    assert any("路径太长" in e for e in validate(raw))
+
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image", ["ok.png", ""])
+    assert any("[1] 必须是非空字符串" in e for e in validate(raw))
+
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image",
+              [f"a{index}.png" for index in range(models.MAX_REFERENCE_IMAGES + 1)])
+    assert any("最多" in e and "张" in e for e in validate(raw))
+
+    _set_path(raw, "features.daily_tasks.coop_island_ref_image",
+              ["assets/templates/鸡舍_1.png", "assets/templates/鸡舍_2.png"])
     assert validate(raw) == []
 
 

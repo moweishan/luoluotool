@@ -1,4 +1,4 @@
-"""配置模型：PROJECT_SPEC.md 第 9 节 schema v10（dataclass 实现）。"""
+"""配置模型：PROJECT_SPEC.md 第 9 节 schema v11（dataclass 实现）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 from luoluotool.utils.keys import parse_combo
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # 写入路径与校验路径共用的上限（评审 P1-2/P3-5：GUI 不得存下"自己读不回来"的配置）
 MAX_KEY_STEPS = 20      # 一个任务的按键步骤上限（validation 也用它）
@@ -17,6 +17,9 @@ MAX_CLICK_POINTS = 20   # 一个任务的点击点上限
 ISLAND_RANGE = (1, 10)
 # 参考图路径的最大长度（validation 用它）
 MAX_IMAGE_PATH_LENGTH = 260
+# 每个建筑最多几张参考图（2026-09-22 用户要求「选择图片…」可以多选；上限写在 models 一份，
+# GUI 与 validation 共用 —— 界面能选的数量必须与校验器一致，否则会存下"自己读不回来"的配置）
+MAX_REFERENCE_IMAGES = 10
 
 # 循环间隔：界面按**分钟**（每天感觉的量级），配置里存**秒**（`loop.interval_seconds`，既有字段）
 # 注意：**没有"默认 30 分钟"这回事** —— 真实的出厂默认是 `LoopConfig().interval_seconds = 3600`
@@ -260,6 +263,21 @@ class PlaceholderTaskParams:
         return cls(points, keys, swipes, raw.get("wait_after_ms", 500))
 
 
+def normalize_reference_paths(value: object) -> list[str]:
+    """把配置里的参考图字段规整成"非空字符串列表"（`v10` 是单个字符串，`v11` 起是列表）。
+
+    单个规则集中在这里，`DailyTasksConfig.from_dict` 与 `validation._migrate_v10_to_v11` 共用：
+    - 字符串：非空 → `[该字符串]`；空串 → `[]`（＝还没选）；
+    - 列表/元组：只保留"非空字符串"项（丢掉 `None`/空串/别的类型），**不改变顺序**；
+    - 其它类型（数字、dict 等）：`[]`（交给校验器去报错，这里不抛）。
+    """
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if isinstance(item, str) and item]
+    return []
+
+
 @dataclass
 class DailyTasksConfig:
     """功能一：日常任务。
@@ -268,9 +286,12 @@ class DailyTasksConfig:
     不给日常任务组入队（见 `core/runner.py`）。
 
     schema v10 起的字段＝日常任务页（用户设计稿）里那些"前置条件"：三个生产建筑各一组
-    「所在岛屿编号 + 参考图路径」，外加产物制造的一个开关。**字段名直接等于设计稿的
-    `data-key`**，这样"设计稿 ↔ 控件 ↔ 配置"三者能逐条对号。参考图路径为空串＝还没选，
-    非空时优先是**相对仓库根**的路径（由 `utils.paths.to_config_path` 生成）。
+    「所在岛屿编号 + 参考图」，外加产物制造的一个开关。**字段名直接等于设计稿的
+    `data-key`**，这样"设计稿 ↔ 控件 ↔ 配置"三者能逐条对号。
+
+    **schema v11（2026-09-22 用户要求「选择图片可以多选」）**：三个参考图字段从
+    "单个路径字符串"改成**路径列表**（每组最多 `MAX_REFERENCE_IMAGES` 张，空列表＝还没选）。
+    列表里存的是**相对仓库根**的路径（由 `utils.paths.to_config_path` 生成），顺序＝用户选择顺序。
     """
 
     enabled: bool = False
@@ -279,9 +300,9 @@ class DailyTasksConfig:
     coop_island: int = 1
     land_island: int = 1
     aqua_island: int = 1
-    coop_island_ref_image: str = ""
-    land_ref_image: str = ""
-    aqua_ref_image: str = ""
+    coop_island_ref_image: list[str] = field(default_factory=list)
+    land_ref_image: list[str] = field(default_factory=list)
+    aqua_ref_image: list[str] = field(default_factory=list)
     auto_produce_least: bool = False
 
     def to_dict(self) -> dict:
@@ -292,9 +313,9 @@ class DailyTasksConfig:
             "coop_island": self.coop_island,
             "land_island": self.land_island,
             "aqua_island": self.aqua_island,
-            "coop_island_ref_image": self.coop_island_ref_image,
-            "land_ref_image": self.land_ref_image,
-            "aqua_ref_image": self.aqua_ref_image,
+            "coop_island_ref_image": list(self.coop_island_ref_image),
+            "land_ref_image": list(self.land_ref_image),
+            "aqua_ref_image": list(self.aqua_ref_image),
             "auto_produce_least": self.auto_produce_least,
         }
 
@@ -307,9 +328,9 @@ class DailyTasksConfig:
             data.get("coop_island", 1),
             data.get("land_island", 1),
             data.get("aqua_island", 1),
-            data.get("coop_island_ref_image", ""),
-            data.get("land_ref_image", ""),
-            data.get("aqua_ref_image", ""),
+            normalize_reference_paths(data.get("coop_island_ref_image")),
+            normalize_reference_paths(data.get("land_ref_image")),
+            normalize_reference_paths(data.get("aqua_ref_image")),
             data.get("auto_produce_least", False),
         )
 

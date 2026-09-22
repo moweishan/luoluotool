@@ -254,9 +254,10 @@ def test_migrate_v9_to_v10_adds_daily_page_defaults() -> None:
     assert daily["coop_island"] == 1
     assert daily["land_island"] == 1
     assert daily["aqua_island"] == 1
-    assert daily["coop_island_ref_image"] == ""
-    assert daily["land_ref_image"] == ""
-    assert daily["aqua_ref_image"] == ""
+    # 参考图在 v10 里是空串，v11 起是空列表 —— 这里断言的是**整条迁移链的最终形态**
+    assert daily["coop_island_ref_image"] == []
+    assert daily["land_ref_image"] == []
+    assert daily["aqua_ref_image"] == []
     assert daily["auto_produce_least"] is False
 
 
@@ -278,6 +279,61 @@ def test_migrate_v9_to_v10_keeps_every_existing_value() -> None:
     assert migrated["automation"]["click_interval_ms"] == 1500
 
 
+def _v10_daily_raw() -> dict:
+    """一份 schema v10 配置（参考图还是**单个路径字符串**）。"""
+    raw = _v9_daily_raw()
+    raw["schema_version"] = 10
+    raw["features"]["daily_tasks"].update({
+        "coop_island": 1,
+        "land_island": 1,
+        "aqua_island": 1,
+        "coop_island_ref_image": "",
+        "land_ref_image": "",
+        "aqua_ref_image": "",
+        "auto_produce_least": False,
+    })
+    return raw
+
+
+def test_migrate_v10_to_v11_turns_single_paths_into_lists() -> None:
+    """v10 → v11：参考图从"单个路径字符串"改成路径列表（用户 2026-09-22 要求可多选）。
+
+    单张 → 单元素列表；空串 → 空数组（＝还没选）。
+    """
+    raw = _v10_daily_raw()
+    daily = raw["features"]["daily_tasks"]
+    daily["coop_island_ref_image"] = "assets/templates/鸡舍_1.png"
+    daily["land_ref_image"] = ""
+    daily["aqua_ref_image"] = "assets/anchors/水产_x.png"
+
+    migrated = migrate(raw)
+
+    assert migrated["schema_version"] == SCHEMA_VERSION
+    daily = migrated["features"]["daily_tasks"]
+    assert daily["coop_island_ref_image"] == ["assets/templates/鸡舍_1.png"]
+    assert daily["land_ref_image"] == []
+    assert daily["aqua_ref_image"] == ["assets/anchors/水产_x.png"]
+
+
+def test_migrate_v10_to_v11_keeps_existing_lists_and_other_fields() -> None:
+    """已经是列表的值不动（去重前只丢空项），其它字段也一律保持原样。"""
+    raw = _v10_daily_raw()
+    daily = raw["features"]["daily_tasks"]
+    daily["coop_island_ref_image"] = ["a.png", "b.png"]
+    daily["coop_island"] = 7
+    daily["auto_produce_least"] = True
+    daily["loop"] = {"enabled": True, "interval_seconds": 1234}
+    raw["automation"]["click_interval_ms"] = 1500
+
+    migrated = migrate(raw)
+
+    daily = migrated["features"]["daily_tasks"]
+    assert daily["coop_island_ref_image"] == ["a.png", "b.png"]
+    assert daily["coop_island"] == 7 and daily["auto_produce_least"] is True
+    assert daily["loop"] == {"enabled": True, "interval_seconds": 1234}
+    assert migrated["automation"]["click_interval_ms"] == 1500
+
+
 def test_migrate_v9_to_v10_keeps_already_filled_daily_page_values() -> None:
     """已经手工填过（或从新版本降级回来）的值不得被默认值覆盖。"""
     raw = _v9_daily_raw()
@@ -289,5 +345,5 @@ def test_migrate_v9_to_v10_keeps_already_filled_daily_page_values() -> None:
     migrated = migrate(raw)["features"]["daily_tasks"]
     assert migrated["coop_island"] == 7
     assert migrated["aqua_island"] == 5
-    assert migrated["land_ref_image"] == "assets/templates/土地.png"
+    assert migrated["land_ref_image"] == ["assets/templates/土地.png"]  # v11 起是列表
     assert migrated["auto_produce_least"] is True

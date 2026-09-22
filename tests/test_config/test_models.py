@@ -14,13 +14,14 @@ def test_defaults_are_safe() -> None:
     assert config.automation.dry_run is False
     assert config.features.daily_tasks.enabled is False
     assert config.features.daily_tasks.loop.enabled is False
-    # 日常任务页那批字段（schema v10）：默认＝"一个建筑都没配"
+    # 日常任务页那批字段（schema v10 起）：默认＝"一个建筑都没配"
     assert config.features.daily_tasks.coop_island == 1
     assert config.features.daily_tasks.land_island == 1
     assert config.features.daily_tasks.aqua_island == 1
-    assert config.features.daily_tasks.coop_island_ref_image == ""
-    assert config.features.daily_tasks.land_ref_image == ""
-    assert config.features.daily_tasks.aqua_ref_image == ""
+    # 参考图自 schema v11 起是**路径列表**（可多选），空列表＝还没选
+    assert config.features.daily_tasks.coop_island_ref_image == []
+    assert config.features.daily_tasks.land_ref_image == []
+    assert config.features.daily_tasks.aqua_ref_image == []
     assert config.features.daily_tasks.auto_produce_least is False
     assert config.features.order_hold.enabled is False
     assert config.features.order_hold.reserved_switch_1 is False
@@ -146,6 +147,36 @@ def test_loop_seconds_to_minutes_rounds_and_clamps_for_display() -> None:
     assert models.loop_seconds_to_minutes(1) == 1
     assert models.loop_seconds_to_minutes(86400) == 720   # 24 小时 → 顶到界面上限
     assert models.loop_seconds_to_minutes(60 * 720) == 720
+
+
+def test_normalize_reference_paths_accepts_legacy_single_string() -> None:
+    """参考图字段的规整规则：v10 的单字符串 → 单元素列表；空串 → 空列表；列表只留非空字符串。"""
+    assert models.normalize_reference_paths("assets/templates/鸡舍.png") == ["assets/templates/鸡舍.png"]
+    assert models.normalize_reference_paths("") == []
+    assert models.normalize_reference_paths(None) == []
+    assert models.normalize_reference_paths(7) == []
+    assert models.normalize_reference_paths(["a.png", "", 3, "b.png", None]) == ["a.png", "b.png"]
+
+
+def test_reference_paths_roundtrip_as_a_list() -> None:
+    """三个参考图字段必须是**列表**且往返一致（用户 2026-09-22 要求可多选）。"""
+    config = models.AppConfig.default()
+    daily = config.features.daily_tasks
+    daily.coop_island_ref_image = ["assets/templates/鸡舍_1.png", "assets/templates/鸡舍_2.png"]
+    daily.land_ref_image = ["assets/templates/土地.png"]
+    daily.aqua_ref_image = []
+
+    restored = models.AppConfig.from_dict(config.to_dict())
+
+    assert restored.features.daily_tasks.coop_island_ref_image == daily.coop_island_ref_image
+    assert restored.features.daily_tasks.land_ref_image == daily.land_ref_image
+    assert restored.features.daily_tasks.aqua_ref_image == []
+    # `to_dict` 必须给出**拷贝**：改返回值不该改到配置本体
+    data = config.to_dict()
+    data["features"]["daily_tasks"]["coop_island_ref_image"].append("偷偷加的.png")
+    assert daily.coop_island_ref_image == [
+        "assets/templates/鸡舍_1.png", "assets/templates/鸡舍_2.png"
+    ]
 
 
 def test_key_step_text_roundtrip() -> None:
