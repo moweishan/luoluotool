@@ -310,7 +310,8 @@ class DailyPage(DailyImagesMixin, ScrollablePage):
         strip.set_hint_text(
             f"{title}已选的参考图（最多 {MAX_REFERENCE_IMAGES} 张）：点一张＝看大图、"
             f"双击＝放大、点右上角 × ＝移除这张、右键＝移除 / 清空全部；"
-            f"「截取游戏画面」会把框选结果追加到这里"
+            f"移除会「先弹一次确认」，确认后连磁盘文件一起删（只删 assets/templates 与 "
+            f"assets/anchors 里的图片）；「截取游戏画面」会把框选结果追加到这里"
         )
         strip.image_selected.connect(lambda index, p=prefix: self._on_thumbnail_selected(p, index))
         strip.image_activated.connect(lambda index, p=prefix: self._emit_preview(p, index))

@@ -60,6 +60,30 @@ def _tests_never_query_real_desktop(monkeypatch):
     monkeypatch.setattr(core_vision, "find_window", lambda keyword: None)
 
 
+@pytest.fixture(autouse=True)
+def _no_real_modal_dialogs(monkeypatch):
+    """**单测绝不允许弹出真的模态框**（会永久阻塞：实测 `pytest` 卡满 600 秒被超时杀掉）。
+
+    日常任务页「移除 / 清空」的二次确认走 `gui/daily_deletion.confirm_destructive`，
+    它内部是 `QMessageBox.exec()` —— 在 CI/离屏里没人点，于是整轮测试挂死。
+    本夹具把它换成**立刻失败的替身**：需要"确认"的测试自己 monkeypatch
+    `daily_deletion.confirm_destructive`（在测试体里打的补丁会覆盖本夹具），
+    忘了打的就会得到一句可读的错误，而不是一个 10 分钟没输出的卡死。
+    """
+    try:
+        from luoluotool.gui import daily_deletion
+    except ImportError:                   # 环境缺 PySide6 时跳过（不影响非 GUI 测试）
+        return
+
+    def refuse(*_args, **_kwargs) -> bool:
+        raise AssertionError(
+            "测试里不许弹确认框：请 monkeypatch `daily_deletion.confirm_destructive` "
+            "（返回 True＝确认，False＝取消），见 tests/test_gui_daily_delete.py"
+        )
+
+    monkeypatch.setattr(daily_deletion, "confirm_destructive", refuse)
+
+
 @pytest.fixture()
 def textured_png(tmp_path):
     """一张**有纹理**的 PNG（能被 `load_template` 接受：纯色图会被它按规则拒掉）。

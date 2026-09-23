@@ -264,8 +264,17 @@ def test_pick_image_keeps_the_good_ones_when_some_are_rejected(tmp_path, texture
     page.close()
 
 
-def test_remove_and_clear_images_write_config_and_refresh_the_page(tmp_path, textured_png) -> None:
-    """右键「移除这张」/「清空全部」：写配置 + 置脏 + 缩略图条同步（用户 2026-09-22 要的撤回路径）。"""
+def test_remove_and_clear_images_write_config_and_refresh_the_page(
+    tmp_path, textured_png, monkeypatch
+) -> None:
+    """右键「移除这张」/「清空全部」：写配置 + 置脏 + 缩略图条同步（用户 2026-09-22 要的撤回路径）。
+
+    二次确认（同日追加）在这里**替身成"确认"**：走的仍是同一条控制器路径；
+    确认框的内容与"取消/删文件"的细节在 `tests/test_gui_daily_delete.py`。
+    """
+    from luoluotool.gui import daily_deletion
+
+    monkeypatch.setattr(daily_deletion, "confirm_destructive", lambda *a, **k: True)
     config = AppConfig.default()
     changes: list[str] = []
     page = _page(config, changes)

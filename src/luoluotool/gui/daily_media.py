@@ -54,6 +54,7 @@ from luoluotool.gui.daily_workers import (
     ReferenceImageResult,
     decode_reference_image,
 )
+from luoluotool.gui.daily_deletion import DailyDeletionMixin
 from luoluotool.gui.dialogs.crop_dialog import TemplateCropDialog
 from luoluotool.gui.pages.daily import PICK_FILTER
 from luoluotool.gui.pages.daily_fields import (
@@ -76,7 +77,7 @@ PREVIEW_SCREEN_RATIO = 0.8        # 放大预览最多占屏幕的该比例
 LOG_PATH_HINT = PROJECT_ROOT / "logs" / "luoluotool.log"
 
 
-class DailyMediaController(QObject):
+class DailyMediaController(DailyDeletionMixin, QObject):
     """把日常任务页的「选图 / 截图 / 预览 / 移除」请求落到文件、后台线程与框选弹窗上。
 
     线程登记：截图线程最多一个（`capture_thread()`），解码线程可能同时有多个
@@ -312,33 +313,6 @@ class DailyMediaController(QObject):
             f"请把{building_title(prefix)}的图片放到仓库里的 assets/ 下再选，否则配置存不下"
         )
         return False
-
-    # ---------------------------------------------------------------- 移除 / 清空
-    def remove_image(self, prefix: str, index: int) -> None:
-        """移除第 index 张（右键菜单来的；列表为空或下标越界时什么都不做）。"""
-        values = self._values(prefix)
-        if not 0 <= index < len(values):
-            return
-        removed = values[index]
-        values = values[:index] + values[index + 1:]
-        setattr(self._get_config().features.daily_tasks, ref_image_field(prefix), values)
-        self._on_changed()
-        self._page.remove_reference_image(prefix, index)
-        logger.info("参考图已移除：%s → %s（还剩 %d 张）", prefix, removed, len(values))
-        self._set_status(
-            f"已移除 {Path(removed).name}（{building_title(prefix)}还剩 {len(values)} 张）"
-        )
-
-    def clear_images(self, prefix: str) -> None:
-        """清空某个建筑的全部参考图（右键菜单来的）。"""
-        count = len(self._values(prefix))
-        if count == 0:
-            return
-        setattr(self._get_config().features.daily_tasks, ref_image_field(prefix), [])
-        self._on_changed()
-        self._page.clear_reference_images(prefix)
-        logger.info("参考图已清空：%s（原有 %d 张）", prefix, count)
-        self._set_status(f"已清空{building_title(prefix)}的 {count} 张参考图")
 
     # ---------------------------------------------------------------- 截取游戏画面
     def capture_image(self, prefix: str) -> None:

@@ -322,11 +322,11 @@ class ThumbnailStrip(QFrame):
         super().mouseDoubleClickEvent(event)
 
     def mouseMoveEvent(self, event) -> None:             # noqa: N802 (Qt 命名)
-        """悬停角标：把它画成红色 + tooltip 写成「移除第 N 张」（移开恢复原提示）。"""
+        """悬停角标：画成红色 + tooltip 写成「移除第 N 张（会先确认）」（移开恢复原提示）。"""
         hover = self._close_index_at(event.position().toPoint())
         if hover != self._hover_close:
             self._hover_close = hover
-            self.setToolTip(self._hint_text if hover is None else f"移除第 {hover + 1} 张")
+            self.setToolTip(self._hint_text if hover is None else f"移除第 {hover + 1} 张（会先确认）")
             self.update()
         super().mouseMoveEvent(event)
 

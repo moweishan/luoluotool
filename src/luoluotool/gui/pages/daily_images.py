@@ -108,13 +108,17 @@ class DailyImagesMixin:
         logger.debug("参考图已刷新：%s 共 %d 张", prefix, len(paths))
 
     def _sync_clear_button(self, prefix: str, count: int) -> None:
-        """「清空全部」按钮的可用性：没图时禁用（点它什么都不会发生，别让用户白点）。"""
+        """「清空全部」按钮的可用性：没图时禁用（点它什么都不会发生，别让用户白点）。
+
+        有图时的提示要说清两件事：会清掉几张、以及**会连磁盘文件一起删**（先弹一次确认）。
+        """
         button = self._clear_buttons.get(prefix)
         if button is None:
             return
         button.setEnabled(count > 0)
         button.setToolTip(
-            f"清空{building_title(prefix)}的 {count} 张参考图（框选产物也会一起清掉）"
+            f"清空{building_title(prefix)}的 {count} 张参考图（会先弹一次确认；确认后连磁盘文件"
+            f"一起删 —— 只删 assets/templates 与 assets/anchors 里的图片）"
             if count else f"还没选图片，没有可清空的（{building_title(prefix)}）"
         )
 
