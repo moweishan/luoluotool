@@ -6,7 +6,8 @@ AGENTS §2 的 600 行硬线。**纯搬运**：这些方法一行未改，只是
 
 约定（与 `gui/dialogs/crop_view_zoom.ZoomPanMixin` 同样的做法）—— 本 mixin 假设宿主 `DailyPage`：
 
-- 在 `__init__` 里建好 `self._ref_edits` / `self._previews` / `self._strips` / `self._reference_paths`；
+- 在 `__init__` 里建好 `self._ref_edits` / `self._previews` / `self._strips` / `self._clear_buttons`
+  / `self._reference_paths`；
 - 声明了 `preview_requested(str, int)` / `remove_image_requested(str, int)` / `clear_images_requested(str)`；
 - 在 `_building_box()` 里把每个建筑的输入框 / 大图 / 缩略图条登记进上面那几个字典。
 
@@ -20,6 +21,7 @@ import logging
 from pathlib import Path
 
 from PySide6.QtGui import QImage
+from PySide6.QtWidgets import QPushButton
 
 from luoluotool.config.models import MAX_REFERENCE_IMAGES
 from luoluotool.gui.pages.daily_fields import building_title
@@ -86,6 +88,10 @@ class DailyImagesMixin:
         """某个建筑的缩略图条（测试与控制器用）。"""
         return self._strips.get(prefix)
 
+    def clear_button(self, prefix: str) -> QPushButton | None:
+        """某个建筑缩略图条旁**可见的**「清空全部」按钮（测试与状态同步用）。"""
+        return self._clear_buttons.get(prefix)
+
     def _apply_reference_view(self, prefix: str, paths: list[str],
                               images: list[QImage | None], *, selected: int) -> None:
         """把"路径列表 + 图片列表"一次落到界面（输入框文案 / 缩略图条 / 大图）并记住路径。"""
@@ -97,8 +103,20 @@ class DailyImagesMixin:
         strip = self._strips[prefix]
         strip.set_images(list(images) + [None] * (len(paths) - len(images)))
         strip.select(selected)
+        self._sync_clear_button(prefix, len(paths))
         self._show_selected(prefix)
         logger.debug("参考图已刷新：%s 共 %d 张", prefix, len(paths))
+
+    def _sync_clear_button(self, prefix: str, count: int) -> None:
+        """「清空全部」按钮的可用性：没图时禁用（点它什么都不会发生，别让用户白点）。"""
+        button = self._clear_buttons.get(prefix)
+        if button is None:
+            return
+        button.setEnabled(count > 0)
+        button.setToolTip(
+            f"清空{building_title(prefix)}的 {count} 张参考图（框选产物也会一起清掉）"
+            if count else f"还没选图片，没有可清空的（{building_title(prefix)}）"
+        )
 
     def _show_selected(self, prefix: str) -> None:
         """把"当前选中那张"画进大图区。"""

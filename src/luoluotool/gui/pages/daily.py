@@ -105,7 +105,8 @@ DESIGN_CONTROL_IDS: tuple[str, ...] = (
     "loop_interval_minutes",
     *(name for _t, prefix, _w, ref_id, cap_id in BUILDINGS
       for name in (f"{prefix}_island", ref_id, f"{prefix}_pick_image", cap_id,
-                   f"{prefix}_selected_image", f"{prefix}_selected_image_list")),
+                   f"{prefix}_selected_image", f"{prefix}_selected_image_list",
+                   f"{prefix}_clear_images")),
     "auto_produce_least",
 )
 
@@ -143,6 +144,7 @@ class DailyPage(DailyImagesMixin, ScrollablePage):
         self._ref_edits: dict[str, QLineEdit] = {}
         self._previews: dict[str, ImagePreview] = {}
         self._strips: dict[str, ThumbnailStrip] = {}
+        self._clear_buttons: dict[str, QPushButton] = {}   # 缩略图条旁可见的「清空全部」
         self._reference_paths: dict[str, list[str]] = {}   # 每个建筑当前显示的参考图路径
 
         layout = QVBoxLayout(self.content)
@@ -302,12 +304,13 @@ class DailyPage(DailyImagesMixin, ScrollablePage):
         # 缩略图条（用户 2026-09-22 要求「选择图片可以多选」）：能看到选了哪几张、点一张看大图
         strip = ThumbnailStrip(
             f"还没选图片 —— 点「选择图片…」可一次选多张（最多 {MAX_REFERENCE_IMAGES} 张）；"
-            f"选好后点一张看大图、双击放大、右键可移除"
+            f"选好后点一张看大图、双击放大、点右上角 × 可移除"
         )
         strip.setObjectName(f"{prefix}_selected_image_list")
-        strip.setToolTip(
+        strip.set_hint_text(
             f"{title}已选的参考图（最多 {MAX_REFERENCE_IMAGES} 张）：点一张＝看大图、"
-            f"双击＝放大、右键＝移除这张 / 清空全部；「截取游戏画面」会把框选结果追加到这里"
+            f"双击＝放大、点右上角 × ＝移除这张、右键＝移除 / 清空全部；"
+            f"「截取游戏画面」会把框选结果追加到这里"
         )
         strip.image_selected.connect(lambda index, p=prefix: self._on_thumbnail_selected(p, index))
         strip.image_activated.connect(lambda index, p=prefix: self._emit_preview(p, index))
@@ -316,7 +319,21 @@ class DailyPage(DailyImagesMixin, ScrollablePage):
         )
         strip.clear_requested.connect(lambda p=prefix: self.clear_images_requested.emit(p))
         self._strips[prefix] = strip
-        layout.addWidget(strip)
+
+        # 可见的「清空全部」（用户 2026-09-22 选定：除了右键菜单，还要有个看得见的入口）
+        clear_button = QPushButton("清空全部")
+        clear_button.setObjectName(f"{prefix}_clear_images")
+        clear_button.setToolTip(f"还没选图片，没有可清空的（{title}）")
+        clear_button.setEnabled(False)                 # 没图时禁用，有图由 _apply_reference_view 放开
+        clear_button.clicked.connect(
+            lambda _checked=False, p=prefix: self.clear_images_requested.emit(p)
+        )
+        self._clear_buttons[prefix] = clear_button
+
+        strip_row = QHBoxLayout()
+        strip_row.addWidget(strip, 1)
+        strip_row.addWidget(clear_button, 0, Qt.AlignmentFlag.AlignTop)
+        layout.addLayout(strip_row)
         return box
 
     # ---------------------------------------------------------------- 产物制造

@@ -21,6 +21,12 @@ THUMBNAIL_SIZE = QSize(56, 42)
 THUMBNAIL_SPACING = 6
 THUMBNAIL_PADDING = 3
 THUMBNAIL_SELECTED_BORDER = "#2f7fd0"   # 当前选中的那张：蓝色边框
+THUMBNAIL_CLOSE_SIZE = 14               # 右上角「×」角标：**看得见的移除入口**
+THUMBNAIL_CLOSE_BACKGROUND = "#ffffff"
+THUMBNAIL_CLOSE_BORDER = "#8a8a8a"
+THUMBNAIL_CLOSE_TEXT = "#555555"
+THUMBNAIL_CLOSE_HOVER_BACKGROUND = "#d64545"   # 悬停＝红底白叉（点一下就是删掉，得看得出危险）
+THUMBNAIL_CLOSE_HOVER_TEXT = "#ffffff"
 
 
 class LogPanelHandler(logging.Handler, QObject):
@@ -139,12 +145,16 @@ class ImagePreview(QFrame):
 
 
 class ThumbnailStrip(QFrame):
-    """参考图缩略图条：横排小图，**点选看大图、双击放大、右键移除/清空**。
+    """参考图缩略图条：横排小图，**点选看大图、双击放大、右上角「×」删这张、右键还有菜单**。
 
     为什么要它（2026-09-22 用户要求「选择图片…可以多选」）：一个建筑可能配多张参考图
     （不同角度/时机），界面得让用户看见"到底选了哪几张"、挑一张看大图，并能撤掉选错的。
     图片由控制器在**后台线程**解码后交进来（`set_images` / `set_image_at`），
     本控件只负责显示与交互，不碰文件（AGENTS §1.5 的 UI/业务分离）。
+
+    **移除的两条入口**（用户 2026-09-22 选定）：每张右上角的 `×` 角标（看得见、悬停变红、
+    悬停时 tooltip 写明"移除第 N 张"）＋右键菜单「移除第 N 张」/「清空全部」；
+    清空还在页面上另配了一个可见按钮（`pages/daily.py`），本控件不负责那个。
 
     张数上限由 `config.models.MAX_REFERENCE_IMAGES`（＝10）管；缩略图固定 `THUMBNAIL_SIZE`，
     10 张排在一行约 620px，够放在建筑分组里（放不下时右侧会被裁掉，但上限保证不会到那一步）。
@@ -152,7 +162,7 @@ class ThumbnailStrip(QFrame):
 
     image_selected = Signal(int)      # 点选了第 i 张（0 起）
     image_activated = Signal(int)     # 双击第 i 张（＝放大看）
-    remove_requested = Signal(int)    # 右键「移除这张」
+    remove_requested = Signal(int)    # 「×」角标或右键「移除这张」
     clear_requested = Signal()        # 右键「清空全部」
 
     def __init__(self, empty_text: str = "", parent: QWidget | None = None) -> None:
@@ -160,9 +170,12 @@ class ThumbnailStrip(QFrame):
         self._images: list[QImage | None] = []
         self._selected = 0
         self._empty_text = empty_text
+        self._hint_text = ""             # 条本身的 tooltip（悬停角标时临时换成"移除第 N 张"）
+        self._hover_close: int | None = None
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setMinimumHeight(THUMBNAIL_SIZE.height() + THUMBNAIL_PADDING * 2)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setMouseTracking(True)      # 角标高亮与 tooltip 要跟着鼠标走（没按住也要）
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_context_menu)
 
@@ -171,6 +184,7 @@ class ThumbnailStrip(QFrame):
         """整批换掉（图片可以是 None＝还在后台解码）。"""
         self._images = list(images)
         self._selected = min(self._selected, max(0, len(self._images) - 1))
+        self._hover_close = None
         self.update()
 
     def set_image_at(self, index: int, image: QImage | None) -> None:
@@ -201,8 +215,13 @@ class ThumbnailStrip(QFrame):
     def empty_text(self) -> str:
         return self._empty_text
 
+    def set_hint_text(self, text: str) -> None:
+        """设置条本身的提示（悬停角标时会被临时替换，移开自动恢复）。"""
+        self._hint_text = text
+        self.setToolTip(text)
+
     # ---------------------------------------------------------------- 几何
-    def _item_rect(self, index: int) -> QRect:
+    def item_rect(self, index: int) -> QRect:
         """第 index 张的方框（缩略图固定大小 + 间距，从左上角铺开）。"""
         return QRect(
             THUMBNAIL_PADDING + index * (THUMBNAIL_SIZE.width() + THUMBNAIL_SPACING),
@@ -211,10 +230,27 @@ class ThumbnailStrip(QFrame):
             THUMBNAIL_SIZE.height(),
         )
 
+    def close_badge_rect(self, index: int) -> QRect:
+        """第 index 张右上角「×」角标的方框（贴在缩略图内，绝不越出去）。"""
+        item = self.item_rect(index)
+        return QRect(
+            item.right() - THUMBNAIL_CLOSE_SIZE + 1,
+            item.top() + 1,
+            THUMBNAIL_CLOSE_SIZE,
+            THUMBNAIL_CLOSE_SIZE,
+        )
+
     def _index_at(self, pos) -> int | None:
         """鼠标落在第几张（不在任何缩略图上返回 None）。"""
         for index in range(len(self._images)):
-            if self._item_rect(index).contains(pos):
+            if self.item_rect(index).contains(pos):
+                return index
+        return None
+
+    def _close_index_at(self, pos) -> int | None:
+        """鼠标落在第几张的「×」角标上（不在角标上返回 None）。**先判角标再判整格**。"""
+        for index in range(len(self._images)):
+            if self.close_badge_rect(index).contains(pos):
                 return index
         return None
 
@@ -229,7 +265,7 @@ class ThumbnailStrip(QFrame):
             return
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         for index, image in enumerate(self._images):
-            rect = self._item_rect(index)
+            rect = self.item_rect(index)
             painter.fillRect(rect, QColor(PREVIEW_BACKGROUND))
             if image is not None and not image.isNull():
                 painter.drawImage(rect, image, image.rect())
@@ -240,10 +276,31 @@ class ThumbnailStrip(QFrame):
             painter.drawText(rect.adjusted(3, 2, -3, -2),
                              Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
                              str(index + 1))
+            self._paint_close_badge(painter, index)
+
+    def _paint_close_badge(self, painter: QPainter, index: int) -> None:
+        """右上角「×」角标：悬停那一格变红底白叉（点一下就是删掉，得看得出危险）。"""
+        badge = self.close_badge_rect(index)
+        hovered = index == self._hover_close
+        painter.fillRect(
+            badge,
+            QColor(THUMBNAIL_CLOSE_HOVER_BACKGROUND if hovered else THUMBNAIL_CLOSE_BACKGROUND),
+        )
+        painter.setPen(QColor(THUMBNAIL_CLOSE_BORDER))
+        painter.drawRect(badge.adjusted(0, 0, -1, -1))
+        painter.setPen(QColor(THUMBNAIL_CLOSE_HOVER_TEXT if hovered else THUMBNAIL_CLOSE_TEXT))
+        painter.drawText(badge, Qt.AlignmentFlag.AlignCenter, "×")
 
     # ---------------------------------------------------------------- 交互
     def mousePressEvent(self, event) -> None:            # noqa: N802 (Qt 命名)
-        index = self._index_at(event.position().toPoint())
+        """左键：**先判「×」角标**（点角标＝删这张，不动当前选中项），否则选这一张。"""
+        pos = event.position().toPoint()
+        close_index = self._close_index_at(pos)
+        if close_index is not None and event.button() == Qt.MouseButton.LeftButton:
+            self.remove_requested.emit(close_index)
+            event.accept()
+            return
+        index = self._index_at(pos)
         if index is not None and event.button() == Qt.MouseButton.LeftButton:
             self.select(index)
             self.image_selected.emit(index)
@@ -252,13 +309,48 @@ class ThumbnailStrip(QFrame):
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event) -> None:      # noqa: N802 (Qt 命名)
-        index = self._index_at(event.position().toPoint())
+        pos = event.position().toPoint()
+        if self._close_index_at(pos) is not None:
+            super().mouseDoubleClickEvent(event)          # 角标上的双击不当作"放大"
+            return
+        index = self._index_at(pos)
         if index is not None:
             self.select(index)
             self.image_activated.emit(index)
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:             # noqa: N802 (Qt 命名)
+        """悬停角标：把它画成红色 + tooltip 写成「移除第 N 张」（移开恢复原提示）。"""
+        hover = self._close_index_at(event.position().toPoint())
+        if hover != self._hover_close:
+            self._hover_close = hover
+            self.setToolTip(self._hint_text if hover is None else f"移除第 {hover + 1} 张")
+            self.update()
+        super().mouseMoveEvent(event)
+
+    def leaveEvent(self, event) -> None:                 # noqa: N802 (Qt 命名)
+        if self._hover_close is not None:
+            self._hover_close = None
+            self.setToolTip(self._hint_text)
+            self.update()
+        super().leaveEvent(event)
+
+    def _on_context_menu(self, pos) -> None:
+        """右键菜单：移除鼠标下那张 / 清空全部（列表为空时不弹）。"""
+        if not self._images:
+            return
+        from PySide6.QtWidgets import QMenu
+
+        index = self._index_at(pos)
+        menu = QMenu(self)
+        if index is not None:
+            remove = menu.addAction(f"移除第 {index + 1} 张")
+            remove.triggered.connect(lambda _checked=False, i=index: self.remove_requested.emit(i))
+        clear = menu.addAction("清空全部")
+        clear.triggered.connect(lambda _checked=False: self.clear_requested.emit())
+        menu.exec(self.mapToGlobal(pos))
 
     def _on_context_menu(self, pos) -> None:
         """右键菜单：移除鼠标下那张 / 清空全部（列表为空时不弹）。"""

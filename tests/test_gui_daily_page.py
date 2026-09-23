@@ -42,6 +42,18 @@ def _page(config: AppConfig | None = None, changes: list[str] | None = None) -> 
     return DailyPage(config or AppConfig.default(), lambda: changes.append("dirty"))
 
 
+def _hover(widget, pos) -> None:
+    """给控件发一个真实的鼠标移动事件（offscreen 下 `QTest.mouseMove` 不一定投递，这样最稳）。"""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+
+    event = QMouseEvent(
+        QEvent.Type.MouseMove, QPointF(pos), QPointF(widget.mapToGlobal(pos)),
+        Qt.MouseButton.NoButton, Qt.MouseButton.NoButton, Qt.KeyboardModifier.NoModifier,
+    )
+    QApplication.sendEvent(widget, event)
+
+
 def test_daily_page_is_scrollable_with_the_designed_groups() -> None:
     """页签规则：必须继承 ScrollablePage（否则会顶高页签区），且三个大分组齐全。"""
     page = _page()
@@ -432,13 +444,13 @@ def test_daily_page_shows_a_summary_and_thumbnails_for_multiple_images() -> None
 
     page.show()
     _APP.processEvents()
-    QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=strip._item_rect(2).center())
+    QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=strip.item_rect(2).center())
     assert page.selected_index("coop") == 2
     assert page.preview_widget("coop").image() is images[2]             # 点缩略图＝换大图
 
     activated: list[tuple[str, int]] = []
     page.preview_requested.connect(lambda prefix, index: activated.append((prefix, index)))
-    QTest.mouseDClick(strip, Qt.MouseButton.LeftButton, pos=strip._item_rect(1).center())
+    QTest.mouseDClick(strip, Qt.MouseButton.LeftButton, pos=strip.item_rect(1).center())
     assert activated == [("coop", 1)]                                   # 双击＝放大那一张
     page.close()
 
@@ -471,4 +483,96 @@ def test_daily_page_thumbnail_strip_explains_itself_when_empty() -> None:
     assert strip is not None and strip.count() == 0
     assert "可一次选多张" in strip.empty_text()
     assert "右键" in strip.toolTip()
+    page.close()
+
+
+def test_daily_page_thumbnail_has_a_visible_close_badge() -> None:
+    """可见的移除入口（用户 2026-09-22 选定）：每张缩略图右上角有「×」角标，点它删这张。
+
+    角标必须真的画在图内（不是画到框外）、**点角标只删那张、不改当前选中项**，
+    点缩略图中间仍然是"看大图"（两条路径不许互相吃掉）。
+    """
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
+
+    page = _page()
+    image = QImage(6, 4, QImage.Format.Format_RGB32)
+    image.fill(0x336699)
+    page.set_reference_images("coop", ["a.png", "b.png", "c.png"], [image, image, image])
+    strip = page.thumbnail_strip("coop")
+    removed: list[tuple[str, int]] = []
+    page.remove_image_requested.connect(lambda prefix, index: removed.append((prefix, index)))
+
+    for index in range(3):                                   # 每一格都得有角标
+        badge = strip.close_badge_rect(index)
+        assert strip.item_rect(index).contains(badge), index
+    assert strip.item_rect(0).width() > strip.close_badge_rect(0).width()
+
+    page.show()
+    _APP.processEvents()
+    QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=strip.item_rect(2).center())
+    assert page.selected_index("coop") == 2                  # 先选第 3 张
+    removed.clear()
+
+    QTest.mouseClick(strip, Qt.MouseButton.LeftButton, pos=strip.close_badge_rect(0).center())
+
+    assert removed == [("coop", 0)]                          # 点第 1 张的 × → 只删第 1 张
+    assert page.selected_index("coop") == 2                  # 选中项没被角标点掉
+
+    _hover(strip, strip.close_badge_rect(1).center())        # 悬停角标要提示这是删哪张
+    assert "移除第 2 张" in strip.toolTip()
+    _hover(strip, strip.item_rect(1).center())
+    assert "移除第" not in strip.toolTip()                   # 移开就恢复原提示
+    page.close()
+
+
+def test_daily_page_has_a_visible_clear_button_next_to_the_strip() -> None:
+    """缩略图条旁边有可见的「清空全部」按钮（右键菜单之外的第二条路）：没图时禁用，有图时可用。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtGui import QImage
+    from PySide6.QtTest import QTest
+
+    page = _page()
+    strip = page.thumbnail_strip("land")
+    button = page.findChild(QPushButton, "land_clear_images")
+    assert button is not None and button.text() == "清空全部"
+    assert button.isEnabled() is False                       # 还没选图
+    assert "没有可清空" in button.toolTip()
+
+    image = QImage(4, 4, QImage.Format.Format_RGB32)
+    page.set_reference_images("land", ["a.png", "b.png"], [image, image])
+    assert button.isEnabled() is True
+    cleared: list[str] = []
+    page.clear_images_requested.connect(cleared.append)
+
+    page.show()
+    _APP.processEvents()
+    QTest.mouseClick(button, Qt.MouseButton.LeftButton)
+
+    assert cleared == ["land"]
+    page.set_reference_images("land", [], [])
+    assert button.isEnabled() is False                       # 清空之后又回到禁用
+    page.close()
+
+
+def test_daily_page_clear_button_sits_beside_the_thumbnail_strip() -> None:
+    """「清空全部」按钮必须与缩略图条**在同一行、且在它右边**（不是另起一行藏起来）。"""
+    from PySide6.QtCore import QPoint, QRect
+    from PySide6.QtGui import QImage
+
+    def rect_of(widget) -> QRect:
+        return QRect(widget.mapTo(page, QPoint(0, 0)), widget.size())
+
+    page = _page()
+    image = QImage(4, 4, QImage.Format.Format_RGB32)
+    page.set_reference_images("aqua", ["a.png"], [image])
+    page.show()
+    _APP.processEvents()
+
+    strip = rect_of(page.thumbnail_strip("aqua"))
+    button = rect_of(page.findChild(QPushButton, "aqua_clear_images"))
+
+    assert button.left() >= strip.right()                                  # 紧跟在条的右边
+    assert abs(button.center().y() - strip.center().y()) <= strip.height()
     page.close()
