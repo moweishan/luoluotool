@@ -60,6 +60,7 @@ from luoluotool.utils.paths import (
 
 from luoluotool.gui.elevation_flow import ElevationFlowMixin
 from luoluotool.gui.icons import load_window_icon
+from luoluotool.gui.step_debug import StepDebugMixin
 from luoluotool.gui.workers import (
     _CaptureThread,
     _DebugTestThread,
@@ -89,7 +90,7 @@ def _default_runner_factory(config: AppConfig) -> Runner:
     return Runner(config)
 
 
-class MainWindow(ElevationFlowMixin, QMainWindow):
+class MainWindow(StepDebugMixin, ElevationFlowMixin, QMainWindow):
     """LuoLooTool 主窗口：仅展示与绑定；文件/任务逻辑调用 config/core 模块。"""
 
     def __init__(
@@ -132,6 +133,8 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         for page, title in zip(pages, TAB_TITLES):
             self.tabs.addTab(page, title)
         self.debug_page = DebugPage(self._config, self._mark_dirty)
+        # 单步运行（调试）要在这里建：下面的 _apply_developer_mode() 会复位它
+        self.build_step_controls()
         self._debug_thread: _DebugTestThread | None = None
         self._capture_thread: _CaptureThread | None = None
         # 日常任务页的「选择图片 / 截取游戏画面 / 放大预览」：页面只发信号，动作都在这里做
@@ -148,6 +151,7 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         self.debug_page.layout_measure_requested.connect(self._on_measure_layout)
         self.debug_page.crop_requested.connect(self._on_crop_requested)
         self.debug_page.test_requested.connect(self._on_debug_test)
+        self.debug_page.step_mode_toggled.connect(self._on_step_mode_toggled)
         self.settings_page.restart_admin_button.clicked.connect(self._on_restart_admin_clicked)
         self.save_button = QPushButton("保存")
         self.save_button.clicked.connect(self._save)
@@ -170,6 +174,7 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         buttons.addWidget(self.reset_button)
         buttons.addWidget(self.start_button)
         buttons.addWidget(self.stop_button)
+        self.add_step_buttons(buttons)               # 单步：两个按钮在「停止」的最右边
         buttons.addStretch(1)
         central = QWidget(self)
         layout = QVBoxLayout(central)
@@ -349,6 +354,9 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
             return
         logger.info("启动任务（%s）", "干跑" if dry_run else "真实模式")
         self._runner = self._runner_factory(self._config)
+        # 单步（调试）：只有真的勾了才把控制器挂给 Runner —— 没勾时 ctx.stepper 是 None，
+        # 任务侧的 step_gate 直接放行，非单步路径零开销
+        self.attach_stepper_to_runner(self._runner)
         self._thread = _RunnerThread(self._runner, self)
         self._thread.finished.connect(self._on_runner_finished)
         self.start_button.setEnabled(False)
@@ -443,6 +451,9 @@ class MainWindow(ElevationFlowMixin, QMainWindow):
         index = self.tabs.indexOf(self.debug_page)
         enabled = bool(self._config.automation.developer_mode)
         self.debug_page.setEnabled(enabled)
+        if not enabled:
+            # 未开启时本页选项一律不生效：单步运行也一并复位（两个按钮随之隐藏）
+            self.reset_step_mode()
         if enabled and index < 0:
             self.tabs.addTab(self.debug_page, DEBUG_TAB_TITLE)
             logger.info("已启用开发者调试页")

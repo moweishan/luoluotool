@@ -77,6 +77,7 @@ class DebugPage(ScrollablePage):
     diagnose_requested = Signal()
     layout_measure_requested = Signal()
     crop_requested = Signal()
+    step_mode_toggled = Signal(bool)      # 单步运行开关（**不写配置**，主窗口拿它显示两个按钮）
 
     def __init__(self, config: AppConfig, on_changed: Callable[[], None]) -> None:
         super().__init__()
@@ -85,6 +86,19 @@ class DebugPage(ScrollablePage):
         # 内容自动进入 QScrollArea（见 ScrollablePage）：本页控件最多，若直接铺在页面上
         # 会成为 QTabWidget 的最小高度并顶高所有页签。
         layout = QVBoxLayout(self.content)
+
+        # ---- 单步运行（调试，2026-09-22 用户要求：放在本页**最上方**） ----
+        self.step_mode_box = QCheckBox("单步运行（每点一次「下一步」脚本才走一步）")
+        self.step_mode_box.setToolTip(
+            "勾上后点主界面「启动」：脚本会停在每一步门口，**点一次「下一步」才走一步**；\n"
+            "「上一步」把步骤指针退回一格、并把光标移回那一步的位置（**不重放**任何点击/按键/滑动）。\n"
+            "两个按钮出现在主界面「停止」的右边，只有勾了本项才显示。\n"
+            "「一步」＝一个动作（点击 / 滑动 / 按键各算一步）。\n"
+            "本开关**不写进配置文件**，只对本次运行有效（避免忘了关导致下次启动「卡住不动」）；\n"
+            "需要先开启设置页的「开发者调试」才生效。"
+        )
+        self.step_mode_box.toggled.connect(self._on_step_mode_toggled)
+        layout.addWidget(self.step_mode_box)
 
         # ---- 干跑模式（从设置页移入） ----
         self.dry_run_box = QCheckBox("干跑模式（仅模拟输出日志，不产生真实键鼠操作）")
@@ -346,6 +360,31 @@ class DebugPage(ScrollablePage):
             self.add_vision_template(path)
 
     # ------------------------------------------------------------------ 槽
+
+    def set_step_mode(self, enabled: bool) -> None:
+        """程序化设置单步开关（**不发信号**）：主窗口在关闭「开发者调试」时用它复位。"""
+        self.step_mode_box.blockSignals(True)
+        self.step_mode_box.setChecked(bool(enabled))
+        self.step_mode_box.blockSignals(False)
+
+    def step_mode_enabled(self) -> bool:
+        """单步运行是否开着（主窗口据此决定「上一步 / 下一步」显不显示）。"""
+        return bool(self.step_mode_box.isChecked())
+
+    def _on_step_mode_toggled(self) -> None:
+        """单步运行开关：仅在「开发者调试」开启时生效；**不写配置**（用户 2026-09-22 选定）。"""
+        if not self._config.automation.developer_mode:
+            logger.warning("开发者调试未开启，忽略单步运行开关变更（本页选项不生效）")
+            self.set_step_mode(False)
+            self.set_status("开发者调试未开启：本页所有选项不生效（单步运行未开启）")
+            return
+        enabled = self.step_mode_enabled()
+        self.set_status(
+            "单步运行已开启：点「启动」后每点一次「下一步」走一步"
+            "（按钮在主界面「停止」右边；「上一步」只回退状态、不重放动作）"
+            if enabled else "单步运行已关闭"
+        )
+        self.step_mode_toggled.emit(enabled)
 
     def _on_dry_run_toggled(self) -> None:
         """干跑开关：仅在「开发者调试」开启时生效；未开启则回滚勾选、不写配置。"""
