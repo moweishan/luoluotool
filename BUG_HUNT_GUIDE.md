@@ -680,19 +680,19 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `_render_client_bits_printwindow` | `automation/vision.py:156` | PrintWindow（整窗渲染 + 裁剪） |
 | `client_area_offset` | `automation/window.py:80` | 客户区在窗口内的偏移（唯一真源） |
 | `screenshot_client` | `automation/window.py:94` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
-| `build_channel` | `automation/input_sender.py:516` | 干跑/真实通道选择 |
-| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:457` / `:472` | 越界校验 |
+| `build_channel` | `automation/input_sender.py:557` | 干跑/真实通道选择 |
+| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:498` / `:513` | 越界校验 |
 | `RealInputSender.click_at` / `drag` | `automation/input_sender.py:42` / `:46` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长；协议里的同名方法在 `:42`/`:46`） |
-| `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:207` / `:222` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
-| `_restore_cursor_after_click` / `_restore_cursor_after_drag` | `automation/input_sender.py:188` / `:323` | 延迟 + 分帧小步还原光标（点击/滑动同一套做法） |
+| `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:226` / `:241` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
+| `_restore_cursor_after_click` / `_restore_cursor_after_drag` | `automation/input_sender.py:207` / `:342` | 延迟 + 分帧小步还原光标（点击/滑动同一套做法） |
 | `CLICK_CURSOR_TOLERANCE_PX` / `CLICK_MOVE_STEP_SECONDS` / `CLICK_RESTORE_DELAY_SECONDS` | `automation/input_sender.py:26` / `:27` / `:28` | 4px / 30ms / 350ms（输入时间线三档） |
 | `INPUT_SETTLE_SECONDS` / `FRONT_SETTLE_SECONDS` | `automation/real_input.py:69` / `:70` | 80ms（按下前）/ 200ms（置前后） |
 | `send_left_click` | `automation/real_input.py:344` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
 | `window_under_point` / `describe_window` | `automation/real_input.py:166` / `:184` | 命中测试与窗口描述（诊断"点击落在谁身上"） |
 | `run_single_click` | `core/debug.py:98` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
 | `_validate_click_hold` | `core/debug.py:56` | 点击时长校验（0–5000 ms，整数、非布尔） |
-| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:189` / `:216` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
-| `restore_cursor_box` | `gui/pages/debug.py:95` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
+| `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:203` / `:230` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
+| `restore_cursor_box` | `gui/pages/debug.py:109` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
 | `settings_page.developer_box` | `gui/pages/settings.py:48` | 设置页「开发者调试」开关（决定调试页是否挂载/生效） |
 | `show_hotkey_hint` | `gui/pages/settings.py:89` | 设置页红字提示（急停热键不可用等，评审 P3-9） |
 | `run_repeat_click` | `core/debug.py:124` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待，可被急停打断） |
@@ -706,7 +706,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:445` / `:507` | 方向键微调 / Ctrl 调单边 |
 | `image_rect` / `_set_zoom` / `wheelEvent` | `gui/dialogs/crop_view_zoom.py:42` / `:108` / `:149` | 图像显示矩形（缩放+平移）/ 以鼠标为锚点缩放 / 滚轮缩放 |
 | `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:160` / `:177` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
-| `zoom_slider` / `zoom_reset_button` | `gui/dialogs/crop_dialog.py:147` / `:161` | 缩放滑条（相对整图适配 50%–800%）/ 「重置」按钮 |
+| `zoom_slider` / `zoom_reset_button` | `gui/dialogs/crop_dialog.py:150` / `:164` | 缩放滑条（相对整图适配 50%–800%）/ 「重置」按钮 |
 | `zoom_slider_to_zoom` / `zoom_to_slider` | `gui/dialogs/crop_dialog.py:81` / `:98` | 滑条刻度换算（对数：每 1/4 行程翻一倍，互为反函数）|
 | `reset_all` / `_sync_zoom_controls` | `gui/dialogs/crop_dialog.py:282` / `:269` | 重置（视图归位 + 清空选区）/ 缩放状态同步回滑条 |
 | `clear_selection` | `gui/dialogs/crop_view.py:131` | 清空选区（双击 / Esc / 重置共用）|
@@ -722,13 +722,13 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `DebugPage` | `gui/pages/debug.py:68` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
 | `AboutPage` | `gui/pages/about.py:79` | 「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断、打开目录） |
 | `diagnostics_text` | `gui/pages/about.py:222` | 可复制的诊断信息（只含版本与环境，不含日志/截图内容） |
-| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:465` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
-| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:506` / `:542` | 框选回填 / 框选入口（门禁 + 后台截图） |
-| `_debug_actions_allowed` | `gui/main_window.py:457` | 开发者调试门禁 |
-| `_register_hotkey_or_hint` | `gui/main_window.py:276` | 热键注册 + 失败显著提示（评审 P3-9） |
-| `_wait_for_threads` | `gui/main_window.py:227` | 关窗等齐 4 个后台线程（评审 P2-6） |
+| `_on_debug_test` / `run_debug_action` | `gui/main_window.py:476` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
+| `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:517` / `:553` | 框选回填 / 框选入口（门禁 + 后台截图） |
+| `_debug_actions_allowed` | `gui/main_window.py:468` | 开发者调试门禁 |
+| `_register_hotkey_or_hint` | `gui/main_window.py:281` | 热键注册 + 失败显著提示（评审 P3-9） |
+| `_wait_for_threads` | `gui/main_window.py:232` | 关窗等齐 4 个后台线程（评审 P2-6） |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:170` / `:238` | 布局测量与报告 |
-| `Runner.start` | `core/runner.py:82` | 任务顺序执行/循环/失败计数 |
+| `Runner.start` | `core/runner.py:86` | 任务顺序执行/循环/失败计数 |
 | `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁，评审 P3-1） |
 | `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样，评审 P1-2） |
 | `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
@@ -736,7 +736,7 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
 | `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:65` / `:55` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
 | `prepare_for_match` | `automation/template_match.py:196` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
-| `_on_vision_add_clicked` | `gui/pages/debug.py:429` | 「添加图片…」对话框默认打开 `assets/templates` |
+| `_on_vision_add_clicked` | `gui/pages/debug.py:468` | 「添加图片…」对话框默认打开 `assets/templates` |
 | `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
 | `ease_out_quad` / `interpolate_points` | `automation/drag_path.py:22` / `:27` | 滑动缓出曲线 / 分帧插值（纯函数） |
 | `scale_candidates` | `automation/multiscale.py:45` | 粗搜档位生成（按步长枚举比例） |
