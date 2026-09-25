@@ -49,6 +49,17 @@ class InputSender(Protocol):
 
     def key_hold(self, combo: str, seconds: float) -> None: ...
 
+    def cursor_position(self) -> tuple[int, int] | None:
+        """当前光标屏幕坐标；拿不到（或干跑）返回 None。
+
+        单步运行（调试）用它记录"每一步跑完之后光标在哪"，供「上一步」回位。
+        """
+        ...
+
+    def move_cursor(self, x: int, y: int) -> None:
+        """**只移动光标、不点击**（单步「上一步」回位专用；干跑只写日志）。"""
+        ...
+
 
 class DryRunSender:
     """干跑模式：只写日志，绝不产生任何输入。
@@ -112,6 +123,14 @@ class DryRunSender:
 
     def key_hold(self, combo: str, seconds: float) -> None:
         self._logger.info("干跑：模拟长按 %s 持续 %.2fs", combo, seconds)
+
+    def cursor_position(self) -> tuple[int, int] | None:
+        """干跑没有真实光标可言：返回 None（单步的"光标回位"在干跑下只记日志）。"""
+        return None
+
+    def move_cursor(self, x: int, y: int) -> None:
+        """干跑：只写日志，绝不移动真实光标（单步「上一步」的回位路径也走这里）。"""
+        self._logger.info("干跑：把光标回位到 (%d, %d)（不点击）", x, y)
 
 
 class RealInputSender:
@@ -360,6 +379,28 @@ class RealInputSender:
                 )
         finally:
             self._release_topmost_if_needed(front)
+
+    def cursor_position(self) -> tuple[int, int] | None:
+        """当前光标的屏幕坐标（读不到返回 None，只记 WARNING）。
+
+        单步运行（调试）用：每步跑完记录一下，「上一步」时把光标放回去。
+        """
+        try:
+            return real_input.get_cursor_pos()
+        except Exception:                       # 读光标失败不该影响任务
+            self._logger.warning("读取光标位置失败（单步回位将没有目标）", exc_info=True)
+            return None
+
+    def move_cursor(self, x: int, y: int) -> None:
+        """**只移动光标、不点击**（单步「上一步」回位）：不校验置顶、不注入任何按键。
+
+        这里刻意不走 `_ensure_front_or_raise`：回位是"把人眼看到的运动状态倒回去"，
+        它不产生任何游戏操作，抢前台反而会打扰用户。移动失败只记 WARNING。
+        """
+        if not real_input.move_cursor_absolute(int(x), int(y)):
+            self._logger.warning("光标回位失败：(%d, %d)（单步调试可继续，只是画面没倒回去）", x, y)
+            return
+        self._logger.info("单步：光标已回位到 (%d, %d)（未点击）", x, y)
 
     def _validate_combo(self, combo: str) -> None:
         """提前解析按键文本，把"未知键名"变成可读错误（不进入注入流程）。"""

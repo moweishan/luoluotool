@@ -18,6 +18,7 @@ from luoluotool.core.registry import (
     get,
 )
 from luoluotool.core.state import RunState, StateMachine
+from luoluotool.core.step_mode import StepController
 from luoluotool.core.task import TaskContext, TaskResult
 
 logger = logging.getLogger(__name__)
@@ -50,6 +51,7 @@ class Runner:
             [AppConfig, threading.Event, Callable[[float], None], logging.Logger], InputChannel
         ]
         | None = None,
+        stepper: StepController | None = None,
     ) -> None:
         self._config = config
         self._sleep = sleep if sleep is not None else time.sleep
@@ -60,6 +62,8 @@ class Runner:
         self._finished_event = threading.Event()
         self._finished_event.set()
         self._context: TaskContext | None = None
+        # 单步运行（调试，用户 2026-09-22）：不勾时它是 None，非单步路径零开销
+        self.stepper = stepper
 
     @property
     def state(self) -> RunState:
@@ -90,6 +94,10 @@ class Runner:
         self._state_machine.transition(RunState.RUNNING)
         try:
             channel = self._channel_factory(self._config, self._stop_event, self._sleep, logger)
+            if self.stepper is not None:
+                # 单步（调试）：一轮开始时清掉上一轮残留的放行票与游标，并把"脚本开始前光标在哪"
+                # 记下来（「上一步」退到第一步时要用它回位）
+                self.stepper.begin_run(initial_cursor=channel.sender.cursor_position())
             self._context = TaskContext(
                 stop_event=self._stop_event,
                 dry_run=self._config.automation.dry_run,
@@ -97,6 +105,7 @@ class Runner:
                 sleep=self._sleep,
                 sender=channel.sender,
                 readiness_check=channel.readiness,
+                stepper=self.stepper,
             )
             self._run_loop()
         except WindowUnavailableError as exc:
@@ -106,6 +115,8 @@ class Runner:
             logger.exception("任务执行出现异常")
             self._state_machine.try_transition(RunState.ERROR)
         finally:
+            if self.stepper is not None:
+                self.stepper.end_run()             # 收尾：不再显示"正在等下一步"
             if self._state_machine.state in (RunState.RUNNING, RunState.STOPPING):
                 self._state_machine.transition(RunState.IDLE)
             self._finished_event.set()

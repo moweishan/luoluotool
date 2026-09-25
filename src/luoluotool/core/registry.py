@@ -1,6 +1,9 @@
 """任务注册表：任务 ID → 任务类；内置占位任务 A 与三个预留功能占位任务。"""
 
+from collections.abc import Callable
+
 from luoluotool.config.models import PlaceholderTaskParams
+from luoluotool.core.step_mode import StepDecision
 from luoluotool.core.task import BaseTask, TaskContext, TaskResult
 
 # 任务 ID 常量（runner 编排与注册表共用，避免两处硬编码不一致）
@@ -61,47 +64,75 @@ class PlaceholderTaskA(BaseTask):
                 '"keys": [{"combo": "ctrl+s"}], "wait_after_ms": 500}'
             )
             return TaskResult(self.task_id, True, "未配置任何步骤，跳过")
-        step = 0
-        for point in params.click_points:
+        # 把三类参数摊平成**有序步骤表**（点击 → 滑动 → 按键，与旧实现完全同序）：
+        # 单步运行（用户 2026-09-22）需要"一个动作＝一步"的粒度，并且要能被「上一步」退回。
+        steps = self._build_steps(params, ctx)
+        index = 0
+        while index < total:
             if not ctx.wait_until_ready():
-                return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
-            step += 1
-            x, y = int(point[0]), int(point[1])
-            ctx.logger.info("步骤 %d/%d：点击 (%d, %d)", step, total, x, y)
-            ctx.sender.click_at(x, y)
-            ctx.interruptible_sleep(params.wait_after_ms / 1000)
-        for swipe in params.swipes:
-            if not ctx.wait_until_ready():
-                return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
-            step += 1
-            ctx.logger.info(
-                "步骤 %d/%d：滑动 (%d, %d) → (%d, %d) 用时 %d ms",
-                step, total, swipe.from_point[0], swipe.from_point[1],
-                swipe.to_point[0], swipe.to_point[1], swipe.duration_ms,
-            )
-            ctx.sender.drag(
-                (int(swipe.from_point[0]), int(swipe.from_point[1])),
-                (int(swipe.to_point[0]), int(swipe.to_point[1])),
-                swipe.duration_ms / 1000,
-            )
-            ctx.interruptible_sleep(swipe.wait_after_ms / 1000)
-        for item in params.keys:
-            if not ctx.wait_until_ready():
-                return TaskResult(self.task_id, True, f"第 {step + 1} 步前收到停止请求")
-            step += 1
-            if item.hold_ms > 0:
-                ctx.logger.info(
-                    "步骤 %d/%d：长按 %s 持续 %d ms", step, total, item.combo, item.hold_ms
-                )
-                ctx.sender.key_hold(item.combo, item.hold_ms / 1000)
-            else:
-                ctx.logger.info("步骤 %d/%d：按键 %s", step, total, item.combo)
-                ctx.sender.key_combo(item.combo)
-            ctx.interruptible_sleep(item.wait_after_ms / 1000)
+                return TaskResult(self.task_id, True, f"第 {index + 1} 步前收到停止请求")
+            label, action, wait_after_ms = steps[index]
+            decision, restore_to = ctx.step_gate(index, total, label)
+            if decision == StepDecision.STOPPED:
+                return TaskResult(self.task_id, True, f"第 {index + 1} 步前收到停止请求")
+            if decision == StepDecision.REWOUND:
+                # 「上一步」：指针退回去了 —— **不执行这一步**，只把光标放回那一步的位置
+                if restore_to is not None:
+                    ctx.sender.move_cursor(int(restore_to[0]), int(restore_to[1]))
+                index = ctx.stepper.index() if ctx.stepper is not None else index
+                continue
+            ctx.logger.info("步骤 %d/%d：%s", index + 1, total, label)
+            action()
+            ctx.step_done(index)
+            index += 1
+            ctx.interruptible_sleep(wait_after_ms / 1000)
         return TaskResult(
             self.task_id, True,
             f"完成 {total} 步（点击 {click_total}，滑动 {swipe_total}，按键 {key_total}）",
         )
+
+    @staticmethod
+    def _build_steps(
+        params: PlaceholderTaskParams, ctx: TaskContext
+    ) -> list[tuple[str, Callable[[], None], int]]:
+        """把参数摊平成步骤表：`(日志文案, 动作, 该步之后的等待毫秒数)`。
+
+        顺序与旧实现一字不差：先全部点击、再全部滑动、最后全部按键；
+        文案也与旧日志保持一致（单步运行时它就是"这一步在干什么"的显示文案）。
+        """
+        steps: list[tuple[str, Callable[[], None], int]] = []
+        for point in params.click_points:
+            x, y = int(point[0]), int(point[1])
+            steps.append((
+                f"点击 ({x}, {y})",
+                lambda x=x, y=y: ctx.sender.click_at(x, y),
+                params.wait_after_ms,
+            ))
+        for swipe in params.swipes:
+            from_point = (int(swipe.from_point[0]), int(swipe.from_point[1]))
+            to_point = (int(swipe.to_point[0]), int(swipe.to_point[1]))
+            seconds = swipe.duration_ms / 1000
+            steps.append((
+                f"滑动 ({from_point[0]}, {from_point[1]}) → ({to_point[0]}, {to_point[1]})"
+                f" 用时 {swipe.duration_ms} ms",
+                lambda f=from_point, t=to_point, s=seconds: ctx.sender.drag(f, t, s),
+                swipe.wait_after_ms,
+            ))
+        for item in params.keys:
+            if item.hold_ms > 0:
+                seconds = item.hold_ms / 1000
+                steps.append((
+                    f"长按 {item.combo} 持续 {item.hold_ms} ms",
+                    lambda c=item.combo, s=seconds: ctx.sender.key_hold(c, s),
+                    item.wait_after_ms,
+                ))
+            else:
+                steps.append((
+                    f"按键 {item.combo}",
+                    lambda c=item.combo: ctx.sender.key_combo(c),
+                    item.wait_after_ms,
+                ))
+        return steps
 
 
 class PlaceholderFeatureTask(BaseTask):

@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from luoluotool.automation.input_sender import DryRunSender, InputSender
+from luoluotool.core.step_mode import StepController, StepDecision
 
 DEFAULT_TASK_LOGGER_NAME = "luoluotool.core"
 
@@ -24,6 +25,7 @@ class TaskContext:
     params: dict = field(default_factory=dict)
     sender: InputSender = field(default_factory=DryRunSender)
     readiness_check: Callable[[], bool] | None = None
+    stepper: "StepController | None" = None      # 单步运行（调试）；None＝不单步
 
     def should_stop(self) -> bool:
         """是否已收到停止请求。"""
@@ -47,6 +49,21 @@ class TaskContext:
         if self.readiness_check is None:
             return True
         return self.readiness_check()
+
+    def step_gate(self, index: int, total: int,
+                  label: str) -> tuple[str, tuple[int, int] | None]:
+        """在第 index 步**执行前**调用：单步模式下在这里等「下一步」。
+
+        返回 `(StepDecision.X, 回位目标)`；没挂单步控制器时永远 `(RUN, None)`。
+        """
+        if self.stepper is None:
+            return (StepDecision.RUN, None)
+        return self.stepper.gate(index, total, label, should_stop=self.should_stop)
+
+    def step_done(self, index: int) -> None:
+        """第 index 步执行完：交回单步控制器记游标与指针（没挂控制器时什么都不做）。"""
+        if self.stepper is not None:
+            self.stepper.complete(index, self.sender.cursor_position())
 
 
 @dataclass
