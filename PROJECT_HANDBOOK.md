@@ -1,10 +1,13 @@
-# LuoLuoTool — 项目初始化文件夹
+# PROJECT_HANDBOOK.md — LuoLuoTool 工程手册
 
-本文件夹是 **LuoLuoTool**（《桃源深处有人家》Windows 自动化挂机工具）的工程初始化包，
-专为「AI 代码编辑器（Codex / Cursor / Claude Code / Windsurf）驱动开发」设计。
+> **这个文件是什么**：**工程手册**（原 `README.md`，2026-09-22 改名 —— 它的内容是工程初始化、
+> 阶段流程、关键决策、构建发布与实测数据，属"动手改它 / 接手它"的人看的资料，不是 README 的职责）。
+> **想了解"这个工具是什么、怎么装、怎么用"，请看 `README.md`**（用户视角）。
 
-它不包含业务代码，只包含**给 AI 看的工程文档 + 目录骨架**。代码由 AI 按
-`PHASE_PROMPTS.md` 中的阶段提示词逐步生成，人类只需复制粘贴提示词并验收。
+本仓库是 **LuoLuoTool**（《桃源深处有人家》Windows 自动化挂机工具）的工程包，
+按「AI 代码编辑器（Codex / Cursor / Claude Code / Windsurf）驱动开发」的方式推进：
+代码由 AI 按 `PHASE_PROMPTS.md` 的阶段提示词逐步生成，人类复制粘贴提示词、
+按阶段验收（验收状态见 `CHECKLIST.md`）。
 
 ---
 
@@ -12,7 +15,8 @@
 
 | 文件 | 作用 | 给谁看 | 什么时候看 |
 |---|---|---|---|
-| `README.md` | 本说明：文件怎么用、第一条 prompt 怎么写 | 人 + AI | 现在 |
+| `README.md` | **用户视角的使用说明**：这是什么、装什么、怎么用、配置与 FAQ、风险声明 | 人（第一次拿到仓库的人） | 先看这个 |
+| `PROJECT_HANDBOOK.md` | **本文件（工程手册）**：文件怎么用、第一条 prompt 怎么写、关键决策速览、构建发布、实测数据 | 人 + AI | 要动手改这个工程时 |
 | `PROJECT_SPEC.md` | 完整项目背景：目标、范围、边界、技术栈、数据结构、验收标准 | AI（长期上下文） | 每个新会话都要让 AI 读 |
 | `AGENTS.md` | 长期开发规范：编码原则、禁止事项、测试/提交要求、小步推进方法 | AI（Codex/Cursor/Claude Code/Windsurf 自动识别） | 每个新会话自动加载 |
 | `DATA_API_PREP.md` | 外部服务/API/密钥/本地资源准备清单 | 人 | 开始开发前先看完 |
@@ -24,7 +28,8 @@
 
 ```
 LuoLuoTool/
-├── README.md                 # 本文件
+├── README.md                 # 用户视角的使用说明（先看这个）
+├── PROJECT_HANDBOOK.md       # 本文件：工程手册
 ├── AGENTS.md                 # 长期开发规范
 ├── PROJECT_SPEC.md           # 项目完整说明书
 ├── DATA_API_PREP.md          # 外部服务/本地资源准备清单
@@ -55,8 +60,9 @@ LuoLuoTool/
 └── packaging/                # PyInstaller spec / 图标 / 版本信息（Phase 7）
 ```
 
-> 说明：现在只有文档和目录骨架，**没有任何业务代码**。这是故意的——所有代码
-> 都必须按 `PHASE_PROMPTS.md` 一个阶段一个阶段地生成并验收。
+> 说明（2026-09-22 更新）：**阶段 0 时**这里只有文档和目录骨架，代码按 `PHASE_PROMPTS.md`
+> 一个阶段一个阶段生成并验收；**现在业务代码已经落地**（六个页签 + 图像识别 + 打包脚本），
+> 当前功能状态见 `README.md` 与 `CHECKLIST.md`。
 
 ## 3. 使用流程（总览）
 

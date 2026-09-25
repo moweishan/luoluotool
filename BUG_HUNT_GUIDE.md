@@ -10,7 +10,7 @@
 > **维护约定**：改了代码就回来更新对应小节（尤其是第 ③④⑤ 节），否则本文档会变成误导。
 >
 > 配套文档：`AGENTS.md`（开发规范/红线，**必读**）、`PROJECT_SPEC.md`（边界与功能表）、
-> `CHECKLIST.md`（逐项勾选清单）、`PHASE_PROMPTS.md`（分阶段记录）、`README.md`（用户视角）。
+> `CHECKLIST.md`（逐项勾选清单）、`PHASE_PROMPTS.md`（分阶段记录）、`README.md`（用户视角的使用说明）、`PROJECT_HANDBOOK.md`（工程手册：构建发布/实测数据/决策速览）。
 
 ---
 
