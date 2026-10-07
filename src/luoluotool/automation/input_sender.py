@@ -185,13 +185,24 @@ class RealInputSender:
             # 光标位置必须在 try 内读取：万一这里抛异常，finally 仍要取消我们设置的置顶
             saved = real_input.get_cursor_pos()
             screen = real_input.client_to_screen(self.hwnd, (x, y))
-            self._move_cursor_for_click(saved, screen)
+            if not self._move_cursor_for_click(saved, screen):
+                self._logger.info("点击前收到停止请求，已取消本次点击")
+                return
             self._sleep(real_input.INPUT_SETTLE_SECONDS)
+            if self._stop_event is not None and self._stop_event.is_set():
+                self._logger.info("点击前收到停止请求，已取消本次点击")
+                return
             if not self._verify_before_press(x, y, screen):
+                return
+            if self._stop_event is not None and self._stop_event.is_set():
+                self._logger.info("点击前收到停止请求，已取消本次点击")
                 return
             if not real_input.send_left_click(
                 self._sleep, hold_seconds=hold_seconds, stop_event=self._stop_event
             ):
+                if self._stop_event is not None and self._stop_event.is_set():
+                    self._logger.info("点击开始前收到停止请求，未按下左键")
+                    return
                 raise WindowUnavailableError("真实鼠标点击注入失败（SendInput 未被系统接受）")
             clicked = True
             hold_text = "" if hold_seconds is None else f"，点击时长 {hold_seconds * 1000:.0f} ms"
@@ -223,7 +234,7 @@ class RealInputSender:
         else:
             self._logger.warning("真实光标可能未完全移回点击前的位置 (%d, %d)", saved[0], saved[1])
 
-    def _move_cursor_for_click(self, start: tuple[int, int] | None, target: tuple[int, int]) -> None:
+    def _move_cursor_for_click(self, start: tuple[int, int] | None, target: tuple[int, int]) -> bool:
         """把光标移到点击目标；分两步走（先到中途点），让游戏先收到"指针移进来/hover"再收到按下。
 
         为什么（2026-09-20 用户实测"某页能点、另一页点不动"）：一次绝对跳跃只产生一条移动事件，
@@ -231,12 +242,19 @@ class RealInputSender:
         `CLICK_MOVE_STEP_SECONDS`，让游戏先在当前帧建立 hover 再处理按下。
         光标本来就在目标上时不发多余移动。
         """
+        if self._stop_event is not None and self._stop_event.is_set():
+            return False
         if start is not None:
             middle = ((int(start[0]) + int(target[0])) // 2, (int(start[1]) + int(target[1])) // 2)
             if middle != (int(target[0]), int(target[1])):
                 real_input.move_cursor_absolute(*middle)
                 self._sleep(CLICK_MOVE_STEP_SECONDS)
+                if self._stop_event is not None and self._stop_event.is_set():
+                    return False
+        if self._stop_event is not None and self._stop_event.is_set():
+            return False
         real_input.move_cursor_absolute(*target)
+        return True
 
     def _verify_before_press(self, x: int, y: int, screen: tuple[int, int]) -> bool:
         """按下左键前核对"事实"，返回是否继续点击。

@@ -72,6 +72,15 @@ def test_send_left_click_checks_stop_while_holding(user32) -> None:
     assert sum(slept) < 1.0                 # 被停止请求提前打断
 
 
+def test_send_left_click_does_not_press_when_already_stopped(user32) -> None:
+    """点击开始前停止事件已置位时，不发送按下或抬起事件。"""
+    stop = threading.Event()
+    stop.set()
+
+    assert real_input.send_left_click(stop_event=stop) is False
+    assert user32.sent == []
+
+
 def test_send_left_click_releases_when_sleep_raises(user32) -> None:
     """按住期间 sleep 抛异常（例如被中断）：仍必须抬起左键。"""
     def boom(_seconds: float) -> None:
@@ -150,6 +159,20 @@ def test_click_moves_cursor_in_two_steps_before_press(recording) -> None:
     assert moves == [("move_cursor", 465, 350), ("move_cursor", 130, 100)]
     click_index = recording.events.index(("click",))
     assert recording.events.index(moves[-1]) < click_index        # 两次移动都在按下之前
+
+
+def test_click_does_not_press_after_stop_during_settle(recording) -> None:
+    """急停在按下前的稳定等待期间到达时，不得再开始一次点击。"""
+    stop = threading.Event()
+
+    def sleep(seconds: float) -> None:
+        if seconds == real_input.INPUT_SETTLE_SECONDS:
+            stop.set()
+
+    sender = RealInputSender(555, restore_cursor=False, sleep=sleep, stop_event=stop)
+    sender.click_at(120, 80)
+
+    assert ("click",) not in recording.events
 
 
 def test_click_skips_intermediate_move_when_already_at_target(recording, monkeypatch) -> None:

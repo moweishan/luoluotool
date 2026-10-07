@@ -355,6 +355,9 @@ def send_left_click(
     - 无论正常结束、被中断还是 `sleep` 抛异常，都在 `finally` 里抬起左键。
     """
     hold = CLICK_HOLD_SECONDS if hold_seconds is None else max(float(hold_seconds), 0.0)
+    if stop_event is not None and getattr(stop_event, "is_set", lambda: False)():
+        logger.info("点击开始前收到停止请求，未按下左键")
+        return False
     ok = _send([_mouse_input(MOUSEEVENTF_LEFTDOWN)])
     try:
         remaining = hold
