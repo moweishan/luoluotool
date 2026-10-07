@@ -230,7 +230,7 @@
 
 用户 2026-09-21 明确：**禁止把通知/推送做成软件功能**（§4 第 9 条），但**必须为后续计划新增的功能留下缺口** —— 该功能就是「**软件启动时从远程服务器远程加载或更新配置项**」。
 
-**现状（截至 2026-09-21）：未实现。** 程序里目前**没有任何联网代码**（`src/` 无网络相关 import；`requirements.txt` 只有 PySide6 / pywin32 / numpy / opencv-python-headless，无 HTTP 客户端）。**禁止对外宣称这条功能可用**；在真正实现之前，**代码里也不得预埋**任何联网模块、接口、空函数或"以后可能用到"的抽象（`AGENTS.md` §7）—— **缺口只保留在本节与 `CHECKLIST.md` 的待办里**。
+**现状（截至 2026-10-07）：未实现。** 程序里目前**没有任何联网代码**（`src/` 无网络相关 import；`requirements.txt` 只有 PySide6 / pywin32 / numpy / opencv-python-headless，无 HTTP 客户端）。**禁止对外宣称这条功能可用**；在真正实现之前，**代码里也不得预埋**任何联网模块、接口、空函数或"以后可能用到"的抽象（`AGENTS.md` §7）—— **缺口只保留在本节与 `CHECKLIST.md` 的待办里**。
 
 将来实现时**必须**遵守的硬约束（逐条与既有红线对齐）：
 
@@ -502,20 +502,23 @@ LuoLuoTool/
 - [ ] 功能三/四：页签可切换，开关可存可读，页面不报错；开关开启即入队（Phase 6 同上）。
 - [ ] 任务编排：日常任务组 + 单功能组按规则合并、顺序确定、失败计数统一（有测试证明）。
 
-### 阶段验收概览
+### 历史阶段验收概览
+
+> 下表记录 Phase 0–7 的原始验收目标，用于追溯历史实施过程；它不是当前阶段授权，也不表示所有早期描述仍是现行规格。当前功能与边界以本文前文、`README.md` 和实际代码为准。
+
 | 阶段 | 核心验收 |
 |---|---|
-| Phase 0 | `python -m luoluotool --version` / `--smoke-gui` 通过，空窗口四页签 |
+| Phase 0 | 历史基线：CLI 冒烟通过，初始空窗口四页签（已被后续 GUI 阶段扩展） |
 | Phase 1 | 配置读写/校验单测全绿，`--validate-config` 可用 |
 | Phase 2 | GUI 与配置双向同步，修改有脏标记与保存 |
 | Phase 3 | 干跑任务可启停，F8 急停生效，无真实输入 |
 | Phase 4 | 能定位游戏窗口并截图到 `user_data/debug/` |
 | Phase 5 | 输入通道可启停、日志完整（当时的窗口消息通道与失焦暂停已于 2026-09-16 随 Phase 5.3 收敛删除） |
 | Phase 6 | 卡订单与预留页逻辑闭环（开关 → 入队 → 日志 → 可急停），任务编排规则明确且可测，预留开关零行为 |
-| Phase 7 | exe 在干净 Windows 上冒烟通过 |
+| Phase 7 | one-dir exe 构建与冒烟（已完成；提示词与记录见 `PHASE_PROMPTS.md`） |
 
-### 已知问题（Phase 7 打包时发现）
-1. ~~冻结 exe 的 `--measure-layout` 在 GBK 控制台崩溃~~ **已于 2026-09-19 修复**：报告里的 `✓ ✗` 换成
+### 历史问题记录（Phase 7 打包时发现，现已修复）
+1. 冻结 exe 的 `--measure-layout` 曾在 GBK 控制台崩溃；**已于 2026-09-19 修复**：报告里的 `✓ ✗` 换成
    GBK 可编码的 `[OK]` / `[NG]`，并由 `__main__._print_safe()` 兜底任何不可编码字符（先原样打印、失败后按当前编码替换；stdout 为 None 时静默跳过）。回归测试：`test_format_measure_report_is_cp936_printable`、`test_print_safe_degrades_on_gbk_console`、`test_print_safe_survives_missing_stdout`。实测冻结 exe 的 `--measure-layout` 现退出码 0。
 
 ## 12. 变更管理

@@ -636,13 +636,13 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 
 | 内容 | 路径 |
 |---|---|
-| 日志 | `user_data/logs/luoluotool.log` |
+| 日志 | `logs/luoluotool.log` |
 | 识别带框截图 | `user_data/debug/vision_<时间戳>.png`（整屏 + 画框，每处命中一个编号） |
 | 窗口诊断截图 | `user_data/debug/window_<时间戳>.png` |
 | 框选产物 | `assets/anchors/`：调试页 `anchor_<时间戳>.png`、日常任务页 `{建筑}_岛屿{N}_<时间戳>.png`（**不入库**） |
 | 识别图片 | `assets/templates/*.png`（用户自己整理，**入库**；调试页「添加图片…」默认打开它） |
 | 识别底图 | `assets/screenshots/*.png`（用工具自带截图功能截的画面，**不入库**；"用底图识别"功能待实现） |
-| 配置 | `user_data/config.json`（schema v9；损坏会自动恢复并在日志说明） |
+| 配置 | `user_data/config.json`（当前 schema v11；损坏会自动备份恢复并在日志说明） |
 
 ---
 
