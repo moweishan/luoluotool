@@ -36,7 +36,9 @@ python -m venv .venv
 .\.venv\Scripts\python.exe -m luoluotool
 ```
 
-首次启动会在 `user_data\config.json` 创建本地配置。源码运行日志写入 `logs\`。
+如果已激活虚拟环境，也可以运行 `python -m luoluotool` 启动。
+
+首次启动会在 `user_data/config.json` 创建本地配置。源码运行日志写入 `logs\`。
 
 ### 使用前的输入模式
 
@@ -54,6 +56,8 @@ python -m venv .venv
 # 离屏创建窗口后退出，不会打开可交互窗口
 .\.venv\Scripts\python.exe -m luoluotool --smoke-gui
 .\.venv\Scripts\python.exe -m luoluotool --measure-layout
+# 开发时运行测试
+.\.venv\Scripts\python.exe -m pytest -q
 ```
 
 识别命令会读取当前游戏窗口画面，不会点击或发送按键：
@@ -76,7 +80,7 @@ python -m venv .venv
 
 | 路径 | 用途 |
 |---|---|
-| `user_data\config.json` | 当前配置；本地文件，不要提交到仓库 |
+| `user_data/config.json` | 当前配置；本地文件，不要提交到仓库 |
 | `logs\` | 程序日志 |
 | `assets\templates\` | 自行整理的识别图片；项目约定将这些图片纳入版本库 |
 | `assets\anchors\` | 在工具中框选生成的模板；个人素材，不纳入版本库 |
@@ -99,13 +103,12 @@ powershell -ExecutionPolicy Bypass -File packaging\build.ps1
 
 - [项目规格与边界](PROJECT_SPEC.md)
 - [开发规范](AGENTS.md)
-- [阶段提示词](PHASE_PROMPTS.md)
 - [工程手册](PROJECT_HANDBOOK.md)
 - [验收清单](CHECKLIST.md)
 - [问题排查指南](BUG_HUNT_GUIDE.md)
 
 ## 风险与许可
 
-模拟键鼠可能违反游戏服务条款，也可能因画面变化造成误操作。使用者应自行评估风险；工具不会读取或修改游戏内存，也不会拦截或伪造网络封包。
+本工具仅供个人学习自用。模拟键鼠可能违反游戏服务条款，存在封号风险，也可能因画面变化造成误操作。使用者应自行评估风险；工具不会读取或修改游戏内存，也不会拦截或伪造网络封包。
 
 仓库没有附带 `LICENSE` 文件，因此不应把它当作可自由再发布的软件。第三方依赖及许可信息可在程序「关于」页查看。

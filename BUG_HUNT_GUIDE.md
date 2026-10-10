@@ -10,7 +10,7 @@
 > **维护约定**：改了代码就回来更新对应小节（尤其是第 ③④⑤ 节），否则本文档会变成误导。
 >
 > 配套文档：`AGENTS.md`（开发规范/红线，**必读**）、`PROJECT_SPEC.md`（边界与功能表）、
-> `CHECKLIST.md`（逐项勾选清单）、`PHASE_PROMPTS.md`（分阶段记录）、`README.md`（用户视角的使用说明）、`PROJECT_HANDBOOK.md`（工程手册：构建发布/实测数据/决策速览）。
+> `CHECKLIST.md`（逐项勾选清单）、`README.md`（用户视角的使用说明）、`PROJECT_HANDBOOK.md`（工程手册：构建发布/实测数据/决策速览）。
 
 ---
 
@@ -20,17 +20,19 @@
 
 ```powershell
 # 解释器与依赖（已存在）
-D:\deepSeekHarness\LuoLuoTool\.venv\Scripts\python.exe
+.\.venv\Scripts\python.exe
 # 依赖：PySide6 6.11.2 / pywin32 312 / numpy 2.5.3 / opencv-python-headless 5.0.0 / pytest 9.1.1
 ```
 
 ### 四条廉价验收命令（改动后必跑，全绿才算过）
 
 ```powershell
-# 建议先固定临时目录（本机曾因默认 tmp 出现怪问题；不设也能跑）
-$env:TMP='D:\deepSeekHarness\.tmp'; $env:TEMP=$env:TMP
+# 建议先固定临时目录（不设也能跑）
+$tmp = Join-Path ([System.IO.Path]::GetTempPath()) 'luoluotool-tmp'
+New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+$env:TMP = $tmp; $env:TEMP = $tmp
 
-cd D:\deepSeekHarness\LuoLuoTool
+# 请先在仓库根目录打开 PowerShell
 .\.venv\Scripts\python.exe -m pytest -q                    # 全量单测（约 25s）
 .\.venv\Scripts\python.exe -m luoluotool --validate-config  # 配置校验，应打印 OK
 .\.venv\Scripts\python.exe -m luoluotool --smoke-gui        # 离屏建窗，日志含"离屏冒烟完成"
@@ -67,7 +69,7 @@ src/luoluotool/
     template_match.py        249  模板读取与匹配原语（VisionError / Match / load_template / locate_all / 可辨识度评估）
     multiscale.py            238  多尺度两档搜索：_scale_tiers / _scan_coarse / _refine_scale / locate_all_scaled
     drag_path.py              66  滑动路径几何（缓出曲线 + 分帧插值，纯函数）
-    input_sender.py          540  InputSender 协议 / DryRunSender / RealInputSender / 越界校验 / build_channel
+    input_sender.py          599  InputSender 协议 / DryRunSender / RealInputSender / 越界校验 / build_channel
     real_input.py            583  SendInput 底层：置顶置前、点击、滑动发送、按键、光标还原
     window.py                147  找窗口、置前、客户区几何、诊断截图
     elevation.py              76  权限检测 / 以管理员重启
@@ -121,7 +123,7 @@ gui  →  core  →  automation / utils
 - 一条命令自检（基线应输出 `layer check violations = 0`）：
 
 ```powershell
-cd D:\deepSeekHarness\LuoLuoTool
+# 请先在仓库根目录打开 PowerShell
 .\.venv\Scripts\python.exe -c @"
 # 分层自检：core 禁 PySide6/win32/ctypes；automation 仅禁 PySide6
 # 必须按 AST 检查真实 import —— 按文本匹配会把 docstring 里提到 'PySide6' 的文件误报成违规
@@ -209,10 +211,10 @@ print('layer check violations =', bad)
 业务编排（单点）                    core/debug.py:98         run_single_click(hold_ms=...)
 业务编排（连点）                    core/debug.py:124        run_repeat_click(..., hold_ms=...)（间隔＝点击之后的等待）
 校验                                core/debug.py:56         _validate_click_hold（0–5000 ms 整数）
-通道（干跑/真实）                   automation/input_sender.py:516 build_channel
+通道（干跑/真实）                   automation/input_sender.py:575 build_channel
   点击                              input_sender.py:149      RealInputSender.click_at(x, y, hold_seconds)
-  **两步移动（hover）**             input_sender.py:207      _move_cursor_for_click（中途点 → 目标）
-  **点击前核对事实**                input_sender.py:222      _verify_before_press（漂移>4px 跳过）
+  **两步移动（hover）**             input_sender.py:237      _move_cursor_for_click（中途点 → 目标）
+  **点击前核对事实**                input_sender.py:259      _verify_before_press（漂移>4px 跳过）
   时间线                            input_sender.py:26/27/28 容差 4px / 步进 30ms / 松手后 350ms 才还原光标
                                     input_sender.py:87       DryRunSender.click_at（只写日志，同样校验越界）
 底层原语                            automation/real_input.py:344 send_left_click(sleep, hold_seconds, stop_event)
@@ -230,10 +232,10 @@ print('layer check violations =', bad)
   运行线程 _RunnerThread            gui/workers.py:30
   Runner 顺序执行                   core/runner.py:68        Runner.start()
     每个任务拿到 TaskContext（含 sender）core/task.py:15
-    输入通道构建                    automation/input_sender.py:516 build_channel()
+    输入通道构建                    automation/input_sender.py:575 build_channel()
       ├─ 干跑：DryRunSender（:50，只写日志，**同样做越界校验**）
       └─ 真实：WindowReadinessGate(:318) → RealInputSender(:117)
-           点击/滑动前校验              input_sender.py:449/464 point_in_client_area / check_points_in_bounds
+           点击/滑动前校验              input_sender.py:516/531 point_in_client_area / check_points_in_bounds
            每次输入前置顶/置前并复核    automation/real_input.py:237 ensure_window_front()
            客户端→屏幕换算              automation/real_input.py:157 client_to_screen()
            实际注入                     automation/real_input.py:300 _send()（SendInput）
@@ -393,7 +395,7 @@ capture_client_bgr (vision.py:393)
 | 32 | 框完还是**心里没数**："这块区域在画面里是不是独一无二？会不会一识别就选中别的地方？"（用户 2026-09-21 指定做 D1） | 弹窗只能"框 → 保存 → 关掉 → 去调试页识别"才知道结果；而模板就是从这张图裁的，**"命中 1 处"是必然的**，所以直接报命中数等于没说 | 新增「**在本图试识别**」（`core.vision.probe_region_on_image`）：把选区当模板在同图做 **1:1** 试匹配，`self_index` 标出"自己那一处"，**结论只看"除自己以外还有几处"**（0 处＝独一无二 / >0 处＝列出其它位置中心坐标并警告可能选错，触顶提示"可能还有更多"）；命中的别处用**橙框 + 序号**直接画在图上（`CropView.set_probe_rects`）；匹配走后台线程 `TemplateProbeThread`（全屏大模板 1–2s），**关窗口等它结束**（`done()` → `_wait_for_probe_thread`）；选区一变旧结论作废；纯色选区不试、直接提示换一块；零命中（理论不该发生）报成"异常请反馈" | `tests/test_core/test_vision_probe.py` 7 条 + `tests/test_gui_crop_probe.py` 6 条（`test_probe_marks_the_other_places_on_the_image`、`test_closing_waits_for_the_probe_thread` 等）/ 本条提交 |
 | 33 | 评审第四轮 P2-1（**可稳定复现的用户可见缺陷**）：**点一下再拖拽**，拖出来的框被丢弃，反而在图像左上角留下一个**看不见的 8×8 选区**，点保存就会存下这块 | 单击（按下→松开、没移动）留下 `QRect(x, y, 0, 0)` 的退化选区：`selection_in_image()` 判它无效、界面也画不出来，但它**还在内部状态里** → 下一次在附近按下时 `handle_rects()` 把 8 个手柄算成**完全重合**的一小块 → `hit_test` 判成 "nw"（拖手柄）→ `_start_rect` 因 `(QRect(0,0,0,0) or QRect())` 退化成空矩形 | 三处一起改（评审给的三条建议全采纳）：① `mouseReleaseEvent` 松手时丢弃小于 `MIN_SELECTION_SIZE` 的退化选区（`_discard_degenerate_selection`）；② `handle_rects()` 在绘制矩形小于 `HANDLE_SIZE_PX` 时返回 `{}`（不给手柄），`hit_test` 同步按"没有手柄"处理；③ 顺手把 `hit_test` 里重复算 8 次的手柄矩形收敛成一次（评审 P3-9）| `tests/test_gui_crop_edit.py::test_click_then_drag_frames_a_visible_selection`（离屏按评审的原始步骤复现）/ 本条提交 |
 | 34 | 评审第四轮 P2-2/P2-3/P2-4（试识别的**口径与生命周期**）：① 结论写着"识别不会认错"，但试识别是 1:1 + 固定阈值，正式识别是多尺度 + 用户阈值 —— 只会更乐观；② 跑的过程中改选区，旧结论会永久留在界面上；③ 关窗在 GUI 线程里 `wait(10 秒)`，超时照样关闭 = 把在跑的 QThread 丢给 GC；按钮还按 `isRunning()` 判定，可能把新线程引用清掉 | 试识别的三个"边界条件"都没对齐：阈值没往下传、结论没写成立条件、线程身份与销毁时机没管 | ① 阈值从调试页传进弹窗（`debug_page.vision_threshold()` → `TemplateCropDialog(..., threshold=...)`），结论措辞改成"**本图 1:1 匹配（阈值 X.XX）下**只命中你框的这一处"并说明正式识别还会搜缩放版本；② `_on_probe_finished` 比对 `result.region` 与当前选区，不一致就丢弃并提示"已作废"；③ 关窗改为 `request_stop()` + **只断开本弹窗的槽**（保住 `finished` 上的 `_unregister`）+ 线程由模块级 `ACTIVE_PROBES` 强引用到自然结束（`start_probe_thread()` 登记），按钮按 `probe_in_flight()` 判定、槽里按 `self.sender() is self._probe_thread` 保护置空 | `tests/test_gui_crop_probe.py` 的 `test_probe_uses_the_threshold_it_was_given`、`test_probe_result_is_dropped_when_the_selection_changes_while_running`、`test_probe_thread_is_registered_until_it_finishes`、`test_closing_releases_the_probe_thread_without_blocking` / 本条提交 |
-| 35 | 评审第四轮 P2-5 + P3 一批：换台机器跑测试会误报"模板图片还没入库"；滑条拖完旋钮会被写回一个略不同的值；细纹理可能被抽样判成"纯色"而误拦保存；`assets/anchors/*.jpg` 不被忽略；关于页复制出的诊断信息带 `C:\Users\<用户名>`、打开关于页就建目录、读不到版本号不记日志 | 都是"本机恰好通过 / 只在边界上出错"类问题：① `git ls-files` 的 `core.quotePath` 默认 true，CJK 文件名被转义；② 滑条换算中间过了一道"整数百分比"（402/1001 个刻度回不到原位）；③ `assess_region_quality` 用跨步抽样判 `flat`，而 `flat` 是唯一会拦住保存的档位；④ `.gitignore` 只写了 anchors 的 `*.png`；⑤ 诊断信息贴绝对路径、目录按钮构造时就 `mkdir`、`except` 静默返回"未知" | ① 测试里的 git 调用统一加 `-c core.quotePath=false`；② 滑条换算改成**以 2 为底的浮点倍数**（`zoom_slider_to_zoom`/`zoom_to_slider`），101 个刻度逐点往返一致；③ 抽样判 `flat` 时用**全分辨率复核**一次（`_quality_metrics`）；④ anchors 补齐 5 种图片后缀；⑤ 诊断信息改相对程序目录（并断言不含盘符/`Users`）、目录按钮的 tooltip 延迟到悬停（`eventFilter`）、`_pyside_version` 失败记 WARNING；另按 P3-2 删除零调用的 `set_zoom()`、把 1:1 做成**双击滑条**；按 P3-8 把三个框选测试各自复制的 `_image()` 收敛进 `tests/gui_helpers.py` | `tests/test_paths.py`（能扛 `core.quotePath=true`）、`tests/test_gui_crop_zoom.py::test_zoom_slider_round_trips_at_every_position`、`test_automation/test_template_quality.py::test_fine_stripes_are_not_misjudged_by_the_sampling`、`tests/test_gui_about.py` 4 条 / 本条提交 |
+| 35 | 评审第四轮 P2-5 + P3 一批：换台机器跑测试会误报"模板图片还没入库"；滑条拖完旋钮会被写回一个略不同的值；细纹理可能被抽样判成"纯色"而误拦保存；`assets/anchors/*.jpg` 不被忽略；关于页复制出的诊断信息带用户目录的绝对路径、打开关于页就建目录、读不到版本号不记日志 | 都是"本机恰好通过 / 只在边界上出错"类问题：① `git ls-files` 的 `core.quotePath` 默认 true，CJK 文件名被转义；② 滑条换算中间过了一道"整数百分比"（402/1001 个刻度回不到原位）；③ `assess_region_quality` 用跨步抽样判 `flat`，而 `flat` 是唯一会拦住保存的档位；④ `.gitignore` 只写了 anchors 的 `*.png`；⑤ 诊断信息贴绝对路径、目录按钮构造时就 `mkdir`、`except` 静默返回"未知" | ① 测试里的 git 调用统一加 `-c core.quotePath=false`；② 滑条换算改成**以 2 为底的浮点倍数**（`zoom_slider_to_zoom`/`zoom_to_slider`），101 个刻度逐点往返一致；③ 抽样判 `flat` 时用**全分辨率复核**一次（`_quality_metrics`）；④ anchors 补齐 5 种图片后缀；⑤ 诊断信息改相对程序目录（并断言不含盘符/`Users`）、目录按钮的 tooltip 延迟到悬停（`eventFilter`）、`_pyside_version` 失败记 WARNING；另按 P3-2 删除零调用的 `set_zoom()`、把 1:1 做成**双击滑条**；按 P3-8 把三个框选测试各自复制的 `_image()` 收敛进 `tests/gui_helpers.py` | `tests/test_paths.py`（能扛 `core.quotePath=true`）、`tests/test_gui_crop_zoom.py::test_zoom_slider_round_trips_at_every_position`、`test_automation/test_template_quality.py::test_fine_stripes_are_not_misjudged_by_the_sampling`、`tests/test_gui_about.py` 4 条 / 本条提交 |
 
 ---
 
@@ -495,7 +497,7 @@ capture_client_bgr (vision.py:393)
 | `_render_client_bits` | `automation/vision.py:143` | 主取景方式注入（黑帧/正常帧/抛错） |
 | `_print_window` | `automation/vision.py:148` | 替换 ctypes 调用（假 GDI 测试用） |
 | 假 GDI | `tests/test_automation/test_vision_capture.py:118-198`（`CLIENT_OFFSET`:123 / `_window_pixels`:126 / `_expected_client_pixels`:135 / `_FakeBitmap`:141 / `_FakeDC`:158 / `fake_gdi`:192；2026-09-20 拆文件后从 `test_vision.py` 移来） | **验证取景几何**：位图里存真实像素，断言 BitBlt 源点、裁剪结果像素 |
-| `build_channel` / 假 sender | `automation/input_sender.py:516`、`tests/test_automation/real_input_helpers.py` 的 `recording` 夹具 | 断言输入调用序列，零真实输入 |
+| `build_channel` / 假 sender | `automation/input_sender.py:575`、`tests/test_automation/real_input_helpers.py` 的 `recording` 夹具 | 断言输入调用序列，零真实输入 |
 | 假 `user32` | `tests/test_automation/real_input_helpers.py` 的 `user32` 夹具（2026-09-20 拆文件后从 `test_real_input.py` 移来） | 断言 `SendInput`/`SetCursorPos` 序列、置顶/还原行为 |
 | `get_debug_dir` | `core/vision.py` 导入处 | 带框截图写进 tmp |
 | `TemplateCropDialog` | `gui/main_window.py:473` 调用处 | 替换对话框或子类化 `exec()` 模拟"框选 + 保存" |
@@ -533,7 +535,7 @@ assert not np.array_equal(bgr, window_pixels[:h, :w, :3])   # 不能是窗口左
 ### 探针 1：窗口几何 + 取景原点（只读，最有用）
 
 ```powershell
-cd D:\deepSeekHarness\LuoLuoTool
+# 请先在仓库根目录打开 PowerShell
 .\.venv\Scripts\python.exe -c @"
 # 取景几何探针：确认客户区偏移与取景原点（只读，不产生任何输入）
 import ctypes, json, pathlib, sys
@@ -573,7 +575,7 @@ print('capture          = %dx%d  std=%.2f' % (img.shape[1], img.shape[0], img.st
 ### 探针 3：坐标端到端交叉验证（判断"坐标可信"）
 
 ```powershell
-cd D:\deepSeekHarness\LuoLuoTool
+# 请先在仓库根目录打开 PowerShell
 .\.venv\Scripts\python.exe -c @"
 # 坐标交叉验证：识别出的客户区坐标 vs 整屏定位换算值，偏差必须 <=3px（只读）
 import ctypes, json, pathlib, sys
@@ -648,8 +650,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 
 ## ⑨ 红线与规范速查（改代码前必看）
 
-1. **需要逐项授权**：内存读写、封包拦截、驱动级注入、任何联网上传（工程负责人已明确不实现
-   ACE 绕过；见 `PROJECT_SPEC.md` §4.1/§4.2）。**其余功能改动不需要额外授权**。
+1. **项目边界**：不读写游戏进程内存，不拦截或伪造封包，不上传本地数据；新增输入通道、系统级操作
+   或联网功能须先明确范围并取得用户确认（见 `PROJECT_SPEC.md`「项目边界与安全」「远程配置计划」）。
 2. **禁止**：把 `user_data/config.json`、日志、截图、构建产物提交入库；force push；删除/破坏既有
    测试来让测试变绿；吞异常（`except: pass` / `except Exception: continue`）。
 3. **提交规范**：Conventional Commits + 中文说明 + 范围前缀（`fix(automation): …`）。一次提交只做一件事。
@@ -680,11 +682,11 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `_render_client_bits_printwindow` | `automation/vision.py:156` | PrintWindow（整窗渲染 + 裁剪） |
 | `client_area_offset` | `automation/window.py:80` | 客户区在窗口内的偏移（唯一真源） |
 | `screenshot_client` | `automation/window.py:94` | 窗口诊断截图（走取景回退链 → 真 PNG + 黑帧检测） |
-| `build_channel` | `automation/input_sender.py:557` | 干跑/真实通道选择 |
-| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:498` / `:513` | 越界校验 |
+| `build_channel` | `automation/input_sender.py:575` | 干跑/真实通道选择 |
+| `point_in_client_area` / `check_points_in_bounds` | `automation/input_sender.py:516` / `:531` | 越界校验 |
 | `RealInputSender.click_at` / `drag` | `automation/input_sender.py:42` / `:46` | 真实输入的校验与还原策略（`click_at(..., hold_seconds=None)`＝点击时长；协议里的同名方法在 `:42`/`:46`） |
-| `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:226` / `:241` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
-| `_restore_cursor_after_click` / `_restore_cursor_after_drag` | `automation/input_sender.py:207` / `:342` | 延迟 + 分帧小步还原光标（点击/滑动同一套做法） |
+| `_move_cursor_for_click` / `_verify_before_press` | `automation/input_sender.py:237` / `:259` | 两步移动（hover）/ 点击前核对事实（漂移>4px 跳过） |
+| `_restore_cursor_after_click` / `_restore_cursor_after_drag` | `automation/input_sender.py:218` / `:360` | 延迟 + 分帧小步还原光标（点击/滑动同一套做法） |
 | `CLICK_CURSOR_TOLERANCE_PX` / `CLICK_MOVE_STEP_SECONDS` / `CLICK_RESTORE_DELAY_SECONDS` | `automation/input_sender.py:26` / `:27` / `:28` | 4px / 30ms / 350ms（输入时间线三档） |
 | `INPUT_SETTLE_SECONDS` / `FRONT_SETTLE_SECONDS` | `automation/real_input.py:69` / `:70` | 80ms（按下前）/ 200ms（置前后） |
 | `send_left_click` | `automation/real_input.py:344` | 点击原语：按下 → 按住（切片检查急停）→ **finally 抬起** |
