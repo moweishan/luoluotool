@@ -49,6 +49,9 @@ assets/screenshots/*.jpeg
 assets/screenshots/*.bmp
 assets/screenshots/*.webp
 
+# 本地代码审查报告
+/reports/
+
 # 编辑器
 .idea/
 .vscode/
