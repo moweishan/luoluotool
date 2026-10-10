@@ -1,30 +1,25 @@
-# BUG_HUNT_GUIDE.md — LuoLuoTool 排查手册（给"找 bug 的工程师"）
+# BUG_HUNT_GUIDE.md — LuoLuoTool 排查手册
 
-> **用途**：让另一位工程师（或另一个 AI 会话）在**不熟悉本项目**的前提下，能在 15 分钟内跑起来、
-> 30 分钟内知道"哪里最容易藏 bug"，并且**每条不变量都能立刻验证**。
->
-> **基线**：`git HEAD = 9aea9a9`（2026-09-20），全量测试 468 passed，工作区干净。
-> 本文件自身的提交**不改任何代码**，因此下面所有 `文件:行` 对当前 `src/**` 依然有效。
-> **行号会漂移**：代码改动后用**符号名**搜索定位（第 ⑩ 节的索引表可直接搜符号）。
-> 改完代码请顺手跑 `.venv\Scripts\python tools\check_guide_index.py` 自检索引是否还准。
-> **维护约定**：改了代码就回来更新对应小节（尤其是第 ③④⑤ 节），否则本文档会变成误导。
->
-> 配套文档：`AGENTS.md`（开发规范/红线，**必读**）、`PROJECT_SPEC.md`（边界与功能表）、
-> `CHECKLIST.md`（逐项勾选清单）、`README.md`（用户视角的使用说明）、`PROJECT_HANDBOOK.md`（工程手册：构建发布/实测数据/决策速览）。
+> 用于定位坐标、取景、输入、配置与线程问题，提供架构说明、可检查的不变量和诊断入口。
+> 文件行号可能随代码变化，优先按符号名定位，快速索引见附录。
+> 修改代码后同步相关说明，并用 `tools/check_guide_index.py` 核对索引。
+> 配套文档：`AGENTS.md`（开发规范）、`PROJECT_SPEC.md`（功能与边界）、`CHECKLIST.md`（验收）、`README.md`（使用说明）、`PROJECT_HANDBOOK.md`（工程与构建）。
 
 ---
 
-## ① 15 分钟上手
+## ① 快速上手
 
 ### 环境
 
 ```powershell
-# 解释器与依赖（已存在）
+# 项目虚拟环境解释器
 .\.venv\Scripts\python.exe
-# 依赖：PySide6 6.11.2 / pywin32 312 / numpy 2.5.3 / opencv-python-headless 5.0.0 / pytest 9.1.1
+# 依赖以 requirements.txt 和 requirements-dev.txt 为准
 ```
 
-### 四条廉价验收命令（改动后必跑，全绿才算过）
+### 代码改动的验收命令
+
+只有包含代码修改的提交才执行以下测试与验收命令；仅文档、忽略规则等非代码修改不执行测试。`--measure-layout` 在改动页签或布局时执行，所需检查全部通过才算完成。
 
 ```powershell
 # 建议先固定临时目录（不设也能跑）
@@ -33,13 +28,13 @@ New-Item -ItemType Directory -Force -Path $tmp | Out-Null
 $env:TMP = $tmp; $env:TEMP = $tmp
 
 # 请先在仓库根目录打开 PowerShell
-.\.venv\Scripts\python.exe -m pytest -q                    # 全量单测（约 25s）
+.\.venv\Scripts\python.exe -m pytest -q                    # 全量单测
 .\.venv\Scripts\python.exe -m luoluotool --validate-config  # 配置校验，应打印 OK
 .\.venv\Scripts\python.exe -m luoluotool --smoke-gui        # 离屏建窗，日志含"离屏冒烟完成"
 .\.venv\Scripts\python.exe -m luoluotool --measure-layout   # 页签高度稳定性，末行须为 "[OK]"
 ```
 
-### 三条实机命令（需要游戏窗口；**不产生任何输入**）
+### 识别命令（需要游戏窗口；不发送输入）
 
 ```powershell
 # 图像识别（退出码：0 命中 / 1 未命中或取景失败 / 2 参数非法）
@@ -57,52 +52,56 @@ $env:TMP = $tmp; $env:TEMP = $tmp
 2. **单测不查真实桌面**：`tests/conftest.py:41` 把 `input_sender.find_window` / `core.vision.find_window`
    改成 `lambda keyword: None`；需要窗口的测试自己 monkeypatch。
 3. **不要提交构建产物、不要 force push、不要用 PowerShell 文本命令改写仓库文件**
-   （`Get-Content -Raw | Set-Content` 在 PS 5.1 下按 GBK 读 UTF-8，曾把 `PROJECT_SPEC.md` 679 行写坏）。
+   （PowerShell 5.1 可能按 ANSI/GBK 处理 UTF-8；使用精确补丁或显式编码的 Python）。
 
-### 目录一览（行数为基线实测）
+### 目录一览
 
 ```
 src/luoluotool/
-  __main__.py                203  CLI：--version/--validate-config/--smoke-gui/--measure-layout/--recognize
+  __main__.py    CLI：--version/--validate-config/--smoke-gui/--measure-layout/--recognize
   automation/                      自动化层（不许 import PySide6）
-    vision.py                319  取景/渲染（黑帧回退链、BitBlt/PrintWindow 几何）+ 再导出匹配名字
-    template_match.py        249  模板读取与匹配原语（VisionError / Match / load_template / locate_all / 可辨识度评估）
-    multiscale.py            238  多尺度两档搜索：_scale_tiers / _scan_coarse / _refine_scale / locate_all_scaled
-    drag_path.py              66  滑动路径几何（缓出曲线 + 分帧插值，纯函数）
-    input_sender.py          599  InputSender 协议 / DryRunSender / RealInputSender / 越界校验 / build_channel
-    real_input.py            583  SendInput 底层：置顶置前、点击、滑动发送、按键、光标还原
-    window.py                147  找窗口、置前、客户区几何、诊断截图
-    elevation.py              76  权限检测 / 以管理员重启
-    hotkey.py                 72  F8 急停热键（RegisterHotKey）
+    vision.py    取景/渲染（黑帧回退链、BitBlt/PrintWindow 几何）+ 再导出匹配名字
+    template_match.py    模板读取与匹配原语（VisionError / Match / load_template / locate_all / 可辨识度评估）
+    multiscale.py    多尺度两档搜索：_scale_tiers / _scan_coarse / _refine_scale / locate_all_scaled
+    drag_path.py    滑动路径几何（缓出曲线 + 分帧插值，纯函数）
+    input_sender.py    InputSender 协议 / DryRunSender / RealInputSender / 越界校验 / build_channel
+    real_input.py    SendInput 底层：置顶置前、点击、滑动发送、按键、光标还原
+    window.py    找窗口、置前、客户区几何、诊断截图
+    elevation.py    权限检测 / 以管理员重启
+    hotkey.py    F8 急停热键（RegisterHotKey）
   config/                        配置层（dataclass + 原子 JSON + 迁移校验）
-    models.py                423  AppConfig / AutomationConfig / 任务参数解析 + 上限常量（20 步/点）
-    validation.py            371  migrate() + validate()，_MIGRATIONS {1..8}，SCHEMA_VERSION = 9
-    store.py                 113  ConfigSaveError + save/load/_recover（先校验后写 + 原子写 + 损坏恢复）
+    models.py    AppConfig / AutomationConfig / 任务参数解析 + 上限常量（20 步/点）
+    validation.py    migrate() + validate()，版本迁移与字段校验
+    store.py    ConfigSaveError + save/load/_recover（先校验后写 + 原子写 + 损坏恢复）
   core/                          业务编排层（不许 import PySide6/win32）
-    vision.py                362  recognize_in_window（多模板/多区域编排）
-    debug.py                 202  调试动作：单点/连点/滑动/键盘（复用正式通道；等待可中断）
-    runner.py                184  Runner：顺序执行任务、循环、失败计数、停止
-    registry.py              147  任务注册表 + 占位任务（order_hold/feature_3/feature_4）
-    task.py / state.py        67/52  TaskContext/TaskResult/BaseTask；RunState 状态机（加锁 + try_transition）
+    vision.py    recognize_in_window（多模板/多区域编排）
+    debug.py    调试动作：单点/连点/滑动/键盘（复用正式通道；等待可中断）
+    runner.py    Runner：顺序执行任务、循环、失败计数、停止
+    registry.py    任务注册表 + 占位任务（order_hold/feature_3/feature_4）
+    task.py / state.py    TaskContext/TaskResult/BaseTask；RunState 状态机（加锁 + try_transition）
   gui/                           界面层（只做绑定与展示）
-    main_window.py           532  主窗口（展示与绑定 + 线程/状态编排）
-    workers.py               171  后台线程：任务/调试测试/框选截图/窗口诊断 + run_debug_action
-    elevation_flow.py        138  提权流程 mixin（检测/提示/以管理员身份重启）
-    icons.py                  50  窗口图标加载（魔数校验 + 降级为空图标）
-    pages/debug.py           434  开发者调试页（识别入口/模板列表/干跑/测试按钮）
-    pages/settings.py        135  设置页（含开发者调试开关 + 急停热键提示）
-    pages/daily.py          258  日常任务页（按用户设计稿重建；第 1 批只做界面）
-    pages/order_hold.py       56  卡订单页
-    pages/planned_feature.py  51  功能三/四公共基类（占位页）
-    pages/feature3.py,4.py    13  功能三/四页（占位子类）
-    pages/about.py           213  「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断/打开目录）
-    dialogs/crop_dialog.py   403  框选弹窗外壳（提示文字 / 缩放滑条·重置 / 试识别 / 保存 + 质量检查）
-    dialogs/crop_view.py     576  框选交互视图 CropView（选区新建/移动/手柄缩放/键盘微调/绘制/试识别标注）
-    dialogs/crop_view_zoom.py213  显示变换 ZoomPanMixin（滚轮缩放/平移/放大镜/相对缩放 API，纯搬运+扩展）
-    layout_measure.py        283  --measure-layout 的测量与报告（ASCII 安全）
-    widgets.py                54  LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
-    app.py                    73  入口：QApplication、任务栏图标身份、smoke 模式
-  utils/                         keys.py(72) paths.py(63) logging_setup.py(53)
+    main_window.py    主窗口（展示与绑定 + 线程/状态编排）
+    workers.py    后台线程：任务/调试测试/框选截图/窗口诊断 + run_debug_action
+    elevation_flow.py    提权流程 mixin（检测/提示/以管理员身份重启）
+    icons.py    窗口图标加载（魔数校验 + 降级为空图标）
+    pages/debug.py    开发者调试页（识别入口/模板列表/干跑/测试按钮）
+    pages/settings.py    设置页（含开发者调试开关 + 急停热键提示）
+    daily_media.py              日常参考图控制器
+    daily_workers.py            截图与解码线程
+    daily_files.py / daily_deletion.py  文件删除策略与控制器
+    step_debug.py               单步运行界面
+    pages/daily.py    日常任务页（日常开关、循环、岛屿与参考图配置）
+    pages/order_hold.py    卡订单页
+    pages/planned_feature.py    功能三/四公共基类（占位页）
+    pages/feature3.py,4.py    功能三/四页（占位子类）
+    pages/about.py    「关于」页（风险/隐私声明、第三方许可、运行环境、复制诊断/打开目录）
+    dialogs/crop_dialog.py    框选弹窗外壳（提示文字 / 缩放滑条·重置 / 试识别 / 保存 + 质量检查）
+    dialogs/crop_view.py    框选交互视图 CropView（选区新建/移动/手柄缩放/键盘微调/绘制/试识别标注）
+    dialogs/crop_view_zoom.py    显示变换 ZoomPanMixin（滚轮缩放/平移/放大镜/相对缩放 API）
+    layout_measure.py    --measure-layout 的测量与报告（控制台编码兼容）
+    widgets.py    LogPanelHandler（日志进面板）；ScrollablePage（页签基类）
+    app.py    入口：QApplication、任务栏图标身份、smoke 模式
+  utils/                         keys.py paths.py logging_setup.py
 assets/                          icons/（入库）、templates/（自己整理的识别图片，**入库**）、screenshots/（识别底图，不入库）、anchors/（框选产物，不入库）
 tests/                           与 src 同构；conftest.py 全局夹具；gui_helpers.py 共享 GUI 夹具；test_packaging.py / test_source_guards.py / test_paths.py 是仓库级守卫
 packaging/                       build.ps1（UTF-8 **带 BOM**）、LuoLuoTool.spec、rthook_windowed_stdio.py
@@ -120,7 +119,7 @@ gui  →  core  →  automation / utils
 
 - `core` **不得** import PySide6 / win32（要用窗口能力时经 `automation.*`）。
 - `automation` **不得** import PySide6。
-- 一条命令自检（基线应输出 `layer check violations = 0`）：
+- 分层自检应输出 `layer check violations = 0`：
 
 ```powershell
 # 请先在仓库根目录打开 PowerShell
@@ -153,93 +152,93 @@ print('layer check violations =', bad)
 ### 主链路 A：图像识别（框选模板 → 识别 → 坐标）
 
 ```
-调试页「图片识别匹配测试」          gui/pages/debug.py:413   _on_vision_clicked()
+调试页「图片识别匹配测试」          gui/pages/debug.py   _on_vision_clicked()
   → 发信号 test_requested("vision", {images, threshold, max_results})
-主窗口分发                          gui/main_window.py:429  _on_debug_test()
-  后台线程 _DebugTestThread.run     gui/workers.py:41  （不阻塞 GUI）
-  动作映射                          gui/workers.py:69  run_debug_action(kind="vision")
-业务编排                            core/vision.py:67       recognize_in_window()
-  ① 归一化模板列表                  core/vision.py:58       _template_paths()
-  ② 找窗口 + 就绪校验               core/vision.py:71-79    find_window / is_window_ready
-  ③ 取景（只截一次，多模板共用）    automation/vision.py:58 capture_client_bgr()
-  ④ 逐张模板多尺度匹配              automation/multiscale.py:169 locate_all_scaled()
-  ⑤ 组织消息/带框截图               core/vision.py:170       _success_result()
+主窗口分发                          gui/main_window.py  _on_debug_test()
+  后台线程 _DebugTestThread.run     gui/workers.py  （不阻塞 GUI）
+  动作映射                          gui/workers.py  run_debug_action(kind="vision")
+业务编排                            core/vision.py       recognize_in_window()
+  ① 归一化模板列表                  core/vision.py       _template_paths()
+  ② 找窗口 + 就绪校验               core/vision.py    find_window / is_window_ready
+  ③ 取景（只截一次，多模板共用）    automation/vision.py capture_client_bgr()
+  ④ 逐张模板多尺度匹配              automation/multiscale.py locate_all_scaled()
+  ⑤ 组织消息/带框截图               core/vision.py       _success_result()
 结果回传                            Signal finished_message → 调试页状态栏
 ```
 
 **框选生成模板**链路：
 
 ```
-调试页「框选截图生成模板」          gui/pages/debug.py:151   crop_button → crop_requested 信号
-主窗口门禁 + 后台截图               gui/main_window.py:497   _on_crop_requested()
-  截图线程                          gui/workers.py:100   _CaptureThread → core/vision.py:212 capture_window()
-  弹框（GUI 线程）                  gui/main_window.py:473   _on_capture_ready() → TemplateCropDialog
-  拖拽框选                          gui/dialogs/crop_view.py:66    CropView（选区外＝新框选）
-  改选区（2026-09-20 新增）         gui/dialogs/crop_view.py:184   hit_test() → _apply_move() / _apply_resize()
+调试页「框选截图生成模板」          gui/pages/debug.py   crop_button → crop_requested 信号
+主窗口门禁 + 后台截图               gui/main_window.py   _on_crop_requested()
+  截图线程                          gui/workers.py   _CaptureThread → core/vision.py capture_window()
+  弹框（GUI 线程）                  gui/main_window.py   _on_capture_ready() → TemplateCropDialog
+  拖拽框选                          gui/dialogs/crop_view.py    CropView（选区外＝新框选）
+  修改选区         gui/dialogs/crop_view.py   hit_test() → _apply_move() / _apply_resize()
                                     选区内部＝整体移动；四角/四边 8 个手柄＝改大小（对角固定、≥MIN_SELECTION_SIZE=8）
                                     Alt+手柄＝以选区中心对称缩放（_symmetric_resize）
-  键盘微调（2026-09-20 新增）       gui/dialogs/crop_view.py:409   keyPressEvent → _nudge_whole() / _nudge_edge()
+  键盘微调       gui/dialogs/crop_view.py   keyPressEvent → _nudge_whole() / _nudge_edge()
                                     方向键＝整体 1 图像像素（Shift=10）；Ctrl+方向＝该边外扩 1；Ctrl+Shift＝该边内收 1
-  批 1 视觉/撤销（2026-09-20）      gui/dialogs/crop_view.py:360   drag_bubble_text() / _paint_dim_mask():528
+  视觉反馈与撤销      gui/dialogs/crop_view.py   drag_bubble_text() / _paint_dim_mask()
                                     Esc＝撤销拖拽或清空；双击＝清空；空格·右键拖拽＝移动
-  批 2 视图变换（2026-09-21）       gui/dialogs/crop_view_zoom.py:35  fit_scale/image_rect/_set_zoom/wheelEvent:141
-                                    滚轮＝以鼠标为锚点缩放；中键·空格拖拽＝平移；magnifier_rect:152＝放大镜
-  可辨识度提示 / 保存前检查（批 3） automation/template_match.py:101 assess_region_quality()（对比度 + 边缘占比）
-     ↑ 界面侧                      gui/dialogs/crop_dialog.py:127  selection_quality() → selection_text():139
+  视图变换       gui/dialogs/crop_view_zoom.py  fit_scale/image_rect/_set_zoom/wheelEvent
+                                    滚轮＝以鼠标为锚点缩放；中键·空格拖拽＝平移；magnifier_rect＝放大镜
+  可辨识度提示 / 保存前检查 automation/template_match.py assess_region_quality()（对比度 + 边缘占比）
+     ↑ 界面侧                      gui/dialogs/crop_dialog.py  selection_quality() → selection_text()
                                     几乎是纯色（is_blank_frame）时：不写文件、不关窗口，只说明原因
-  在本图试识别（D1）                gui/dialogs/crop_dialog.py:278  run_probe() → start_probe_thread()（workers.py）
-     ↑ 判据                        core/vision.py:288  probe_region_on_image()（1:1 试匹配，看除自己外还有几处；阈值＝调试页当前值）
-     ↑ 结论展示                    gui/dialogs/crop_view.py:532  set_probe_rects()（橙色框 + 序号标注其它位置）
+  在本图试识别                gui/dialogs/crop_dialog.py  run_probe() → start_probe_thread()（workers.py）
+     ↑ 判据                        core/vision.py  probe_region_on_image()（1 试匹配，看除自己外还有几处；阈值＝调试页当前值）
+     ↑ 结论展示                    gui/dialogs/crop_view.py  set_probe_rects()（橙色框 + 序号标注其它位置）
                                     关窗不阻塞：crop_dialog.py done() → _release_probe_thread()（request_stop + 交 ACTIVE_PROBES）
-  缩放滑条（相对整图适配 50%–800%）  gui/dialogs/crop_dialog.py:123  zoom_slider → _on_zoom_slider_changed():237
-     刻度换算（对数，互为反函数）    gui/dialogs/crop_dialog.py:65   zoom_slider_to_percent / zoom_percent_to_slider:77
-  重置（视图归位 + 清空选区）        gui/dialogs/crop_dialog.py:249  reset_all()（含 zoom_to_fit + clear_selection）
-  滑条状态同步                       gui/dialogs/crop_dialog.py:241  _sync_zoom_controls()（blockSignals 防回环）
-  HUD（选区+辨识度+缩放%+鼠标坐标）  gui/dialogs/crop_dialog.py:154  _refresh_info() → view_status_text():158
-  保存（**只存选区**）              gui/dialogs/crop_dialog.py:167  _on_save_clicked() → save_selection():194
-  加入模板列表                      gui/main_window.py:484   debug_page.add_vision_template()
+  缩放滑条（相对整图适配 50%–800%）  gui/dialogs/crop_dialog.py  zoom_slider → _on_zoom_slider_changed()
+     刻度换算（对数，互为反函数）    gui/dialogs/crop_dialog.py   zoom_slider_to_zoom / zoom_to_slider
+  重置（视图归位 + 清空选区）        gui/dialogs/crop_dialog.py  reset_all()（含 zoom_to_fit + clear_selection）
+  滑条状态同步                       gui/dialogs/crop_dialog.py  _sync_zoom_controls()（blockSignals 防回环）
+  HUD（选区+辨识度+缩放%+鼠标坐标）  gui/dialogs/crop_dialog.py  _refresh_info() → view_status_text()
+  保存（**只存选区**）              gui/dialogs/crop_dialog.py  _on_save_clicked() → save_selection()
+  加入模板列表                      gui/main_window.py   debug_page.add_vision_template()
 ```
 
 ### 主链路 C：鼠标单点 / 连点（含"点击时长"）
 
 ```
-调试页「鼠标单点测试」              gui/pages/debug.py:189   single_hold_spin（点击时长，ms）
-调试页「鼠标连点测试」              gui/pages/debug.py:215   repeat_hold_spin（连点每次都用它）
+调试页「鼠标单点测试」              gui/pages/debug.py   single_hold_spin（点击时长，ms）
+调试页「鼠标连点测试」              gui/pages/debug.py   repeat_hold_spin（连点每次都用它）
   → _on_single_clicked / _on_repeat_clicked 发信号 test_requested(kind, {...})
     载荷：single {x, y, hold_ms}｜repeat {x, y, count, interval_ms, hold_ms}
-主窗口分发                          gui/workers.py:69   run_debug_action
-业务编排（单点）                    core/debug.py:98         run_single_click(hold_ms=...)
-业务编排（连点）                    core/debug.py:124        run_repeat_click(..., hold_ms=...)（间隔＝点击之后的等待）
-校验                                core/debug.py:56         _validate_click_hold（0–5000 ms 整数）
-通道（干跑/真实）                   automation/input_sender.py:575 build_channel
-  点击                              input_sender.py:149      RealInputSender.click_at(x, y, hold_seconds)
-  **两步移动（hover）**             input_sender.py:237      _move_cursor_for_click（中途点 → 目标）
-  **点击前核对事实**                input_sender.py:259      _verify_before_press（漂移>4px 跳过）
-  时间线                            input_sender.py:26/27/28 容差 4px / 步进 30ms / 松手后 350ms 才还原光标
-                                    input_sender.py:87       DryRunSender.click_at（只写日志，同样校验越界）
-底层原语                            automation/real_input.py:344 send_left_click(sleep, hold_seconds, stop_event)
+主窗口分发                          gui/workers.py   run_debug_action
+业务编排（单点）                    core/debug.py         run_single_click(hold_ms=...)
+业务编排（连点）                    core/debug.py        run_repeat_click(..., hold_ms=...)（间隔＝点击之后的等待）
+校验                                core/debug.py         _validate_click_hold（0–5000 ms 整数）
+通道（干跑/真实）                   automation/input_sender.py build_channel
+  点击                              input_sender.py      RealInputSender.click_at(x, y, hold_seconds)
+  **两步移动（hover）**             input_sender.py      _move_cursor_for_click（中途点 → 目标）
+  **点击前核对事实**                input_sender.py      _verify_before_press（漂移>4px 跳过）
+  时间线                            input_sender.py 容差 4px / 步进 30ms / 松手后 350ms 才还原光标
+                                    input_sender.py       DryRunSender.click_at（只写日志，同样校验越界）
+底层原语                            automation/real_input.py send_left_click(sleep, hold_seconds, stop_event)
   按下 → 按住（CLICK_SLICE_SECONDS=50ms 切片查急停）→ **finally 抬起左键**
-  置前后等待 200ms（:59）、按下前等待 80ms（:58）
-  命中测试/窗口描述                 automation/real_input.py:166/184 window_under_point / describe_window
+  置前后等待 200ms、按下前等待 80ms
+  命中测试/窗口描述                 automation/real_input.py window_under_point / describe_window
 ```
 
 ### 主链路 B：任务执行与输入注入
 
 ```
-卡订单页勾选 → 任务进队列（core/registry.py 注册表）；日常任务页 2026-09-21 起为界面版（尚未绑配置）
-主窗口「启动」                      gui/main_window.py:315   _start()
-  真实模式确认弹窗                  gui/main_window.py:342   _real_mode_warning_text()/_confirm_real_mode()
-  运行线程 _RunnerThread            gui/workers.py:30
-  Runner 顺序执行                   core/runner.py:68        Runner.start()
-    每个任务拿到 TaskContext（含 sender）core/task.py:15
-    输入通道构建                    automation/input_sender.py:575 build_channel()
-      ├─ 干跑：DryRunSender（:50，只写日志，**同样做越界校验**）
-      └─ 真实：WindowReadinessGate(:318) → RealInputSender(:117)
-           点击/滑动前校验              input_sender.py:516/531 point_in_client_area / check_points_in_bounds
-           每次输入前置顶/置前并复核    automation/real_input.py:237 ensure_window_front()
-           客户端→屏幕换算              automation/real_input.py:157 client_to_screen()
-           实际注入                     automation/real_input.py:300 _send()（SendInput）
-    停止/F8 急停                     gui/main_window.py:365/392 _stop()/_on_failsafe() → stop_event
+日常任务总开关 + 任务开关 → 按 order / ID 入队；启用的卡订单、功能三和功能四按固定顺序追加
+主窗口「启动」                      gui/main_window.py   _start()
+  真实模式确认弹窗                  gui/main_window.py   _real_mode_warning_text()/_confirm_real_mode()
+  运行线程 _RunnerThread            gui/workers.py
+  Runner 顺序执行                   core/runner.py        Runner.start()
+    每个任务拿到 TaskContext（含 sender）core/task.py
+    输入通道构建                    automation/input_sender.py build_channel()
+      ├─ 干跑：DryRunSender（，只写日志，**同样做越界校验**）
+      └─ 真实：WindowReadinessGate() → RealInputSender()
+           点击/滑动前校验              input_sender.py point_in_client_area / check_points_in_bounds
+           每次输入前置顶/置前并复核    automation/real_input.py ensure_window_front()
+           客户端→屏幕换算              automation/real_input.py client_to_screen()
+           实际注入                     automation/real_input.py _send()（SendInput）
+    停止/F8 急停                     gui/main_window.py _stop()/_on_failsafe() → stop_event
 ```
 
 ### 线程模型（bug 高发区）
@@ -251,6 +250,8 @@ print('layer check violations =', bad)
 | 调试测试线程 `_DebugTestThread` | `workers.py:41` | 执行期间禁用按钮；可被 `request_stop()` 中断 |
 | 截图线程 `_CaptureThread` | `workers.py:100` | 框选前截图，完成后发 `captured` |
 | 诊断线程 `_DiagnoseThread` | `workers.py:122` | 窗口诊断 |
+| 日常截图/解码线程 | `gui/daily_workers.py` | 后台截图或解码，结果发回 GUI，作废结果丢弃 |
+| 试识别线程 | `gui/workers.py` | `ACTIVE_PROBES` 持有至结束，关弹窗不阻塞 GUI |
 
 **找 bug 时优先怀疑**：跨线程直接操作控件、`stop_event` 没有切片检查、`finally` 里漏了资源释放或状态回滚。
 
@@ -263,43 +264,43 @@ print('layer check violations =', bad)
 | 坐标 | 定义 | 谁在用 |
 |---|---|---|
 | **客户区坐标** | 游戏窗口客户区左上角为 (0,0)，范围 `[0,width)×[0,height)` | **识别结果、框选选区、点击/滑动入参**，全项目统一用它 |
-| 窗口坐标/屏幕坐标 | Windows 原生坐标 | 只在 `client_to_screen` / `ClientToScreen` 处出现 |
+| **窗口坐标** | 窗口左上角为原点，包含标题栏与边框 | 窗口 DC、PrintWindow 与客户区裁剪 |
+| **屏幕坐标** | 桌面坐标 | 真实输入、屏幕取景及 `ClientToScreen` 换算 |
 
 - 客户区左上角在屏幕上的位置：`win32gui.ClientToScreen(hwnd, (0, 0))`。
 - **客户区在窗口内的偏移**：`automation/window.py:80 client_area_offset(hwnd)` =
   `ClientToScreen(0,0) - GetWindowRect左上角` = 标题栏高度 + 边框宽度。
-  实测本作窗口 1618×1070 / 客户区 1600×1024 → **(9, 37)**；无边框全屏窗口为 (0, 0)。
+  偏移由当前窗口几何计算；无边框窗口为 (0, 0)。
 
-### 三条必须记住的几何事实（都踩过）
+### 几何约束
 
 1. **窗口 DC（`GetWindowDC`）与 `PrintWindow` 的原点都是"窗口左上角"**（含标题栏）。
    取景必须以客户区偏移为源点/裁剪原点，否则抓到"标题栏 + 客户区上半部分"，
-   画面底部缺"标题栏高度"一截，**识别坐标整体偏下标题栏高度**（实测 37px）。
+   画面底部缺"标题栏高度"一截，**识别坐标整体偏下标题栏高度**。
    → `_render_client_bits_bitblt` 的 BitBlt 源点、`_render_client_bits_printwindow` 的整窗渲染+裁剪。
 2. **屏幕 BitBlt 用 `ClientToScreen(0,0)` 作源点，天然以客户区左上为原点**，不需要再偏移/裁剪
    （`automation/vision.py:254`，它是"原点正确"的参照实现）。但它要求**窗口确实在前台**，
    否则会抓到被遮挡窗口的内容，因此调用方有前台门禁（`vision.py:110`）。
-3. **窗口尺寸会变**：客户区实测过 1920×1052 与 1600×1024 两种。任何"写死 1920×1052"的假设
-   都是潜在 bug；坐标/尺寸一律运行时读取。
+3. **窗口尺寸会变**：客户区坐标与尺寸一律运行时读取，不写死分辨率。
 
-### 取景回退链（本作实测：PrintWindow 两种 flag 都返回纯黑帧）
 
+### 取景回退链
+
+```text
+capture_client_bgr
+  → PrintWindow(PW_RENDERFULLCONTENT)
+  → 纯色/黑帧或主路径异常时回退
+      → PrintWindow(PW_CLIENTONLY)
+      → BitBlt(窗口 DC)，源点为客户区偏移
+      → 屏幕 BitBlt，仅窗口在前台时使用
+  → 全部失败时抛带原因的 VisionError
 ```
-capture_client_bgr (vision.py:393)
-  └─ _render_client_bits = PrintWindow(PW_RENDERFULLCONTENT)   ← 本作黑帧
-     is_blank_frame() → 纯色/黑帧?
-     └─ _render_client_bgr_fallback (vision.py:110)
-          ├─ PrintWindow(PW_CLIENTONLY)      ← 本作黑帧
-          ├─ BitBlt(窗口DC)                  ← **本作实际生效的就是它**（源点必须是客户区偏移）
-          └─ 屏幕 BitBlt(桌面DC)             ← 仅当前台；本作的"正确参照"
-     全失败 → 抛可读 VisionError（提示以管理员运行 / 让窗口可见）
-```
 
-### 自检方法（实战验证过，直接照抄）
+### 坐标自检方法
 
 抓一张客户区图 + 一张整屏图，用模板匹配量出"客户区图左上角在屏幕上的真实位置"，
 它必须等于 `ClientToScreen(0,0)`；再独立核对"识别出的客户区中心"与"整屏定位换算值"，
-偏差应 ≤3px。**修复前的实测值是偏差 (-9, -37)（就是标题栏/边框），修复后 (0, 0)。**
+偏差应 ≤3px。
 可运行脚本见第 ⑧ 节。
 
 ---
@@ -317,10 +318,10 @@ capture_client_bgr (vision.py:393)
 | 5 | 滑动任何退出路径都释放左键；松手后复查 `VK_LBUTTON`；长按不卡键 | 鼠标卡在按下状态、游戏一直拖 | `test_send_left_drag_releases_button_on_exception`、`test_drag_reports_failure_when_button_cannot_be_released`、`test_send_left_drag_aborts_on_stop_and_releases_button` |
 | 5b | **点击时长**：点击＝按下→按住 `hold_seconds`→抬起；`None`＝引擎默认（40 ms）、`0`＝瞬时；按住期间切片检查急停，**任何退出路径都抬起左键** | 长按被急停后左键卡住；瞬时点击被游戏吞掉；「不传时长」被误当成 0 ms | `test_send_left_click_honours_requested_hold`、`test_send_left_click_checks_stop_while_holding`、`test_send_left_click_releases_when_sleep_raises`、`test_real_sender_passes_click_hold_to_primitive`、`test_single_click_passes_click_hold`、`test_single_click_zero_hold_means_instant` |
 | 5c | **点击前必须核对事实**：实测光标是否到达目标（偏差 >`CLICK_CURSOR_TOLERANCE_PX`=4px 就**跳过点击**）、光标处顶层窗口、前台/置顶状态、客户区尺寸，全部写进日志 | 日志写"点击完成"但游戏没反应时无法区分"没送到"与"送到了游戏不认"；光标被钳制时会点到别的控件 | `test_real_sender_logs_click_context_before_press`、`test_real_sender_skips_click_when_cursor_did_not_move`、`test_real_sender_logs_warning_when_hit_test_is_other_window` |
-| 5d | **输入时间线**：光标分两步移动（先中途点，`CLICK_MOVE_STEP_SECONDS`=30ms）→ `INPUT_SETTLE_SECONDS`=80ms → 按下；置前/置顶后等 `FRONT_SETTLE_SECONDS`=200ms 再动；**松手后等 `CLICK_RESTORE_DELAY_SECONDS`=350ms 才还原光标，且必须分帧小步移回（`restore_cursor_smooth`），禁止一次 `SetCursorPos` 跳回** | 游戏按帧采样指针位置：一次跳跃 + 松手后立刻跳回别的显示器 → 处理这次点击的那一帧已经"指针不在窗口内"，点击被丢弃（实测：关掉「把真实鼠标移回原位置」就能点动） | `test_click_moves_cursor_in_two_steps_before_press`、`test_click_waits_before_restoring_cursor`、`test_real_sender_keeps_cursor_when_restore_disabled`、`test_focus_settle_is_long_enough_for_the_game`、`test_activate_sleeps_for_the_focus_settle` |
+| 5d | **输入时间线**：光标分两步移动（先中途点，`CLICK_MOVE_STEP_SECONDS`=30ms）→ `INPUT_SETTLE_SECONDS`=80ms → 按下；置前/置顶后等 `FRONT_SETTLE_SECONDS`=200ms 再动；**松手后等 `CLICK_RESTORE_DELAY_SECONDS`=350ms 才还原光标，且必须分帧小步移回（`restore_cursor_smooth`），禁止一次 `SetCursorPos` 跳回** | 游戏按帧采样指针位置：一次跳跃 + 松手后立刻跳回别的显示器 → 处理这次点击的那一帧已经"指针不在窗口内"，点击被丢弃 | `test_click_moves_cursor_in_two_steps_before_press`、`test_click_waits_before_restoring_cursor`、`test_real_sender_keeps_cursor_when_restore_disabled`、`test_focus_settle_is_long_enough_for_the_game`、`test_activate_sleeps_for_the_focus_settle` |
 | 6 | 滑动结束后**延迟 + 分帧**还原光标，禁止一次 `SetCursorPos` 跳回 | 画面继续乱飘（残留拖拽状态被算成大位移） | `test_real_sender_drag_waits_before_restoring_cursor`、`test_restore_cursor_smooth_moves_in_small_steps` |
 | 7 | 每次真实输入前置顶/置前并回读复核；无法确保则**绝不输入** | 输入打到别的窗口 | `test_ensure_window_front_*`、`test_real_sender_refuses_input_when_window_cannot_be_focused` |
-| 8 | **取景原点必须是客户区左上**（BitBlt 源点用 `client_area_offset`，PrintWindow 整窗渲染后裁剪） | 坐标整体偏下"标题栏高度"（实测 37px） | `test_bitblt_renderer_starts_at_client_origin`、`test_printwindow_renderer_crops_client_area`、`test_client_area_offset_is_title_bar_plus_border` |
+| 8 | **取景原点必须是客户区左上**（BitBlt 源点用 `client_area_offset`，PrintWindow 整窗渲染后裁剪） | 坐标整体偏下"标题栏高度" | `test_bitblt_renderer_starts_at_client_origin`、`test_printwindow_renderer_crops_client_area`、`test_client_area_offset_is_title_bar_plus_border` |
 | 9 | 黑帧绝不能当成"未识别到目标"；纯色模板必须拒绝 | 报"未识别到目标"掩盖真因；纯色模板刷出一堆满分假坐标 | `test_capture_client_bgr_falls_back_on_blank_frame`、`test_load_template_rejects_flat_image`、`test_recognize_skips_flat_template` |
 | 10 | 多尺度：**阈值必须在精修之后判断**；粗搜只在"越过峰值回落"后停 | 真实缩放（如 0.75x／3.50x）被漏掉或框小一圈 | `test_locate_scaled_finds_scale_between_coarse_steps`、`test_locate_scaled_stops_coarse_search_only_after_peak` |
 | 11 | 两档搜索：先 0.3x–2.0x，落空才扩到 4.0x，第二档不重复扫第一档 | 命中慢一倍；或高倍缩放识别不到 | `test_default_scale_range_is_fast_then_extended`、`test_locate_scaled_fast_pass_does_not_touch_extended_range`、`test_locate_scaled_extended_pass_runs_when_fast_pass_misses` |
@@ -338,144 +339,55 @@ capture_client_bgr (vision.py:393)
 
 ---
 
-## ⑤ 历史 bug 档案（症状 / 根因 / 修法 / 回归测试）
+## ⑤ 常见症状排查
 
-> **这份档案是找 bug 的最短路径**：同一根因往往在别处还有第二份（例如"原点/坐标系搞错"这类）。
-> 建议逐条问："这条例子里**同一类错误**，换一个函数还会不会犯？"
+按当前症状检查对应条件；代码修改遵守 `AGENTS.md`，输入相关问题先核对日志与干跑结果。
 
-| # | 症状（用户视角） | 根因 | 修法 | 回归测试 / 提交 |
-|---|---|---|---|---|
-| 1 | 识别到的图像没问题，但**坐标总比真实位置偏下**；框选时画面**下方少一截（≈标题框高度）** | 实际生效的 `BitBlt(窗口DC)` 从窗口 DC 的 `(0,0)`（标题栏左上）取图，于是图像顶部多出标题栏、底部缺一截 → 图像行号 = 真实客户区 y + 37 | 新增 `client_area_offset()` 作唯一真源；BitBlt 源点改为该偏移；PrintWindow 整窗渲染后按偏移裁 | `test_bitblt_renderer_starts_at_client_origin` 等 5 条 / `6304270` |
-| 2 | 点「保存为模板」后**什么都没发生**（模板没生成、主窗口却报"未选择有效区域"） | 保存按钮从功能第一版起就只 `connect(self.accept)`，裁剪函数 `save_selection()` 从未被 GUI 调用 | 保存按钮改连 `_on_save_clicked`：校验选区 → 裁剪落盘 → 成功才关窗；失败给提示且不关窗 | `test_save_button_writes_only_selected_region`、`test_crop_flow_writes_only_selected_region` / `df31f82` |
-| 3 | 一张纯色模板刷出 **20 处"匹配度 1.000"** 的假坐标（还耗 16s） | `TM_CCOEFF_NORMED` 对无纹理模板在平坦区域天然满分 | `load_template` 用 `is_blank_frame` 在**读取阶段**拒绝纯色模板 | `test_load_template_rejects_flat_image`、`test_recognize_skips_flat_template` / `b177a39` |
-| 4 | 画面放大/缩小后**识别不到** | 只做 1:1 匹配（缩放后模板像素尺寸变了） | 多尺度搜索：粗搜 + 精修 + 阈值在精修后判断 | `test_locate_scaled_finds_{enlarged,shrunk}_template` / `c0c522d` |
-| 5 | 带框截图整帧**纯黑**，却报告"未识别到目标" | 本作 PrintWindow 返回黑帧，旧代码把它当"匹配度 0" | `is_blank_frame` 检测 + 逐级回退取景；全失败给可读错误 | `test_capture_client_bgr_falls_back_on_blank_frame`、`..._reports_actionable_error_when_all_blank` / `c0c522d` |
-| 6 | 真值 3.50x 被测成 3.36x（框小一圈） | 粗搜"遇到第一个够强的候选就停"：3.30x 已 0.9018 就停，±0.06 精修够不到 3.50 | 改为"越过峰值回落才停"（`SCALE_PEAK_DROP`）+ 保留"候选面积 ≥30%"保护 | `test_locate_scaled_stops_coarse_search_only_after_peak` / `4779f76` |
-| 7 | 高倍缩放识别不到（>2.0x） | 范围上界太小 | 两档搜索：0.3–2.0 先搜，落空扩到 4.0（第二档不重复扫） | `test_locate_scaled_finds_two_and_a_half_times_zoom`、`test_default_scale_range_is_fast_then_extended` / `251215d` |
-| 8 | 打开开发者调试页后**所有页签高度都变了**、日志面板被压扁 | `QTabWidget` 高度取"所有页最大最小高度"与"最大建议高度"；调试页控件多把最小高度顶高 | 全部页签改 `ScrollablePage`（内容进 `QScrollArea` + 固定 `sizeHint`）+ 页签区 `stretch=1` + 日志面板最小高度；新增 `--measure-layout` 做回归 | `test_developer_tab_does_not_change_page_heights`、`test_measure_layout_reports_stable_heights` |
-| 9 | 冻结 exe 里 `--measure-layout` 崩溃（`UnicodeEncodeError: 'gbk'`） | GUI 子系统 stdout 按 ANSI 代码页，报告里的 `✓` 编不出来 | 报告改 ASCII 安全的 `[OK]/[NG]` + `_print_safe()` 降级替换 | `test_format_measure_report_is_cp936_printable`、`test_cli_measure_layout_exits_zero` |
-| 10 | `PROJECT_SPEC.md` 679 行、`config.example.json` 中文全部变乱码 | PS 5.1 `Get-Content -Raw \| Set-Content` 按 GBK 读无 BOM 的 UTF-8 | `git checkout --` 恢复后改用 Python 显式 `encoding="utf-8"`；写进 AGENTS 禁止条款 | AGENTS §2 末条 |
-| 11 | 框选出来的模板**宽度多 1 像素** | Qt `QRect(左上, 右下)` 右下角是**包含式**的 | 一律按"左上 + 宽高"构造选区（`_set_selection_from_points`） | `test_crop_view_maps_widget_selection_to_image_pixels` |
-| 12 | 滑动结束后画面**继续乱飘** | 瞬移式路径被引擎当甩动；残留拖拽状态把光标回跳算成大位移 | 缓出曲线分帧 + 末尾静止帧 + 松手后复查左键 + 延迟后**分帧**还原光标 | `test_build_drag_path_is_eased_out_with_still_tail`、`test_drag_path_holds_still_before_release`、`test_real_sender_drag_waits_before_restoring_cursor` |
-| 13 | 勾了"还原光标"但滑动后鼠标没回去 | 滑动路径漏了还原（或还原被一次跳回） | 滑动结束走同一套 `restore_cursor_after_click` 逻辑（延迟 + 分步，被中断也要还原） | `test_real_sender_drag_restores_cursor_after_drag`、`..._even_if_wait_raises` |
-| 14 | 模板列表里"移除选中"一次把**全部**删掉 | `QListWidget.setCurrentRow` 在多选模式下会把新行**叠加**进选区 | 改用 `setCurrentItem(..., ClearAndSelect)` | `test_debug_page_vision_remove_and_clear_templates` / `059b8e6` |
-| 15 | 打包脚本在 PowerShell 5.1 下报一堆解析错误；exe 起来却没有 stdout；`dist` 被占用导致构建失败但看不清原因 | `build.ps1` 缺 UTF-8 **BOM**；GUI 子系统无 stdout/stderr；`&` 不等待 GUI 进程、`$LASTEXITCODE` 为空；运行中的 exe 锁住日志文件 | 文件带 BOM；`rthook_windowed_stdio.py` 把缺失的 stdio 指向 `os.devnull`；冒烟改用 `Start-Process -Wait -PassThru -RedirectStandard*`；dist 清理失败给可读原因 | `tests/test_packaging.py` 8 条守卫 |
-
-| 16 | 单点测试"某页能点、另一页点不动"（日志显示光标偏差 0px、前台、置顶、命中窗口都对） | **松手后用 `SetCursorPos` 一次把光标跳回另一个显示器**：游戏（Unity）按帧采样指针位置，处理这次点击的那一帧看到"指针已不在窗口内"→ 点击被丢弃；页面越重帧越慢越容易丢。**用户实测关闭「把真实鼠标移回原位置」立刻可点，反证根因** | 点击还原改为与滑动同源的做法：先延迟 `CLICK_RESTORE_DELAY_SECONDS`（0.35s）再用 `restore_cursor_smooth` 分帧小步移回；另加两步移动（hover）+ 置前后 200ms + 点击前事实核对日志 | `test_click_waits_before_restoring_cursor`、`test_real_sender_keeps_cursor_when_restore_disabled`、`test_click_moves_cursor_in_two_steps_before_press`、`test_real_sender_logs_click_context_before_press` / `0b0298d`、`a43836f` |
-
-> **第 17–24 条来自 2026-09-20 的代码审查（`reports/CODE_REVIEW_REPORT_20260920_1.md`：P1×3 / P2×9 / P3×10，已全部修复）**。
-> 它们集中在三类**用户看得见的失败**上：① 自己把配置写坏（下次启动整份重置）；② 状态/资源不复位
-> （窗口永久置顶、线程不收、按钮按不动）；③ 失败被藏起来（黑图报成功、热键失败只写日志）。
-> 找新 bug 时值得照这三类同一句话追问："**这里失败的时候，用户看得见吗？"**
-
-| # | 症状（用户视角） | 根因 | 修法 | 回归测试 / 提交 |
-|---|---|---|---|---|
-| 17 | 把配置里某个任务参数改坏后，工具**再也起不来**（启动即崩，界面都不出现） | `validation.migrate` 把畸形 `params`（不是 dict）交给迁移函数，异常不在 `try` 内 → `store.load` 直接抛 | `migrate` 每一步独立 `try/except`（失败记 WARNING + 回退原始 dict）；`store.load` 再把迁移包一层兜底走 `_recover`（备份坏文件 + 默认值） | `test_load_survives_malformed_params_during_migration` / `dab9348` |
-| 18 | 界面上能保存的配置，下次启动却**整份被重置**（按键/滑动步数等） | 界面允许的步数上限**大于**校验器上限 → 能存下"自己读不回来"的配置，读回时校验失败 → 恢复默认 | 上限统一到 `config/models.py`（`MAX_KEY_STEPS`/`MAX_SWIPE_STEPS`/`MAX_CLICK_POINTS`＝20）并被解析与校验共用；`store.save` **先校验再落盘**（不合法抛 `ConfigSaveError`，文件保持原样）；GUI 弹窗 + 状态栏提示；日常页超限记 WARNING 并回滚输入框 | `test_save_refuses_invalid_config_and_keeps_old_file`、`test_daily_page_rejects_over_limit_keys_text` / `dab9348`、`af52571` |
-| 19 | 对"无法置前"的窗口点一次，**游戏窗口永久浮在最上层**（只能重启游戏） | `_ensure_front_or_raise` 置顶成功、置前失败时直接抛错并丢弃 `FrontResult`，`finally` 里的取消置顶永远走不到；旧测试还把该行为写成了期望 | 抛错前先取消**本次由我们设置的**置顶（只在真的置顶过时调用）；`RELEASE_FLAGS` 并入 `TOP_FLAGS`，不误清别的程序设的置顶 | `test_real_sender_refuses_input_when_window_cannot_be_focused`、`test_real_sender_does_not_release_topmost_when_it_was_not_ours` / `082468b` |
-| 20 | 程序版本比配置文件旧（降级/回滚）时，**新配置被静默覆盖** | `load` 不认更高的 `schema_version`，`save` 直接写回 | 读到更新版本只读返回默认值、**不写盘**；`save` 覆盖前先备份 `config.json.bak-v<N>-<时间戳>` | `test_load_keeps_newer_version_file_untouched`、`test_save_backs_up_newer_version_file_before_overwriting` / `dab9348` |
-| 21 | 改了日志级别 / 轮转文件大小**不生效**（配置项是死配置） | `setup_logging()` 只在启动时用默认参数调用一次，重复调用还会叠加 handler | `setup_logging(level, max_file_mb, backup_count)` 幂等、参数变化时重建 `RotatingFileHandler`；`gui/app.py` 在 `store.load()` 后按配置重设 | `tests/test_utils_logging.py` / `af52571` |
-| 22 | 调试测试跑着**「停止」按不动**；任务与调试测试能同时跑；关窗后线程还在注入输入 | 「停止」只认任务线程；两条启动路径互不检查；`closeEvent` 不等线程；空闲等待是整段 `sleep` | 停止按钮按 `_long_job_running`（任务或调试）判定；`_start`/`_on_debug_test` 双向互斥；`closeEvent` 走 `_wait_for_threads()`（4 个线程，超时记 ERROR）；调试等待改可中断分片 | `test_stop_button_works_for_debug_test_without_ever_starting_task`、`test_debug_test_rejected_while_task_is_running`、`test_close_event_waits_for_all_background_threads`、`test_repeat_click_interval_is_interruptible` / `501c039`、`af52571` |
-| 23 | 窗口诊断报"成功"，但存下来的截图是**纯黑图**；取景主路径一抛异常就整体失败 | 诊断截图自带一套 PrintWindow 实现（本作必黑却报成功）；`capture_client_bgr` 的回退链只处理"黑帧"不处理"异常" | 诊断截图改为复用 `capture_client_bgr`（真 PNG + 黑帧检测，全失败给可读错误）；回退链把主路径包进 `try/except` 并在错误里带主因 | `test_screenshot_client_saves_real_png_via_capture_chain`、`test_diagnose_window_reports_blank_frame_instead_of_claiming_success`、`test_capture_client_bgr_falls_back_when_primary_raises` / `082468b` |
-| 24 | 并发点击"停止"会抛异常；`STOPPING → ERROR` 被当成非法（真实错误被状态机掩盖）；滑动某帧 move 失败却当滑过去了 | 状态读写无锁且迁移表有死路；`SendInput` 返回值被忽略 | `state` 加锁 + `try_transition`（非法迁移返回 False 不抛）、放行 `STOPPING → ERROR`；滑动逐帧核对返回值、失败即报错；`send_key_hold` 切片下限钳到 0.01s | `test_try_transition_never_raises`、`test_stopping_can_go_to_error`、`test_send_left_drag_reports_failure_when_move_fails`、`test_send_key_hold_tolerates_zero_slice` / `501c039`、`082468b` |
-
-> **第 25–27 条来自 2026-09-20 的第三轮审查（`reports/CODE_REVIEW_REPORT_20260920_3.md`，拆分重构复核：P2×1 / P3×4）**。
-> 这一轮的共同特征是**"同一件事被写了两份"**：常量两份、夹具三份、文档与签名不一致 ——
-> 单独看都不会立刻出错，但**改一处漏一处**时就会退化成第 18 条那种"配置被自己写坏"。
-
-| # | 症状（用户视角） | 根因 | 修法 | 回归测试 / 提交 |
-|---|---|---|---|---|
-| 25 | （**潜在**）"以后把按键步数上限调大"时，界面上能存下 25 步的配置，**下次启动却判它损坏并整份恢复默认** | `validation.py` 先 `from ...models import MAX_KEY_STEPS`，第 15 行又写了 `MAX_KEY_STEPS = 20` —— **同名赋值遮蔽了 import**；写入路径用 models 的、校验路径用本地的，两边今天都是 20 所以没暴露 | 删掉那行遮蔽（保留 import），上限只留 `config/models.py` 一份；并新增仓库级守卫：**任何模块级 import 都不得被同名赋值遮蔽** | `tests/test_source_guards.py::test_no_module_level_import_is_shadowed` / `a07b42a` |
-| 26 | （**潜在**）调试页允许填的坐标/间隔/次数与校验器各走各的，填进去了却在执行时被拒 | 同一组业务常量在两处各定义一份：`PW_*` 在 `vision.py` 与 `window.py` 各一份（后者是**死常量**）；`COORDINATE_MAX`/`INTERVAL_RANGE_MS`/`DURATION_RANGE_MS` 在 `core/debug.py` 与 `gui/pages/debug.py` 各一份 | 删掉 `window.py` 的死常量；调试页改为从 `core.debug` **导入**这些范围（`COUNT_RANGE` 由 `MAX_REPEAT` 推导）；守卫测试锁住"只允许定义一处 / 必须是同一个对象" | `test_printwindow_flags_are_defined_once`、`test_debug_page_limits_come_from_core_debug`、`test_sources_stay_under_line_limit` / `a07b42a` |
-| 27 | 三处"小而真"的债：接口表写了不存在的参数、共享夹具抽了但旧文件仍各有副本（三份行为已分歧）、跨模块 `from ... import _prepare` 引用私有名 | 拆分时只搬了代码，没顺手收敛"文档/夹具/私有名"这三类**隐形重复** | 接口表改成真实签名 `capture_client_bgr(hwnd)`；`test_gui_config/test_gui_layout/test_gui_smoke` 改用 `gui_helpers.window_factory`（并给它补 `tmp_path`/`developer_mode` 支持，全仓库只剩一份夹具）；`_prepare` → 公开名 `prepare_for_match` 并写进 §8 接口表 | 三个测试文件全绿（116 passed）；`gui_helpers.window_factory` 唯一副本 / `a07b42a`、`00a348b` |
-| 28 | 框选完发现**差一点**（多框/少框一截），只能**整块重新拖**（用户 2026-09-20 报告） | `CropView` 只有"按下→拖→松手"这一种交互：每次按下都从头开始新建选区，没有"改已有选区"的概念 | 加命中判定与三种拖拽模式：**选区内部**＝整体移动（`_apply_move`，夹在图像内）、**四角/四边 8 个手柄**＝改大小（`_apply_resize`：被拖的边跟手、对角固定、不小于 `MIN_SELECTION_SIZE`）、**选区外**＝重新框选；悬停给指针形状（缩放箭头/移动/十字），手柄画成 8 个方块；改完的选区就是保存用的选区 | `tests/test_gui_crop_edit.py`（2026-09-21 从 `test_gui_crop.py` 拆出）的 `test_drag_inside_selection_moves_it`、`test_drag_corner_handle_resizes_both_dimensions`、`test_drag_edge_handle_resizes_one_dimension`、`test_moving_selection_is_clamped_inside_image`、`test_resizing_cannot_shrink_below_minimum_size`、`test_drag_outside_selection_starts_a_new_one`、`test_cursor_hints_match_handle_and_inside`、`test_saved_template_uses_the_modified_selection` / 本条提交 |
-| 29 | 框选时**看不清选了哪块**、不知道自己框了多大；框歪了只能整块重拖（用户 2026-09-20 勾选的候选清单，批 1） | 视图只有"选区线框"一种反馈：选区外的画面与选区内一样亮（分不清边界）、拖拽时没有任何尺寸数字（要松手再看信息行）、拖错了只能重拖、修大小只能拽角 | 批 1 六项交互：**选区外压暗**（`_paint_dim_mask` 四个矩形拼，不动选区内像素）、**拖拽尺寸气泡**（`drag_bubble_text`＝`宽×高 @ (x, y)`，靠边翻转）、**Esc**（拖拽中＝撤销这次拖拽 `_selection_before_drag`／有选区＝清空／都没有＝交对话框关窗）、**双击**＝清空、**Alt+手柄**＝以中心对称缩放、**空格拖拽/右键拖拽**＝移动选区 | `tests/test_gui_crop_edit.py` 的 `test_dim_mask_darkens_outside_selection`、`test_drag_bubble_reports_size_while_dragging`、`test_escape_cancels_drag_and_restores_previous_selection`、`test_escape_clears_selection_when_not_dragging`、`test_escape_without_selection_reaches_the_dialog`、`test_double_click_clears_selection`、`test_alt_drag_resizes_around_the_selection_center`、`test_space_drag_moves_selection_even_on_a_handle`、`test_right_button_drag_moves_selection` / `296028c` |
-| 30 | 模板要框的细节太小，**截图缩放后看不见自己在框哪个像素**；想核对坐标只能松手看信息行（用户同批选的批 2） | 视图只有"整图适配"一档缩放：没有放大/缩小（滚轮无效）、没有平移（`_pan` 字段还不存在）、没有倍率与鼠标坐标显示、没有像素级放大镜 | 批 2 五项视图功能：**滚轮缩放**（`_set_zoom` 以鼠标处图像像素为锚点，`[0.5, 8]` 夹取）、**中键/空格拖拽平移**（`_clamp_pan` 至少留 60px 可见）、「**适配窗口**」/「**1:1 显示**」（1 图像像素＝1 控件像素）、**HUD**（选区 + 缩放% + 鼠标客户区坐标）、**放大镜**（132px、6 倍整数放大、十字 + 坐标、贴鼠标靠边翻转、`leaveEvent` 收起）；期间修掉三个真 bug：`QRect.center()` 奇数尺寸少 1 像素导致整图适配偏 `(-1, -1)`、放大镜可见性误用选区矩形（没框选时永不显示）、悬停不重绘（放大镜停在上一帧） | `tests/test_gui_crop_zoom.py` 11 条（`test_wheel_zoom_scales_and_keeps_cursor_anchor`、`test_zoom_actual_makes_one_image_pixel_one_widget_pixel`、`test_zoom_fit_restores_the_initial_view`、`test_zoom_is_clamped_to_limits`、`test_middle_button_drag_pans_the_image`、`test_magnifier_follows_cursor_and_stays_inside_view`、`test_magnifier_source_rect_is_clamped_to_image`、`test_magnifier_paints_the_pixel_under_the_cursor`、`test_info_label_shows_zoom_and_cursor_position`、`test_hovering_repaints_so_the_magnifier_follows_the_cursor`、`test_mouse_leave_hides_the_magnifier_and_the_coordinate_hint`）+ `test_crop_view_fits_image_inside_widget`（居中回归）/ 本条提交 |
-| 31 | 框到一大块**没有细节的背景**（纯色/一片模糊）也照样存成模板；等到识别时才发现刷出一堆"匹配度 1.000"的假坐标（用户同批选的批 3；历史上实测过纯色 260x260 命中 20 处） | 保存路径只查"有没有选区、够不够 8px"，**不看选区长什么样**；`load_template` 的纯色守卫只在**读图**时生效 —— 用户白框一次、存下一个永远读不进来的文件（轻噪声/平滑渐变连读图都过得去，照样满屏误匹配） | 新增 `assess_region_quality()`：**对比度**（灰度标准差）+ **结构**（Canny 边缘占比），大图按步长抽样到 ≤128px（拖动时每次鼠标移动都要算，整图 ~10ms → 抽样 1.4ms）；三档 —— `flat`（几乎是纯色，判据**复用 `is_blank_frame`**）**拒绝保存**、`low`（一个或两个信号弱）**只提示**、`ok`；界面侧信息行常驻「辨识度…」，保存按钮与 `save_selection()` 双层拦截（纯色时不写文件、不关窗口）；阈值拿真实素材标定并加守卫测试 | `tests/test_automation/test_template_quality.py` 9 条（`test_pure_color_region_is_unusable`、`test_light_noise_region_is_unusable`、`test_flat_region_with_small_noise_is_flagged_but_allowed`、`test_large_noisy_flat_region_is_flagged_but_allowed`、`test_textured_region_is_usable`、`test_single_glyph_region_is_usable`、`test_smooth_gradient_is_reported_as_low_not_flat`、`test_real_templates_are_all_rated_usable`、`test_report_carries_size_and_metrics`）+ `tests/test_gui_crop.py` 4 条 / 本条提交 |
-| 32 | 框完还是**心里没数**："这块区域在画面里是不是独一无二？会不会一识别就选中别的地方？"（用户 2026-09-21 指定做 D1） | 弹窗只能"框 → 保存 → 关掉 → 去调试页识别"才知道结果；而模板就是从这张图裁的，**"命中 1 处"是必然的**，所以直接报命中数等于没说 | 新增「**在本图试识别**」（`core.vision.probe_region_on_image`）：把选区当模板在同图做 **1:1** 试匹配，`self_index` 标出"自己那一处"，**结论只看"除自己以外还有几处"**（0 处＝独一无二 / >0 处＝列出其它位置中心坐标并警告可能选错，触顶提示"可能还有更多"）；命中的别处用**橙框 + 序号**直接画在图上（`CropView.set_probe_rects`）；匹配走后台线程 `TemplateProbeThread`（全屏大模板 1–2s），**关窗口等它结束**（`done()` → `_wait_for_probe_thread`）；选区一变旧结论作废；纯色选区不试、直接提示换一块；零命中（理论不该发生）报成"异常请反馈" | `tests/test_core/test_vision_probe.py` 7 条 + `tests/test_gui_crop_probe.py` 6 条（`test_probe_marks_the_other_places_on_the_image`、`test_closing_waits_for_the_probe_thread` 等）/ 本条提交 |
-| 33 | 评审第四轮 P2-1（**可稳定复现的用户可见缺陷**）：**点一下再拖拽**，拖出来的框被丢弃，反而在图像左上角留下一个**看不见的 8×8 选区**，点保存就会存下这块 | 单击（按下→松开、没移动）留下 `QRect(x, y, 0, 0)` 的退化选区：`selection_in_image()` 判它无效、界面也画不出来，但它**还在内部状态里** → 下一次在附近按下时 `handle_rects()` 把 8 个手柄算成**完全重合**的一小块 → `hit_test` 判成 "nw"（拖手柄）→ `_start_rect` 因 `(QRect(0,0,0,0) or QRect())` 退化成空矩形 | 三处一起改（评审给的三条建议全采纳）：① `mouseReleaseEvent` 松手时丢弃小于 `MIN_SELECTION_SIZE` 的退化选区（`_discard_degenerate_selection`）；② `handle_rects()` 在绘制矩形小于 `HANDLE_SIZE_PX` 时返回 `{}`（不给手柄），`hit_test` 同步按"没有手柄"处理；③ 顺手把 `hit_test` 里重复算 8 次的手柄矩形收敛成一次（评审 P3-9）| `tests/test_gui_crop_edit.py::test_click_then_drag_frames_a_visible_selection`（离屏按评审的原始步骤复现）/ 本条提交 |
-| 34 | 评审第四轮 P2-2/P2-3/P2-4（试识别的**口径与生命周期**）：① 结论写着"识别不会认错"，但试识别是 1:1 + 固定阈值，正式识别是多尺度 + 用户阈值 —— 只会更乐观；② 跑的过程中改选区，旧结论会永久留在界面上；③ 关窗在 GUI 线程里 `wait(10 秒)`，超时照样关闭 = 把在跑的 QThread 丢给 GC；按钮还按 `isRunning()` 判定，可能把新线程引用清掉 | 试识别的三个"边界条件"都没对齐：阈值没往下传、结论没写成立条件、线程身份与销毁时机没管 | ① 阈值从调试页传进弹窗（`debug_page.vision_threshold()` → `TemplateCropDialog(..., threshold=...)`），结论措辞改成"**本图 1:1 匹配（阈值 X.XX）下**只命中你框的这一处"并说明正式识别还会搜缩放版本；② `_on_probe_finished` 比对 `result.region` 与当前选区，不一致就丢弃并提示"已作废"；③ 关窗改为 `request_stop()` + **只断开本弹窗的槽**（保住 `finished` 上的 `_unregister`）+ 线程由模块级 `ACTIVE_PROBES` 强引用到自然结束（`start_probe_thread()` 登记），按钮按 `probe_in_flight()` 判定、槽里按 `self.sender() is self._probe_thread` 保护置空 | `tests/test_gui_crop_probe.py` 的 `test_probe_uses_the_threshold_it_was_given`、`test_probe_result_is_dropped_when_the_selection_changes_while_running`、`test_probe_thread_is_registered_until_it_finishes`、`test_closing_releases_the_probe_thread_without_blocking` / 本条提交 |
-| 35 | 评审第四轮 P2-5 + P3 一批：换台机器跑测试会误报"模板图片还没入库"；滑条拖完旋钮会被写回一个略不同的值；细纹理可能被抽样判成"纯色"而误拦保存；`assets/anchors/*.jpg` 不被忽略；关于页复制出的诊断信息带用户目录的绝对路径、打开关于页就建目录、读不到版本号不记日志 | 都是"本机恰好通过 / 只在边界上出错"类问题：① `git ls-files` 的 `core.quotePath` 默认 true，CJK 文件名被转义；② 滑条换算中间过了一道"整数百分比"（402/1001 个刻度回不到原位）；③ `assess_region_quality` 用跨步抽样判 `flat`，而 `flat` 是唯一会拦住保存的档位；④ `.gitignore` 只写了 anchors 的 `*.png`；⑤ 诊断信息贴绝对路径、目录按钮构造时就 `mkdir`、`except` 静默返回"未知" | ① 测试里的 git 调用统一加 `-c core.quotePath=false`；② 滑条换算改成**以 2 为底的浮点倍数**（`zoom_slider_to_zoom`/`zoom_to_slider`），101 个刻度逐点往返一致；③ 抽样判 `flat` 时用**全分辨率复核**一次（`_quality_metrics`）；④ anchors 补齐 5 种图片后缀；⑤ 诊断信息改相对程序目录（并断言不含盘符/`Users`）、目录按钮的 tooltip 延迟到悬停（`eventFilter`）、`_pyside_version` 失败记 WARNING；另按 P3-2 删除零调用的 `set_zoom()`、把 1:1 做成**双击滑条**；按 P3-8 把三个框选测试各自复制的 `_image()` 收敛进 `tests/gui_helpers.py` | `tests/test_paths.py`（能扛 `core.quotePath=true`）、`tests/test_gui_crop_zoom.py::test_zoom_slider_round_trips_at_every_position`、`test_automation/test_template_quality.py::test_fine_stripes_are_not_misjudged_by_the_sampling`、`tests/test_gui_about.py` 4 条 / 本条提交 |
+| 症状 | 检查要点 | 相关位置 |
+|---|---|---|
+| 识别或框选坐标整体偏移、画面底部缺失 | 窗口 DC 源点为客户区偏移；PrintWindow 整窗渲染后裁客户区；结果统一用客户区坐标 | `automation/window.py`、`automation/vision.py`，第 ③ 节探针 |
+| 点击无反应但日志显示完成 | 核对实测光标偏差、命中窗口、前台与置顶状态，以及两步移动、按下前等待、松手后平滑还原 | `_verify_before_press`、`_move_cursor_for_click`、`send_left_click` |
+| 松手后画面继续移动或鼠标卡住 | 滑动尾部静止帧、每帧返回值、`finally` 释放、左键复查、延迟与平滑还原 | `automation/drag_path.py`、`automation/real_input.py` |
+| 急停后按键仍按住 | 点击和长按切片检查停止事件，所有退出路径释放按键，组合键逆序释放修饰键 | `send_left_click`、`send_key_hold`、`send_key_combo` |
+| 输入命中窗口外或其他控件 | 客户区范围、读尺寸失败是否跳过、实测光标容差、窗口置前复核 | `point_in_client_area`、`check_points_in_bounds`、`RealInputSender` |
+| 输入失败后游戏仍置顶 | 置前失败与异常退出都取消本次设置的置顶，不清除外部置顶 | `_ensure_front_or_raise`、`ensure_window_front` |
+| 模板大量满分命中或误选重复元素 | 纯色拒收、区域质量、匹配阈值、多模板顺序和本图试识别的重复位置；同图 1:1 结论不能保证正式匹配唯一 | `load_template`、`assess_region_quality`、`probe_region_on_image` |
+| 放大或缩小后找不到模板，匹配框尺寸不准 | 两档搜索实际执行范围、精修后判断阈值、粗搜越过峰值后停止、候选面积约束 | `automation/multiscale.py` |
+| 截图全黑、不可用或识别报取景失败 | 每条取景路径的黑帧与异常回退，屏幕取景前台条件，工具与游戏权限 | `capture_client_bgr`，第 ⑧ 节探针 |
+| 窗口诊断截图和识别取景不一致 | 诊断复用同一取景链，生成真实 PNG 并校验黑帧 | `screenshot_client`、`capture_client_bgr` |
+| 中文路径读不到图片 | 编码、`np.fromfile` + `cv2.imdecode`、配置路径换算与实际文件状态 | `load_template`、`utils/paths.py` |
+| 保存模板失败、保存整屏或选区不可见 | 有效选区与最小尺寸、退化选区清理、手柄命中、当前选区用于裁剪、保存失败不关窗 | `CropView`、`save_selection`、`_discard_degenerate_selection` |
+| 选区移动/缩放不准、键盘微调失效 | 图像与控件坐标换算、边界夹取、焦点、手柄几何与滑条 `NoFocus` | `crop_view.py`、`crop_view_zoom.py` |
+| 滑条跳动、图像居中偏移、放大镜不跟鼠标 | 对数换算精确互逆、尺寸差居中、悬停重绘、缩放状态同步与 `blockSignals` | `zoom_slider_to_zoom`、`zoom_to_slider`、`_refresh_info` |
+| 试识别结论与当前选区不一致、关窗卡住 | 结果区域与选区比对、结论失效、槽的线程身份、`ACTIVE_PROBES` 生命周期，不在 GUI `wait()` | `crop_dialog.py`、`gui/workers.py` |
+| 模板列表移除影响其他选中项 | QListWidget 选择模式、移除目标与当前行状态 | 调试页模板列表与相关 GUI 测试 |
+| 配置损坏后不能启动或保存后被恢复默认 | 迁移异常兜底、保存前校验、GUI 与校验器共用上限、非法字段提示 | `config/validation.py`、`config/store.py` |
+| 程序版本低于配置时覆盖了新配置 | 更高 schema 只读，覆盖前备份 | `config/store.py` |
+| 日志设置不生效或重复输出 | 加载后应用 `config.logging`、handler 幂等与参数变化时重建 | `setup_logging`、`gui/app.py` |
+| 停止、运行状态或关窗表现异常 | 任务与调试互斥、所有相关线程接入停止、状态加锁、`try_transition`、资源释放 | `main_window.py`、`gui/workers.py`、`core/state.py` |
+| F8 不可用 | 其他程序占用、权限、界面提示与重注册；使用停止按钮或调整热键 | `HotkeyRegistrar`、`show_hotkey_hint` |
+| 改上限后一处允许、另一处拒绝 | import 遮蔽、常量重复定义、GUI 与配置校验共享同一对象 | `config/models.py`、`tests/test_source_guards.py` |
+| 换电脑后路径守卫误报 | Git 路径转义配置，使用 `-c core.quotePath=false` | `tests/test_paths.py` |
+| 打开调试页或换参考图后页签高度变化 | `ScrollablePage`、建议尺寸、日志最小高度、图片占位尺寸 | `gui/widgets.py`、`gui/layout_measure.py` |
+| 日常参考图不更新或误删除文件 | 控制器信号、解码代次、GUI 写配置、删除确认、管理目录与共享引用保护 | `gui/daily_media.py`、`daily_workers.py`、`daily_files.py`、`daily_deletion.py` |
 
 ---
 
-## ⑥ 尚未修 / 已知薄弱点（找 bug 的优先清单）
+## ⑥ 当前限制与待实现功能
 
-按"值得投入"排序：
-
-1. ~~三个源文件超 600 行硬线~~ **已拆（2026-09-20，用户要求；纯搬运、行为零变化）**：
-   - `automation/vision.py` 654 → **319**，拆出 `template_match.py`（175，读图与匹配原语）+
-     `multiscale.py`（238，两档缩放搜索）；`vision.py` 保留取景/渲染并**再导出**旧名字，
-     所以 `core/vision.py`、`__main__.py`、`window.py` 与旧导入都不用改。
-   - `automation/real_input.py` 620 → **583**，拆出 `drag_path.py`（66，纯路径几何）。
-   - `gui/main_window.py` 765 → **532**，拆出 `gui/workers.py`（137）、`gui/elevation_flow.py`（138）、
-     `gui/icons.py`（50）；`MainWindow` 改为继承 `ElevationFlowMixin`。
-   - 测试文件 `tests/test_gui_run.py` 1094 → **421 行 / 23 用例**，按主题拆出 `test_gui_hotkey.py`（124/5）、
-     `test_gui_elevation.py`（231/11）、`test_gui_debug_crop.py`（288/12），共享夹具进 `tests/gui_helpers.py`（81）；
-     `tests/test_automation/test_vision.py` 659 → **410 行 / 29 用例**，取景部分拆到
-     `test_vision_capture.py`（259/10），共享辅助进 `tests/test_automation/vision_helpers.py`（15）；
-     `tests/test_automation/test_real_input.py` 1229 → **241 行 / 19 用例**，按被测对象拆出
-     `test_real_input_click.py`（368/28）、`test_real_input_drag.py`（300/22）、
-     `test_real_input_keys.py`（194/16），共享夹具进 `tests/test_automation/real_input_helpers.py`（224）。
-     至此**源文件与测试文件全部在 600 行以内**（唯一接近的是 `tests/test_core/test_vision.py` 589 行）。
-   - **2026-09-21 又拆了两轮（都是"改功能时不小心顶破 600 行"）**：`gui/dialogs/crop_dialog.py`
-     627 → **189**（拆出 `crop_view.py`，交互视图整块搬走，`crop_dialog` 再导出 `CropView` 与常量）；
-     `gui/dialogs/crop_view.py` 694 → **537**（把显示变换 —— `fit_scale`/`image_rect`/`zoom_*`/`_set_zoom`/
-     `_clamp_pan`/`wheelEvent`/`magnifier_*`/`_paint_magnifier` 与 9 个常量 —— 搬进 `crop_view_zoom.py`（205）
-     的 `ZoomPanMixin`，`CropView(ZoomPanMixin, QWidget)` 用继承接回来）；测试同理：
-     `tests/test_gui_crop.py` 740 → **253**、`tests/test_gui_crop_edit.py` 763 → **562**（拆出
-     `test_gui_crop_zoom.py`，11 条视图变换用例）。**用例总数拆分前后不变**（39 → 39、48 → 48），
-     AST 比对 16 个方法 + 9 个常量逐字一致。
-   **搬迁手法（下次拆文件照抄）**：用脚本按 AST 行区间**原样搬运**（不改一行函数体），再用 AST 比对
-   "旧文件的定义 == 新文件的定义"逐字一致；头部 import 用 AST 剪掉搬走后没人用的名字。
-   **最容易踩的坑**：测试里的 `monkeypatch.setattr(模块, ...)` 目标必须跟着实现搬
-   （本次改了 41 处，例如 `mw.is_process_elevated` → `elevation_flow.is_process_elevated`、
-   `mw.diagnose_window` → `workers.diagnose_window`、`mw.get_icons_dir` → `icons.get_icons_dir`）；
-   补丁打在没有被调用的命名空间上不会报错，只会**静默失效**，测试仍然全绿但失去意义。
-   取景逻辑（`vision.py`）本次没动，但仍建议进游戏复测一次。
-2. **识别尚未接入任务**："按图点击"没实现（模板/阈值也不落配置，每次手选）。接入时会碰
-   `core/registry.py` 的任务参数、`config/models.py` 与 schema 迁移，是新的 bug 高发面。
-3. **多模板"先命中即用"的误报风险**：模板互相形似时，靠前那张可能先蹭到低分命中。
-   实测条纹模板缩到 0.5x 对另一张模板的亮块区拿到 0.883（默认阈值 0.85 就中了）。
-   缓解手段：提高阈值、模板更有辨识度，或改成"全部试完取最高分"（未做）。
-4. **极小模板（<40px）+ 小缩放的缩放判断不稳**（信息量不足，模板匹配固有限制）。
-4b. **「用识别底图做匹配」尚未实现（用户 2026-09-20 实测提出的需求）**：有的页面信息太多，
-   工具自己截客户区的图不好识别 —— 需求是**先用工具自带的截图功能截一张画面**，再用**这张图**做匹配底图。
-   目前**只建了目录**：`assets/screenshots/`（用户 2026-09-20 明确的用途：**识别底图**，来源＝工具自带截图功能；
-   `utils.paths.get_screenshots_dir()` 已就位，原始素材不入库，守卫见 `tests/test_paths.py`），
-   **但"截底图"和"拿底图识别"两个功能都还没做**，调试页也没有相应入口
-   （注意区分：框选产物在 `assets/anchors/`，那是**模板**不是底图）。
-   **下一步接口设计要点**（接功能时按这个方向，别重新发明）：
-   - `core.vision.recognize_in_window(...)` 已经有 `capture=...` 注入缝（见 ⑦），
-     加一个"底图路径"参数即可复用整条编排（多模板/多区域/多尺度/纯色拒绝全部不用改）；
-   - 坐标语义要写清楚：底图必须是**客户区尺寸**（工具自带截图天然满足）——若用户塞进一张整屏截图
-     （含标题栏/任务栏）或被缩放过的图，坐标就不再等于客户区坐标，必须先校准（参见 ③ 与第 1 条 bug）；
-   - 纯色/黑帧检测（`is_blank_frame`）与"模板比底图大"的报错照旧生效。
-5. ~~窗口诊断截图可能存成纯黑图~~ **已修（评审 P2-9，`082468b`）**：改为复用 `capture_client_bgr`
-   的完整回退链（真 PNG + 黑帧检测），全失败时报可读错误而不是给你一张黑图。剩余限制：窗口不在前台时
-   屏幕 BitBlt 不可用，此时诊断会**失败**（可读原因），这是环境限制。
-6. **识别耗时随模板数线性增长**：单张约 1.6–5s，N 张全落空 ≈ N 倍。GUI 期间按钮禁用，
-   但仍可能让用户觉得卡。
-7. **屏幕取景要求窗口在前台**：不在前台时只剩 BitBlt/PrintWindow（本作可能黑帧），
-   会报"取景失败"。这是环境限制而非 bug，但很容易被当成 bug 报上来。
-8. **权限不对等**：游戏以管理员运行、本工具普通权限时无法置前（错误 5），任务会拒绝输入并报错。
-   提权流程见 `gui/elevation_flow.py:1-138`、`automation/elevation.py`。
-9. **F8 急停热键常注册失败**（被占用）：**已改进但未根治**（评审 P3-9，`af52571`）—— 失败现在会在
-   状态栏追加提示 + 设置页红字提示，且「停止」按钮对调试测试也已生效（原来按不动）；但热键本身在 F8
-   被占用时仍不可用，根治办法是在设置页换一个键名。
-10. **识别参数不落配置**（模板列表/阈值/最多列出条数都是界面态，重启即丢）。
-11. **`tests/test_core/test_vision.py` 589 行**（接近硬线，尚未拆）；`tests/test_automation/test_real_input.py`
-    1229 → **241 行**（2026-09-20 按被测对象拆成点击/滑动/键盘三个文件 + 共享夹具模块，见第 1 条）。
-    源文件与测试文件现在**全部在 600 行硬线以内**；测试文件同样适用该规则，拆法照第 1 条的六步来。
-12. **本次评审修复（P1×3 / P2×9 / P3×10）只在单测层面验证过，实机未复测**（提交 `dab9348`→`af52571`）。
-    下一次进游戏前建议按顺序跑：开发者调试页的四项测试（单点 / 连点 / 滑动 / 按键）+ 窗口诊断 +
-    图像识别，重点看 ① 开着「把真实鼠标移回原位置」时点击是否正常（原问题待复测）；② 诊断截图能不能
-    看（应不再是纯黑）；③ 关窗后进程是否干净退出、游戏窗口是否不再浮在最上层（评审 P1-3 的实机面）。
-13. **"某页点不动"已定位并修复（2026-09-20）**：根因是"松手后一次 `SetCursorPos` 把光标跳回另一个
-    显示器"，游戏按帧采样指针位置时已经"指针不在窗口内"→ 这次点击被丢弃（用户实测关掉「把真实鼠标
-    移回原位置」立刻可点，反证根因）。已改为"延迟 0.35s + 分帧小步移回"（见 ④ 5d 与 ⑤ 第 16 条）。
-    仍待验证：**开着还原开关时是否也能点动**（用户尚未复测）；若仍不行，下一步可把
-    `CLICK_RESTORE_DELAY_SECONDS` 调大（0.5–1s）或把"还原"改成只把光标移到游戏窗口边缘之外。
+1. **识别尚未接入日常执行**：按图自动找建筑和完整日常动作未实现。实现时同步任务参数、配置结构、迁移和相关验收。
+2. **多模板顺序影响结果**：采用第一张达标模板，相似模板可能先误命中；选择更有辨识度的区域并核对阈值。逐张比较后取全局最佳尚未实现。
+3. **极小模板与小缩放信息不足**：少于约 40 px 的模板可能难以准确判断缩放，需核对结果与目标尺寸。
+4. **使用识别底图匹配尚未实现**：`assets/screenshots/` 为识别底图素材目录，当前没有离线底图匹配入口。后续设计须明确以下约定：
+   - 可复用 `recognize_in_window(..., capture=...)` 的截图注入点，不提前预埋空接口。
+   - 底图以客户区尺寸与原点为准；整屏或缩放过的图片须先校准，不能直接将其坐标作为客户区坐标。
+   - 保留黑帧、纯色模板、模板大于底图等校验。
+5. **识别耗时随模板数量与搜索范围增加**：模板逐张匹配，全部落空时需完成各张搜索；运行期间禁用动作按钮，任务放后台线程。
+6. **屏幕取景依赖前台**：窗口被遮挡时屏幕 BitBlt 不可用，其他路径也可能返回黑帧；全部失败时报告取景原因。
+7. **权限须与游戏匹配**：工具权限不足时可能无法置前窗口，须拒绝输入并提示；提权流程见 `gui/elevation_flow.py` 与 `automation/elevation.py`。
+8. **全局热键可能被占用**：注册失败在状态栏与设置页提示，停止按钮仍可用；设置热键后重新注册。
+9. **调试识别参数为界面状态**：模板列表、阈值和最多结果条数不持久化，重启后重新设置。
+10. **维护时检查模块长度**：源文件与测试文件均遵守 600 行上限，拆分按 `AGENTS.md`「模块拆分与维护」执行，更新测试替身与符号索引。
 
 ---
 
@@ -496,13 +408,13 @@ capture_client_bgr (vision.py:393)
 | `find_window` / `is_window_ready` | `core/vision.py`、`automation/input_sender.py` | 假装有/没有窗口、最小化 |
 | `_render_client_bits` | `automation/vision.py:143` | 主取景方式注入（黑帧/正常帧/抛错） |
 | `_print_window` | `automation/vision.py:148` | 替换 ctypes 调用（假 GDI 测试用） |
-| 假 GDI | `tests/test_automation/test_vision_capture.py:118-198`（`CLIENT_OFFSET`:123 / `_window_pixels`:126 / `_expected_client_pixels`:135 / `_FakeBitmap`:141 / `_FakeDC`:158 / `fake_gdi`:192；2026-09-20 拆文件后从 `test_vision.py` 移来） | **验证取景几何**：位图里存真实像素，断言 BitBlt 源点、裁剪结果像素 |
+| 假 GDI | `tests/test_automation/test_vision_capture.py:118-198`（`CLIENT_OFFSET`:123 / `_window_pixels`:126 / `_expected_client_pixels`:135 / `_FakeBitmap`:141 / `_FakeDC`:158 / `fake_gdi`:192） | **验证取景几何**：位图里存真实像素，断言 BitBlt 源点、裁剪结果像素 |
 | `build_channel` / 假 sender | `automation/input_sender.py:575`、`tests/test_automation/real_input_helpers.py` 的 `recording` 夹具 | 断言输入调用序列，零真实输入 |
-| 假 `user32` | `tests/test_automation/real_input_helpers.py` 的 `user32` 夹具（2026-09-20 拆文件后从 `test_real_input.py` 移来） | 断言 `SendInput`/`SetCursorPos` 序列、置顶/还原行为 |
+| 假 `user32` | `tests/test_automation/real_input_helpers.py` 的 `user32` 夹具 | 断言 `SendInput`/`SetCursorPos` 序列、置顶/还原行为 |
 | `get_debug_dir` | `core/vision.py` 导入处 | 带框截图写进 tmp |
 | `TemplateCropDialog` | `gui/main_window.py:473` 调用处 | 替换对话框或子类化 `exec()` 模拟"框选 + 保存" |
 
-### 写"几何 bug"测试的模板（本次用的手法）
+### 几何测试示例
 
 ```python
 # 1) 纯函数级：把几何换算钉死
@@ -561,7 +473,7 @@ print('capture          = %dx%d  std=%.2f' % (img.shape[1], img.shape[0], img.st
 "@
 ```
 
-期望：`client offset` 等于标题栏+边框（本作实测 `(9, 37)`）；取景图像的 (0,0) 必须对应
+期望：`client offset` 为当前窗口的客户区偏移；取景图像的 (0,0) 必须对应
 `client origin`（用探针 2 或 3 验证）。
 
 ### 探针 2：逐条取景路径量偏移（找出是哪一条错）
@@ -570,7 +482,6 @@ print('capture          = %dx%d  std=%.2f' % (img.shape[1], img.shape[0], img.st
 `_render_client_bits_screen(hwnd)` 各抓一张 → 用 `cv2.matchTemplate` 在一张**整屏截图**里定位图像里
 一块纹理区域 → 反推"图像左上角在屏幕上的位置" → 与 `ClientToScreen(0,0)` 比较。
 `is_blank_frame` 为 True 的路径直接标"不可用（黑帧）"。
-（基线实测：PrintWindow 两种 flag 都是黑帧；`BitBlt(窗口DC)` 修复前偏 `(-9, -37)`、修复后 `(0, 0)`。）
 
 ### 探针 3：坐标端到端交叉验证（判断"坐标可信"）
 
@@ -623,12 +534,12 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 "@
 ```
 
-期望：`delta = (0, 0)`（≤3px 可接受）。基线实测：识别 (650, 430) vs 整屏换算 (650, 430)。
+期望：`delta = (0, 0)`，偏差 ≤3px 可接受。
 
 > **编码注意**：上面两个探针的**字符串字面量全是 ASCII**，窗口标题从 `user_data/config.json` 读，
 > 所以无论是粘到终端还是存成 `.ps1` 都不会炸。**但如果你要存成 `.ps1`，请存成 UTF-8 with BOM**
 > —— Windows PowerShell 5.1 会把不带 BOM 的文件按 ANSI/GBK 读，脚本里的中文会全变乱码
-> （实测过：`SyntaxError: unterminated string literal`）。最省事的做法是直接粘进终端。
+> 直接粘贴到终端也可运行。
 
 > **正常噪音**：探针跑起来会在 **stderr** 里带日志行（例如 `PrintWindow 取到纯色/黑帧…`、
 > `取景(BitBlt 窗口DC)：从客户区左上 (9, 37) 抓取…`）。PowerShell 会把它显示成红字错误记录，
@@ -655,17 +566,18 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 2. **禁止**：把 `user_data/config.json`、日志、截图、构建产物提交入库；force push；删除/破坏既有
    测试来让测试变绿；吞异常（`except: pass` / `except Exception: continue`）。
 3. **提交规范**：Conventional Commits + 中文说明 + 范围前缀（`fix(automation): …`）。一次提交只做一件事。
-   提交前自检：全量测试通过、无未使用 import、无调试 print、变更文件与目标一致。
+   包含代码修改时，提交前全量测试通过，并检查无未使用 import、无调试 print；仅文档等非代码修改不执行测试。
+   所有提交都要核对变更文件与目标一致。
 4. **构建**：**只在用户明确要求时**跑 `packaging\build.ps1`（需 PowerShell，文件必须带 UTF-8 BOM）。
    产物不入库，守卫测试扫描 git 索引。
-5. **文件长度**：>400 行考虑拆分，>600 行必须拆分（当前 2 个文件超线，见第 ⑥ 节）。
+5. **文件长度**：>400 行考虑拆分，>600 行必须拆分。
 6. **编码**：Python 3.11+、UTF-8、4 空格、公共函数全类型注解；配置用 dataclass；JSON 原子写。
 7. **可观测**：关键动作写日志；异常记录完整堆栈；GUI 里禁止 sleep/忙等。
 8. **新增依赖**：改 `requirements.txt` 并在提交信息说明理由与体积代价（当前 numpy + opencv-python-headless）。
 
 ---
 
-## 附：快速定位索引（常用符号 → 文件:行，基线 7c1c10c）
+## 附：快速定位索引（常用符号 → 文件:行）
 
 | 符号 | 位置 | 说明 |
 |---|---|---|
@@ -694,17 +606,17 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `run_single_click` | `core/debug.py:98` | 单点测试动作（`hold_ms`：None＝引擎默认 / 0＝瞬时） |
 | `_validate_click_hold` | `core/debug.py:56` | 点击时长校验（0–5000 ms，整数、非布尔） |
 | `single_hold_spin` / `repeat_hold_spin` | `gui/pages/debug.py:203` / `:230` | 调试页「点击时长」控件（单点 + 连点，默认 40 ms，经 `hold_ms` 下发） |
-| `restore_cursor_box` | `gui/pages/debug.py:109` | 还原光标开关（2026-09-20 从设置页移入；受开发者调试门禁） |
+| `restore_cursor_box` | `gui/pages/debug.py:109` | 还原光标开关（受开发者调试门禁） |
 | `settings_page.developer_box` | `gui/pages/settings.py:48` | 设置页「开发者调试」开关（决定调试页是否挂载/生效） |
-| `show_hotkey_hint` | `gui/pages/settings.py:89` | 设置页红字提示（急停热键不可用等，评审 P3-9） |
+| `show_hotkey_hint` | `gui/pages/settings.py:89` | 设置页红字提示（急停热键不可用等） |
 | `run_repeat_click` | `core/debug.py:124` | 连点测试动作（同样支持 `hold_ms`；间隔＝点击之后的等待，可被急停打断） |
-| `ensure_window_front` | `automation/real_input.py:237` | 每次输入前置顶置前 + 复核（失败时只取消**本次我们设的**置顶，评审 P1-3） |
+| `ensure_window_front` | `automation/real_input.py:237` | 每次输入前置顶置前 + 复核（失败时只取消**本次我们设的**置顶） |
 | `client_to_screen` | `automation/real_input.py:157` | 客户区→屏幕换算（点击路径） |
 | `build_drag_path` | `automation/drag_path.py:49` | 缓出曲线 + 末尾静止帧 |
 | `restore_cursor_smooth` | `automation/real_input.py:397` | 分帧还原光标 |
 | `CropView` / `TemplateCropDialog` | `gui/dialogs/crop_view.py:66` / `gui/dialogs/crop_dialog.py:105` | 框选几何与保存 |
 | `hit_test` / `_apply_move` / `_apply_resize` | `gui/dialogs/crop_view.py:206` / `:218` / `:230` | 选区命中判定 / 整体移动 / 拖手柄改大小（Alt＝中心对称缩放） |
-| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:396` / `:590` | 拖拽尺寸气泡（批 1）/ 选区外压暗 |
+| `drag_bubble_text` / `_paint_dim_mask` | `gui/dialogs/crop_view.py:396` / `:590` | 拖拽尺寸气泡/ 选区外压暗 |
 | `keyPressEvent`（框选）/ `_nudge_edge` | `gui/dialogs/crop_view.py:445` / `:507` | 方向键微调 / Ctrl 调单边 |
 | `image_rect` / `_set_zoom` / `wheelEvent` | `gui/dialogs/crop_view_zoom.py:42` / `:108` / `:149` | 图像显示矩形（缩放+平移）/ 以鼠标为锚点缩放 / 滚轮缩放 |
 | `magnifier_rect` / `magnifier_source_rect` | `gui/dialogs/crop_view_zoom.py:160` / `:177` | 放大镜位置（贴鼠标、靠边翻转）/ 取样区域（夹在图像内） |
@@ -717,8 +629,8 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `view_status_text` | `gui/dialogs/crop_dialog.py:409` | HUD 文字：缩放倍率 + 鼠标客户区坐标 |
 | `_on_save_clicked` / `save_selection` | `gui/dialogs/crop_dialog.py:418` / `:445` | **只保存选区**；纯色（`flat`）时拒绝保存 |
 | `assess_region_quality` / `RegionQuality` | `automation/template_match.py:101` / `:85` | 模板区域可辨识度（对比度 + 边缘占比；`flat` 拒存，`low` 只提示） |
-| `probe_region_on_image` / `TemplateProbeResult` | `core/vision.py:288` / `:253` | **「在本图试识别」（D1）**：选区当模板在同图 1:1 试匹配；`duplicates`＝除自己以外的命中数 |
-| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:309` / `:296` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗要等它） |
+| `probe_region_on_image` / `TemplateProbeResult` | `core/vision.py:288` / `:253` | **「在本图试识别」**：选区当模板在同图 1:1 试匹配；`duplicates`＝除自己以外的命中数 |
+| `run_probe` / `probe_thread` | `gui/dialogs/crop_dialog.py:309` / `:296` | 试识别入口（纯色短路 / 禁用按钮 / 起线程）/ 当前线程（关窗交由 `ACTIVE_PROBES` 持有至结束） |
 | `TemplateProbeThread` | `gui/workers.py:140` | 试识别后台线程（匹配是 CPU 密集的，不许放 GUI 线程） |
 | `set_probe_rects` / `_paint_probe_rects` | `gui/dialogs/crop_view.py:564` / `:576` | 把试识别命中的**其它**位置画成橙框 + 序号（图像像素坐标） |
 | `DebugPage` | `gui/pages/debug.py:68` | 调试页（识别入口/模板列表/点击时长/干跑/测试按钮） |
@@ -727,19 +639,19 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 | `_on_debug_test` / `run_debug_action` | `gui/main_window.py:476` / `gui/workers.py:69` | 调试请求接收 / 动作分发（含 `hold_ms`） |
 | `_on_capture_ready` / `_on_crop_requested` | `gui/main_window.py:517` / `:553` | 框选回填 / 框选入口（门禁 + 后台截图） |
 | `_debug_actions_allowed` | `gui/main_window.py:468` | 开发者调试门禁 |
-| `_register_hotkey_or_hint` | `gui/main_window.py:281` | 热键注册 + 失败显著提示（评审 P3-9） |
-| `_wait_for_threads` | `gui/main_window.py:232` | 关窗等齐 4 个后台线程（评审 P2-6） |
+| `_register_hotkey_or_hint` | `gui/main_window.py:281` | 热键注册 + 失败显著提示 |
+| `_wait_for_threads` | `gui/main_window.py:232` | 关窗处理任务、调试与日常媒体线程 |
 | `measure_layout` / `format_measure_report` | `gui/layout_measure.py:170` / `:238` | 布局测量与报告 |
 | `Runner.start` | `core/runner.py:86` | 任务顺序执行/循环/失败计数 |
-| `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁，评审 P3-1） |
-| `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样，评审 P1-2） |
-| `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用，评审 P1-2） |
+| `try_transition` | `core/state.py:46` | 状态迁移（非法迁移返回 False 不抛；读写加锁） |
+| `ConfigSaveError` | `config/store.py:15` | 保存前校验失败（磁盘文件保持原样） |
+| `MAX_KEY_STEPS` / `MAX_CLICK_POINTS` | `config/models.py:12` / `:14` | 按键/滑动/点击点上限 20（界面与校验器共用） |
 | `migrate` / `validate` | `config/validation.py:386` / `:416` | 迁移链（每步独立 try，绝不崩）与校验 |
-| `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler，评审 P2-2） |
+| `setup_logging` | `utils/logging_setup.py:13` | 幂等日志初始化（按配置重建 handler） |
 | `get_templates_dir` / `get_screenshots_dir` / `get_anchors_dir` | `utils/paths.py:65` / `:55` / `:45` | 识别图片（`templates`，**入库**）/ 识别底图（`screenshots`，不入库）/ 框选产物（`anchors`，不入库） |
-| `prepare_for_match` | `automation/template_match.py:196` | 匹配前的灰度预处理（原 `_prepare`，`multiscale` 共用，评审 P3-4） |
+| `prepare_for_match` | `automation/template_match.py:196` | 匹配前的灰度预处理（`multiscale` 共用） |
 | `_on_vision_add_clicked` | `gui/pages/debug.py:468` | 「添加图片…」对话框默认打开 `assets/templates` |
-| `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类（评审 P3-10） |
+| `PlannedFeaturePage` | `gui/pages/planned_feature.py:14` | 功能三/功能四公共基类 |
 | `ease_out_quad` / `interpolate_points` | `automation/drag_path.py:22` / `:27` | 滑动缓出曲线 / 分帧插值（纯函数） |
 | `scale_candidates` | `automation/multiscale.py:45` | 粗搜档位生成（按步长枚举比例） |
 | `locate_best_scaled` | `automation/multiscale.py:225` | 多尺度取最佳命中（无命中返回 None） |
@@ -760,6 +672,5 @@ print('verdict                  =', 'OK' if max(abs(m.center[0] - expected[0]), 
 
 1. **先跑不变量表**（第 ④ 节）：对每条问一句"如果我把它破坏掉，哪个测试会红？"——没有测试红的条目
    就是最可能有真 bug 的地方。
-2. **优先怀疑坐标系/线程/资源释放**三类：本项目历史上 15 条 bug 里有 8 条属于这三类。
-3. **实机问题先用探针再改代码**：第 ⑧ 节的探针 1/2/3 能在 1 分钟内区分"环境限制"与"代码 bug"
-   （实测中就靠它把"黑帧""坐标偏下 37px"两条从"猜测"变成"定量结论"）。
+2. **优先检查坐标系、线程与资源释放**：核对坐标换算、跨线程控件访问、停止事件与 finally 清理。
+3. **实机问题先取诊断数据再改代码**：用第 ⑧ 节探针核对客户区原点、取景路径与识别中心偏差，区分环境限制和代码问题。
